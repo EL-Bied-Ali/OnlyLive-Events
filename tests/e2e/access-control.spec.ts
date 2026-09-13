@@ -53,6 +53,12 @@ test("a customer cannot fetch another customer's order", async ({ browser }) => 
   const crossAccessResponse = await pageB.request.get(`/api/orders/${orderId}`);
   expect(crossAccessResponse.status()).toBe(404);
 
+  // Customer authentication is deliberately isolated from the admin
+  // session mechanism. A valid customer cookie grants no back-office API
+  // access, even when the request is made manually.
+  const adminOverviewResponse = await pageB.request.get("/api/admin/overview");
+  expect(adminOverviewResponse.status()).toBe(401);
+
   await contextA.close();
   await contextB.close();
 });

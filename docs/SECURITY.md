@@ -9,7 +9,7 @@ implemented" is an explicit gap, not an oversight — tracked in TASKS.md.
 | XSS | Mitigated | React auto-escapes all rendered content; no `dangerouslySetInnerHTML` anywhere. No CSP header yet — tracked as a gap. |
 | CSRF | Partially mitigated | Auth.js's own endpoints (`/api/auth/*`) have built-in CSRF protection. Our custom POST routes (`/api/holds`, `/api/checkout/*`, `/api/admin/login`, the webhook) rely on cookie `sameSite: "lax"` plus JSON `content-type` requirements as a baseline; no explicit CSRF token yet on custom routes — tracked as a gap for the admin dashboard specifically, since it has session-cookie-based state-changing actions a browser could be tricked into replaying. |
 | SQL injection | Mitigated | Prisma parameterizes all queries. The 8 raw-SQL call sites (`lib/inventory.ts`, `lib/orders/fulfillment.ts`, the webhook route) use `$queryRaw`/`$executeRaw` tagged templates exclusively — never string concatenation. |
-| Broken access control / IDOR | Mitigated | Every sensitive route calls `requireCustomer()`/`requireAdminRole()` explicitly (never inferred from hidden UI). Order/ticket ownership mismatches return **404**, not 403, so a non-owner can't even confirm the resource exists. |
+| Broken access control / IDOR | Mitigated | Every sensitive route calls `requireCustomer()`/`requireAdminRole()` explicitly (never inferred from hidden UI). Admin pages use `requireAdminForPage()` server-side and reject scanner accounts; `/api/admin/overview` independently requires an admin/support role. Order/ticket ownership mismatches return **404**, not 403, so a non-owner can't even confirm the resource exists. |
 | Mass assignment | Mitigated | Every write route destructures exactly the zod-validated fields (`lib/validation/*.ts`) into the Prisma `data` object — request bodies are never spread directly into `create`/`update`. |
 | SSRF | N/A this session | No server-side fetch of user-supplied URLs exists yet. Revisit when image uploads or a real PSP redirect URL are added. |
 | Open redirects | Mitigated | `startCheckout`'s `returnUrl` is built from `new URL(request.url).origin` server-side, never from client input. |
@@ -70,9 +70,10 @@ credentials.
 
 **Rotation procedure**: re-run `npm run seed` with the same
 `ADMIN_SEED_EMAIL` and a new `ADMIN_SEED_PASSWORD` — the upsert updates
-`passwordHash` for an existing admin. Once the admin dashboard exists,
-password changes should move there (self-service, with the current
-password required); until then, this re-seed is the only rotation path.
+`passwordHash` for an existing admin. The current dashboard is read-only,
+so password rotation remains a re-seed operation. A future self-service
+password change must require the current password and invalidate the
+administrator's existing sessions.
 
 ## Privacy
 
