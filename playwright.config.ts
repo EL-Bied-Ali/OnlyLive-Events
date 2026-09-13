@@ -33,5 +33,14 @@ export default defineConfig({
     url: "http://localhost:3000/api/health",
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
+    env: {
+      // `next start` always runs with NODE_ENV=production, and the fake
+      // payment provider now refuses to boot in production without this
+      // explicit opt-in (see lib/payments/index.ts). A local/CI e2e run
+      // against `next start` is exactly the deliberate,
+      // non-production-traffic case that flag exists for — this is
+      // never set for a real deployment.
+      ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true",
+    },
   },
 });

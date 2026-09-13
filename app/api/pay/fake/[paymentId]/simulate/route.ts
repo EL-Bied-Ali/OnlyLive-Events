@@ -4,6 +4,7 @@ import { z } from "zod";
 import { requireCustomer } from "@/lib/auth/customer";
 import { getPaymentForFakeCheckoutPage } from "@/lib/orders/checkout";
 import { signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
+import { isFakePaymentsAllowed } from "@/lib/payments";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -27,6 +28,10 @@ const OUTCOME_TO_EVENT_TYPE = {
  */
 export async function POST(request: NextRequest, context: { params: Promise<{ paymentId: string }> }) {
   try {
+    if (!isFakePaymentsAllowed()) {
+      throw new ApiError(404, "NOT_FOUND", "Not found");
+    }
+
     const customer = await requireCustomer();
     const { paymentId } = await context.params;
 
@@ -49,6 +54,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
       providerPaymentId: payment.providerPaymentId,
       type: OUTCOME_TO_EVENT_TYPE[parsed.data.outcome],
       amountCents: payment.amountCents,
+      currency: payment.currency,
     });
     const signature = signFakeWebhookPayload(payload);
 

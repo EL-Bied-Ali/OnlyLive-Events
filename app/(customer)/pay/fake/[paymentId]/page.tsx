@@ -1,11 +1,16 @@
 import { notFound } from "next/navigation";
 import { requireCustomerForPage } from "@/lib/auth/customer";
 import { getPaymentForFakeCheckoutPage } from "@/lib/orders/checkout";
+import { isFakePaymentsAllowed } from "@/lib/payments";
 import { PayFakeClient } from "./PayFakeClient";
 
 export const dynamic = "force-dynamic";
 
 export default async function PayFakePage({ params }: { params: Promise<{ paymentId: string }> }) {
+  if (!isFakePaymentsAllowed()) {
+    notFound();
+  }
+
   const { paymentId } = await params;
   const customer = await requireCustomerForPage(`/pay/fake/${paymentId}`);
 
