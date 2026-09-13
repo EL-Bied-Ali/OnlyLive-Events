@@ -29,6 +29,14 @@
 - **Tests:** Vitest (unit + integration, against a real local Postgres —
   lock contention can't be faithfully mocked) and Playwright (one
   end-to-end purchase flow + HTTP-level access-control checks).
+- **CI** (`.github/workflows/ci.yml`): `npm ci` → `prisma generate` →
+  typecheck → lint → apply migrations to a Postgres service container →
+  `npm test` → `npm run build`. `postinstall: prisma generate` in
+  `package.json` makes a fresh `npm install`/`npm ci` reproducible without
+  a manual generate step; `prisma.config.ts` deliberately reads
+  `process.env.DATABASE_URL` directly (not `@prisma/config`'s throwing
+  `env()` helper) so `prisma generate` never requires a live database
+  connection — only `migrate`/`db push` genuinely need one.
 
 ## Local dev environment note
 
@@ -51,6 +59,7 @@ preinstalled browser) makes this unnecessary — leave the env var unset.
 ## Folder structure
 
 ```
+instrumentation.ts  boot-time config validation (payment provider)
 /prisma            schema.prisma, migrations/, seed.ts
 /app
   (marketing)/      event listing + detail (public)
@@ -79,18 +88,24 @@ TASKS.md, tests.json
    sold` for display. This number is **never** trusted for the actual
    purchase decision — every hold re-validates from the database inside a
    lock (`lib/inventory.ts`).
-2. `POST /api/holds` — `requireCustomer()`, re-fetches the phase server-side
-   (price and eligibility window never come from the client), calls
-   `createHold()`.
-3. `POST /api/checkout/[holdId]/start` — extends the hold's expiry,
-   creates `Order` + `OrderItem` + `Payment`, calls
-   `PaymentProvider.createPayment()`.
+2. `POST /api/holds` — `requireCustomer()`, calls `createHold()`, which
+   atomically re-validates full sales eligibility (event status/window,
+   category active, phase active/window/quantity-limit, a per-user/event
+   purchase cap) and price entirely inside its own locked transaction —
+   never from a pre-transaction read or the client.
+3. `POST /api/checkout/[holdId]/start` — idempotently ensures exactly one
+   `Order`/`Payment` exists for the reservation (safe under retries and
+   concurrency — see docs/PAYMENTS.md), extends the hold's expiry, then
+   calls `PaymentProvider.createPayment()`.
 4. Customer is redirected to the provider's hosted checkout (today:
-   `/pay/fake/[paymentId]`, our own sandbox page).
+   `/pay/fake/[paymentId]`, our own sandbox page — refuses to operate in
+   production without an explicit opt-in, see docs/PAYMENTS.md).
 5. The provider's webhook (`POST /api/payments/webhook/fake`) verifies the
-   signature, records the event idempotently, and calls
-   `confirmOrderPayment()`/`failOrderPayment()` — the **only** place
-   tickets are ever created.
+   signature and the paid amount/currency, records the event idempotently,
+   and calls `confirmOrderPayment()`/`failOrderPayment()` — the **only**
+   place tickets are ever created. The whole thing (claim + fulfillment +
+   Payment status update) is one database transaction; see
+   docs/PAYMENTS.md's Atomicity section.
 6. `GET /orders/[orderId]` and the ticket page render the result, with
    ownership checked server-side on every load.
 
@@ -105,8 +120,13 @@ runtime).
 
 See `.env.example` for the full list and generation instructions
 (`DATABASE_URL`, `TEST_DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`,
-`ADMIN_SESSION_SECRET`, `PAYMENT_PROVIDER`, `FAKE_PSP_WEBHOOK_SECRET`,
-`INTERNAL_API_SECRET`).
+`ADMIN_SESSION_SECRET`, `PAYMENT_PROVIDER`,
+`ALLOW_FAKE_PAYMENTS_IN_PRODUCTION`, `FAKE_PSP_WEBHOOK_SECRET`,
+`INTERNAL_API_SECRET`, and the seed-only `ADMIN_SEED_EMAIL`/
+`ADMIN_SEED_PASSWORD`). `instrumentation.ts` validates
+`PAYMENT_PROVIDER`/`ALLOW_FAKE_PAYMENTS_IN_PRODUCTION` once at server
+boot, so a misconfigured production deployment fails to start rather than
+failing on the first webhook — see docs/PAYMENTS.md.
 
 ## Known scope limitations (deferred, tracked in TASKS.md)
 
@@ -119,12 +139,6 @@ See `.env.example` for the full list and generation instructions
 - **Email delivery** — no transactional email sending yet.
 - **Rate limiting, CSP headers** — not yet implemented; see
   docs/SECURITY.md for the full checklist status.
-- **Per-phase soft cap** (`SalesPhase.phaseQuantityLimit`) is enforced as
-  a best-effort check, not the safety-critical constraint — the hard,
-  atomically-enforced cap lives at the `TicketCategory` level via
-  `Inventory`. Documented tradeoff, not a bug: two independent
-  atomically-enforced counters (phase and category) would require
-  cross-transaction coordination for no real benefit at this stage.
 - **Refunds** — schema exists (`Refund` model,
   `PaymentProvider.refund()`), no refund flow/UI is wired up.
 - **`paid_but_unfulfillable` orders** have no automated resolution path

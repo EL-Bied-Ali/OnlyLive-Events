@@ -5,6 +5,19 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 export const HOLD_DURATION_MS = 15 * 60 * 1000;
 export const CHECKOUT_EXTENSION_MS = 10 * 60 * 1000;
 
+/** Server-side cap on a single hold-creation request. */
+export const MAX_QUANTITY_PER_HOLD = 10;
+
+/**
+ * Defensible default cap on total tickets (across every category and
+ * every separate hold) one customer can accumulate for one event. Exists
+ * specifically so a purchase limit can't be bypassed by splitting one
+ * large order into several smaller holds. OnlyLive may want this
+ * per-event-configurable later; a single global constant is the
+ * documented starting policy for this session.
+ */
+export const MAX_TICKETS_PER_USER_PER_EVENT = 10;
+
 type Tx = Prisma.TransactionClient | PrismaClient;
 
 interface InventorySnapshot {
@@ -53,7 +66,6 @@ export interface CreateHoldInput {
   salesPhaseId: string;
   userId: string;
   quantity: number;
-  unitPriceCents: number;
 }
 
 export interface CreateHoldResult {
@@ -62,24 +74,105 @@ export interface CreateHoldResult {
 }
 
 /**
- * The critical section: creates a temporary hold on `quantity` tickets in
- * one category, failing with 409 SOLD_OUT if not enough stock remains.
- * Two concurrent buyers racing for the last seat serialize through the
- * Inventory row lock acquired in releaseExpiredAndLock — the loser's
- * transaction blocks until the winner commits, then re-reads the
- * winner's committed numbers and correctly sees zero availability.
+ * The critical section: validates full sales eligibility and creates a
+ * temporary hold on `quantity` tickets in one category, all atomically
+ * inside one transaction — never from a pre-transaction read, since
+ * eligibility can otherwise go stale between the check and the mutation.
+ *
+ * Eligibility enforced here: event.status === 'on_sale', event sales
+ * window, category.isActive, phase.isActive + phase window, the phase's
+ * optional quantity limit, and a per-user/event purchase limit (see
+ * MAX_TICKETS_PER_USER_PER_EVENT) that can't be bypassed by splitting one
+ * purchase into several separate holds.
+ *
+ * Concurrency: the category-level Inventory row lock (acquired in
+ * releaseExpiredAndLock) serializes everything scoped to one category,
+ * including the phase-quantity-limit check below, since a phase belongs
+ * to exactly one category. The per-user/event limit spans categories, so
+ * it needs its own lock: a transaction-scoped Postgres advisory lock
+ * keyed on (eventId, userId), acquired before reading the user's current
+ * total — this serializes concurrent hold attempts by the SAME user for
+ * the SAME event even across different categories/phases, which no
+ * per-row lock could do on its own.
  */
 export async function createHold(input: CreateHoldInput): Promise<CreateHoldResult> {
-  if (input.quantity <= 0) {
-    throw new ApiError(400, "INVALID_QUANTITY", "Quantity must be positive");
+  if (input.quantity <= 0 || input.quantity > MAX_QUANTITY_PER_HOLD) {
+    throw new ApiError(400, "INVALID_QUANTITY", `Quantity must be between 1 and ${MAX_QUANTITY_PER_HOLD}`);
   }
 
   return prisma.$transaction(async (tx) => {
-    const snapshot = await releaseExpiredAndLock(tx, input.ticketCategoryId);
+    const category = await tx.ticketCategory.findUnique({
+      where: { id: input.ticketCategoryId },
+      include: { event: true },
+    });
+    if (!category || !category.isActive) {
+      throw new ApiError(409, "CATEGORY_NOT_AVAILABLE", "This ticket category is not available");
+    }
 
+    const event = category.event;
+    const now = new Date();
+    if (event.status !== "on_sale") {
+      throw new ApiError(409, "EVENT_NOT_ON_SALE", "This event is not currently on sale");
+    }
+    if (event.salesOpenAt > now || event.salesCloseAt < now) {
+      throw new ApiError(409, "EVENT_SALES_CLOSED", "Sales are not open for this event");
+    }
+
+    const phase = await tx.salesPhase.findUnique({ where: { id: input.salesPhaseId } });
+    if (
+      !phase ||
+      phase.ticketCategoryId !== input.ticketCategoryId ||
+      !phase.isActive ||
+      phase.startsAt > now ||
+      (phase.endsAt && phase.endsAt < now)
+    ) {
+      throw new ApiError(409, "PHASE_NOT_AVAILABLE", "This sales phase is not currently open");
+    }
+
+    // Serialize all hold attempts by this user for this event, across
+    // every category — released automatically at transaction end.
+    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${event.id}), hashtext(${input.userId}))`;
+
+    // Excludes reservations that are 'active' in name only — expired
+    // (expires_at in the past) but not yet flipped by the sweep or by
+    // another category's lazy release — so a stale hold can never keep
+    // consuming this user's purchase allowance. This works without
+    // requiring the background sweep to have run first, matching the
+    // same lazy-expiry idiom used for inventory availability itself.
+    // This is a read-only count for the limit check, not a mutation, so
+    // it cannot double-decrement anything.
+    const userTotals = await tx.$queryRaw<{ total: bigint }[]>`
+      SELECT COALESCE(SUM(r.quantity), 0) AS total
+      FROM reservations r
+      JOIN ticket_categories tc ON tc.id = r.ticket_category_id
+      WHERE r.user_id = ${input.userId}
+        AND tc.event_id = ${event.id}
+        AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= now()))
+    `;
+    const currentUserTotal = Number(userTotals[0]?.total ?? 0);
+    if (currentUserTotal + input.quantity > MAX_TICKETS_PER_USER_PER_EVENT) {
+      throw new ApiError(
+        409,
+        "PURCHASE_LIMIT_EXCEEDED",
+        `You can reserve at most ${MAX_TICKETS_PER_USER_PER_EVENT} tickets for this event`,
+      );
+    }
+
+    const snapshot = await releaseExpiredAndLock(tx, input.ticketCategoryId);
     const available = snapshot.total_quantity - snapshot.reserved_quantity - snapshot.sold_quantity;
     if (available < input.quantity) {
       throw new ApiError(409, "SOLD_OUT", "Not enough tickets available in this category");
+    }
+
+    if (phase.phaseQuantityLimit !== null) {
+      const phaseTotals = await tx.$queryRaw<{ total: bigint }[]>`
+        SELECT COALESCE(SUM(quantity), 0) AS total FROM reservations
+        WHERE sales_phase_id = ${input.salesPhaseId} AND status IN ('active', 'converted')
+      `;
+      const currentPhaseTotal = Number(phaseTotals[0]?.total ?? 0);
+      if (currentPhaseTotal + input.quantity > phase.phaseQuantityLimit) {
+        throw new ApiError(409, "PHASE_SOLD_OUT", "Not enough tickets available in this sales phase");
+      }
     }
 
     await tx.$executeRaw`
@@ -95,7 +188,9 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
         salesPhaseId: input.salesPhaseId,
         userId: input.userId,
         quantity: input.quantity,
-        unitPriceCents: input.unitPriceCents,
+        // Price always comes from the phase we just read inside this
+        // same locked transaction — never from the caller.
+        unitPriceCents: phase.priceCents,
         status: "active",
         expiresAt,
       },
@@ -107,10 +202,19 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
 }
 
 /**
- * Explicit cancellation (abandoned checkout, user backing out). Releases
- * the reservation's stock immediately rather than waiting for lazy/sweep
- * expiry. No-ops safely if the reservation is already
- * converted/expired/cancelled.
+ * Explicit cancellation (abandoned checkout, user backing out) — but only
+ * while the hold has NOT yet moved into checkout. Once
+ * `reservation.orderId` is set, a Payment may already be in flight (the
+ * customer could be sitting on the provider's hosted checkout page right
+ * now); releasing the stock here could let it be resold to someone else
+ * and then have the original payment succeed anyway, which is exactly
+ * the oversell path `paid_but_unfulfillable` exists to catch — better to
+ * prevent it than rely on that fallback. Order-level cancellation (with
+ * any necessary refund once a payment has started) is a separate,
+ * not-yet-built flow — see docs/PAYMENTS.md.
+ *
+ * No-ops safely if the reservation is already converted/expired/
+ * cancelled.
  */
 export async function releaseHold(reservationId: string, userId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
@@ -121,13 +225,20 @@ export async function releaseHold(reservationId: string, userId: string): Promis
     if (reservation.status !== "active") {
       return; // already converted/expired/cancelled — nothing to release
     }
+    if (reservation.orderId) {
+      throw new ApiError(
+        409,
+        "CHECKOUT_IN_PROGRESS",
+        "This reservation is already in checkout and cannot be released directly",
+      );
+    }
 
     const updated = await tx.reservation.updateMany({
-      where: { id: reservationId, status: "active" },
+      where: { id: reservationId, status: "active", orderId: null },
       data: { status: "cancelled" },
     });
     if (updated.count === 0) {
-      return; // raced with expiry/conversion — the other path already handled stock
+      return; // raced with expiry/checkout-start — the other path already handled stock
     }
 
     await tx.$executeRaw`
@@ -136,61 +247,6 @@ export async function releaseHold(reservationId: string, userId: string): Promis
       WHERE ticket_category_id = ${reservation.ticketCategoryId}
     `;
   });
-}
-
-export interface ActiveReservation {
-  id: string;
-  ticketCategoryId: string;
-  salesPhaseId: string;
-  userId: string;
-  quantity: number;
-  unitPriceCents: number;
-  expiresAt: Date;
-}
-
-/**
- * Moving from hold to checkout extends the hold's expiry once, inside a
- * guarded UPDATE (`status = 'active' AND expires_at > now()`), to shrink
- * — not eliminate — the window where a payment could succeed after the
- * hold already expired and its stock was resold. The residual race is
- * handled explicitly in the payment webhook (see lib/orders/stateMachine.ts
- * and the `paid_but_unfulfillable` order status).
- */
-export async function extendHoldForCheckout(reservationId: string, userId: string): Promise<ActiveReservation> {
-  const rows = await prisma.$queryRaw<
-    {
-      id: string;
-      ticket_category_id: string;
-      sales_phase_id: string;
-      user_id: string;
-      quantity: number;
-      unit_price_cents: number;
-      expires_at: Date;
-    }[]
-  >`
-    UPDATE reservations
-    SET expires_at = now() + (${CHECKOUT_EXTENSION_MS} || ' milliseconds')::interval
-    WHERE id = ${reservationId}
-      AND user_id = ${userId}
-      AND status = 'active'
-      AND expires_at > now()
-    RETURNING id, ticket_category_id, sales_phase_id, user_id, quantity, unit_price_cents, expires_at
-  `;
-
-  const row = rows[0];
-  if (!row) {
-    throw new ApiError(409, "HOLD_EXPIRED", "This reservation has expired or is no longer active");
-  }
-
-  return {
-    id: row.id,
-    ticketCategoryId: row.ticket_category_id,
-    salesPhaseId: row.sales_phase_id,
-    userId: row.user_id,
-    quantity: row.quantity,
-    unitPriceCents: row.unit_price_cents,
-    expiresAt: row.expires_at,
-  };
 }
 
 /**

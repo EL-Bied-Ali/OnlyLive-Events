@@ -50,6 +50,66 @@ export async function createTestCategory(totalQuantity: number, priceCents = 100
   return { venue, event, category, phase };
 }
 
+interface CategoryOverrides {
+  totalQuantity?: number;
+  priceCents?: number;
+  eventStatus?: "draft" | "published" | "on_sale" | "sold_out" | "closed" | "cancelled";
+  salesOpenAt?: Date;
+  salesCloseAt?: Date;
+  categoryIsActive?: boolean;
+  phaseIsActive?: boolean;
+  phaseStartsAt?: Date;
+  phaseEndsAt?: Date | null;
+  phaseQuantityLimit?: number | null;
+}
+
+/**
+ * Like createTestCategory, but with every eligibility-relevant field
+ * overridable — for testing the sales-eligibility gate in
+ * lib/inventory.ts::createHold (event status/window, category active,
+ * phase active/window/quantity-limit).
+ */
+export async function createTestCategoryWithOverrides(overrides: CategoryOverrides = {}) {
+  const venue = await prisma.venue.create({
+    data: { name: "Test Venue", addressLine1: "1 Test St", city: "Casablanca" },
+  });
+
+  const event = await prisma.event.create({
+    data: {
+      slug: `test-event-${crypto.randomUUID()}`,
+      title: "Test Event",
+      description: "Test event for automated tests",
+      venueId: venue.id,
+      startsAt: new Date(Date.now() + 30 * 86_400_000),
+      salesOpenAt: overrides.salesOpenAt ?? new Date(Date.now() - 86_400_000),
+      salesCloseAt: overrides.salesCloseAt ?? new Date(Date.now() + 30 * 86_400_000),
+      status: overrides.eventStatus ?? "on_sale",
+    },
+  });
+
+  const category = await prisma.ticketCategory.create({
+    data: { eventId: event.id, name: "General", isActive: overrides.categoryIsActive ?? true },
+  });
+
+  await prisma.inventory.create({
+    data: { ticketCategoryId: category.id, totalQuantity: overrides.totalQuantity ?? 10 },
+  });
+
+  const phase = await prisma.salesPhase.create({
+    data: {
+      ticketCategoryId: category.id,
+      name: "Phase 1",
+      priceCents: overrides.priceCents ?? 10000,
+      isActive: overrides.phaseIsActive ?? true,
+      startsAt: overrides.phaseStartsAt ?? new Date(Date.now() - 3_600_000),
+      endsAt: overrides.phaseEndsAt === undefined ? null : overrides.phaseEndsAt,
+      phaseQuantityLimit: overrides.phaseQuantityLimit ?? null,
+    },
+  });
+
+  return { venue, event, category, phase };
+}
+
 interface OrderFixtureOptions {
   quantity?: number;
   priceCents?: number;
@@ -73,7 +133,6 @@ export async function createOrderAwaitingPayment(options: OrderFixtureOptions = 
     salesPhaseId: phase.id,
     userId: user.id,
     quantity,
-    unitPriceCents: priceCents,
   });
 
   const order = await prisma.order.create({

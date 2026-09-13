@@ -35,6 +35,7 @@ export interface ParsedWebhookEvent {
   providerPaymentId: string;
   type: PaymentWebhookEventType;
   amountCents: number;
+  currency: string;
   signatureValid: boolean;
   raw: unknown;
 }

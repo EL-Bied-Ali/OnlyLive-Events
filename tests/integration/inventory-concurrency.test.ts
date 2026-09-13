@@ -14,14 +14,12 @@ describe("inventory concurrency — the oversell-prevention critical section", (
         salesPhaseId: phase.id,
         userId: buyerA.id,
         quantity: 1,
-        unitPriceCents: phase.priceCents,
       }),
       createHold({
         ticketCategoryId: category.id,
         salesPhaseId: phase.id,
         userId: buyerB.id,
         quantity: 1,
-        unitPriceCents: phase.priceCents,
       }),
     ]);
 
@@ -51,7 +49,6 @@ describe("inventory concurrency — the oversell-prevention critical section", (
           salesPhaseId: phase.id,
           userId: buyer.id,
           quantity: 1,
-          unitPriceCents: phase.priceCents,
         }),
       ),
     );
@@ -72,7 +69,6 @@ describe("inventory concurrency — the oversell-prevention critical section", (
       salesPhaseId: phase.id,
       userId: buyerA.id,
       quantity: 1,
-      unitPriceCents: phase.priceCents,
     });
 
     await prisma.reservation.update({
@@ -85,7 +81,6 @@ describe("inventory concurrency — the oversell-prevention critical section", (
       salesPhaseId: phase.id,
       userId: buyerB.id,
       quantity: 1,
-      unitPriceCents: phase.priceCents,
     });
     expect(secondHold.reservationId).toBeTruthy();
 
@@ -106,7 +101,6 @@ describe("inventory concurrency — the oversell-prevention critical section", (
       salesPhaseId: phase.id,
       userId: buyer.id,
       quantity: 1,
-      unitPriceCents: phase.priceCents,
     });
     await prisma.reservation.update({
       where: { id: hold.reservationId },

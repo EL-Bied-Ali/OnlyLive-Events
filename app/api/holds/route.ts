@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { prisma } from "@/lib/db";
 import { requireCustomer } from "@/lib/auth/customer";
 import { createHoldSchema } from "@/lib/validation/holds";
 import { createHold } from "@/lib/inventory";
@@ -17,27 +16,15 @@ export async function POST(request: NextRequest) {
       throw new ApiError(400, "INVALID_INPUT", parsed.error.message);
     }
 
-    // Price and eligibility always come from the database, never from the
-    // client — this is also where a phase's time window would be enforced.
-    const phase = await prisma.salesPhase.findUnique({
-      where: { id: parsed.data.salesPhaseId },
-    });
-    if (
-      !phase ||
-      phase.ticketCategoryId !== parsed.data.ticketCategoryId ||
-      !phase.isActive ||
-      phase.startsAt > new Date() ||
-      (phase.endsAt && phase.endsAt < new Date())
-    ) {
-      throw new ApiError(409, "PHASE_NOT_AVAILABLE", "This sales phase is not currently open");
-    }
-
+    // Every eligibility check (event/category/phase status and windows,
+    // phase quantity limit, per-user/event purchase limit) and the price
+    // itself are decided inside createHold's own locked transaction —
+    // never here, and never from the client.
     const result = await createHold({
       ticketCategoryId: parsed.data.ticketCategoryId,
       salesPhaseId: parsed.data.salesPhaseId,
       userId: customer.id,
       quantity: parsed.data.quantity,
-      unitPriceCents: phase.priceCents,
     });
 
     return NextResponse.json(result, { status: 201 });
