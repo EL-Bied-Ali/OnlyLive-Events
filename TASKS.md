@@ -24,9 +24,9 @@ memory alone.
 - Basic customer flow: event listing/detail, register/login, hold →
   checkout → fake pay → order → ticket page with QR.
 - Seed script: the real Tiakola (Casablanca, 05 Dec 2026) event with
-  VVIP/VIP/Gradins categories and Early Bird/Phase 1 sales phases, plus a
-  `super_admin` AdminUser.
-- Test suite: 25 Vitest unit/integration tests + 3 Playwright e2e tests,
+  VVIP/VIP/Gradins categories and Early Bird/Phase 1 sales phases, plus an
+  optional environment-gated `super_admin` AdminUser.
+- Test suite: 70 Vitest unit/integration tests + 5 Playwright e2e tests,
   all passing (`npm test`, `npm run test:e2e`). See tests.json for the
   full mandated-scenario checklist and what's covered vs. still pending.
 - Docs: this file, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`,
@@ -143,13 +143,16 @@ payment-id mismatch, event-type mismatch).
 
 ## In progress
 
-- None.
+- Admin dashboard foundation is implemented on
+  `feat/admin-dashboard-foundation` and awaiting review/merge: protected
+  overview, event inventory, order/payment monitoring, overview API and
+  administrator/scanner access-boundary e2e coverage.
 
 ## Next
 
-1. Admin dashboard UI (events/categories/phases/inventory/orders/
-   payments/refunds/check-ins/stats/CSV export/audit logs) — the auth
-   foundation for it already exists.
+1. Extend the admin dashboard beyond its read-only foundation with event/
+   category/phase editing, refunds, CSV export and audit-log views. The
+   overview, inventory and order/payment monitoring views now exist.
 2. Scanner PWA + check-in endpoint (atomic VALID/ALREADY_USED/INVALID/
    CANCELLED/WRONG_EVENT determination) — `TicketScan` schema already
    exists.
@@ -169,8 +172,9 @@ payment-id mismatch, event-type mismatch).
    `/api/admin/login` (see docs/SECURITY.md — currently a documented gap).
 7. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
    admin routes.
-8. Move Playwright e2e tests off the dev database onto a dedicated
-   ephemeral one.
+8. Move local Playwright e2e tests off the dev database onto a dedicated
+   ephemeral one. CI already runs them against an isolated ephemeral
+   PostgreSQL service.
 9. Decide production managed-Postgres provider and write the backup
    strategy doc mentioned in CLAUDE.md's Observability section.
 10. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
@@ -187,6 +191,7 @@ payment-id mismatch, event-type mismatch).
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
-Admin dashboard UI, scanner UI, real payment provider, email delivery,
+Admin write operations (event/category/phase editing, refunds, CSV and
+audit views), scanner UI, real payment provider, email delivery,
 background worker infrastructure beyond the sweep endpoint, rate
 limiting, CSP headers, database backup strategy documentation.

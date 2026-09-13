@@ -1,6 +1,7 @@
 import "server-only";
 import crypto from "node:crypto";
 import { cookies } from "next/headers";
+import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { ApiError } from "@/lib/http/errors";
 import type { AdminRole, AdminUser } from "@prisma/client";
@@ -80,6 +81,22 @@ export async function requireAdminRole(allowedRoles: AdminRole[]): Promise<Admin
   }
   if (!allowedRoles.includes(adminUser.role)) {
     throw new ApiError(403, "FORBIDDEN", "Insufficient role");
+  }
+  return adminUser;
+}
+
+/**
+ * Page-level equivalent of requireAdminRole. Admin pages redirect to the
+ * isolated admin sign-in screen instead of rendering a JSON authentication
+ * error. Scanner-only accounts deliberately cannot enter the back office.
+ */
+export async function requireAdminForPage(): Promise<AdminUser> {
+  const adminUser = await getValidAdminSession();
+  if (!adminUser) {
+    redirect("/admin/login");
+  }
+  if (!(["super_admin", "admin", "support"] as AdminRole[]).includes(adminUser.role)) {
+    redirect("/");
   }
   return adminUser;
 }

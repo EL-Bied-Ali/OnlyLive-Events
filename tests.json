@@ -157,12 +157,11 @@
   },
   {
     "id": "customer-accessing-admin-api",
-    "scenario": "A customer session cannot call an admin-only API",
+    "scenario": "A valid customer session cannot access an admin-only API",
     "category": "access-control",
-    "implemented": false,
-    "status": "pending",
-    "testFile": null,
-    "note": "requireAdminRole() exists and is structurally isolated from customer auth, but no protected admin data API exists yet to test against (admin dashboard is deferred)."
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/access-control.spec.ts"
   },
   {
     "id": "refund-state-transitions",
@@ -430,5 +429,21 @@
     "status": "pass",
     "testFile": null,
     "note": "Verified by repository-wide grep during the second audit fix session; nothing found. Not applicable to this repo — no fix was needed."
+  },
+  {
+    "id": "admin-dashboard-login",
+    "scenario": "An administrator can sign in and view the operational dashboard",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/admin-dashboard.spec.ts"
+  },
+  {
+    "id": "scanner-admin-boundary",
+    "scenario": "A scanner account cannot enter the administration dashboard",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/admin-dashboard.spec.ts"
   }
 ]

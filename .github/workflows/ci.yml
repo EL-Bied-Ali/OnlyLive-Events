@@ -34,6 +34,10 @@ jobs:
       NEXTAUTH_URL: http://localhost:3000
       ADMIN_SESSION_SECRET: ci-only-secret-not-for-real-use-1111111111111111
       PAYMENT_PROVIDER: fake
+      # CI uses the fake provider against isolated test data only. This
+      # explicit opt-in is required by the production-mode Playwright/build
+      # guard and must never be copied to a real customer deployment.
+      ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true"
       FAKE_PSP_WEBHOOK_SECRET: ci-only-secret-not-for-real-use-2222222222222222
       INTERNAL_API_SECRET: ci-only-secret-not-for-real-use-3333333333333333
 
@@ -68,6 +72,15 @@ jobs:
 
       - name: Unit + integration tests
         run: npm test
+
+      - name: Seed browser-test data
+        run: npm run seed
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Browser end-to-end tests
+        run: npm run test:e2e
 
       - name: Build
         run: npm run build

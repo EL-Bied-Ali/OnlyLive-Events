@@ -27,11 +27,12 @@
     handlers**, never inferred from `middleware.ts` (which can't safely
     run Prisma on the Edge runtime anyway) or hidden frontend UI.
 - **Tests:** Vitest (unit + integration, against a real local Postgres —
-  lock contention can't be faithfully mocked) and Playwright (one
-  end-to-end purchase flow + HTTP-level access-control checks).
+  lock contention can't be faithfully mocked) and Playwright (customer
+  purchase flow, access-control checks, and admin authentication/UI).
 - **CI** (`.github/workflows/ci.yml`): `npm ci` → `prisma generate` →
   typecheck → lint → apply migrations to a Postgres service container →
-  `npm test` → `npm run build`. `postinstall: prisma generate` in
+  `npm test` → seed isolated browser-test data → Playwright →
+  `npm run build`. `postinstall: prisma generate` in
   `package.json` makes a fresh `npm install`/`npm ci` reproducible without
   a manual generate step; `prisma.config.ts` deliberately reads
   `process.env.DATABASE_URL` directly (not `@prisma/config`'s throwing
@@ -64,9 +65,12 @@ instrumentation.ts  boot-time config validation (payment provider)
 /app
   (marketing)/      event listing + detail (public)
   (customer)/       login, register, checkout, fake-pay sandbox, orders, tickets
+  (admin-auth)/      separate admin login
+  (admin)/           protected operational overview, events, orders
   api/              route handlers (see below)
 /lib
   db.ts             Prisma client singleton (driver adapter)
+  admin/             read-only dashboard queries
   auth/             customer.ts (Auth.js), admin.ts (custom session), password.ts
   inventory.ts      the oversell-prevention critical section
   orders/           stateMachine.ts, fulfillment.ts, checkout.ts
@@ -76,7 +80,7 @@ instrumentation.ts  boot-time config validation (payment provider)
   validation/       zod schemas per route
 /tests
   unit/, integration/   Vitest, against onlylive_test
-  e2e/                  Playwright, against onlylive_dev (see below)
+  e2e/                  Playwright, local dev DB / isolated CI DB
 /docs               this file, SECURITY.md, PAYMENTS.md
 TASKS.md, tests.json
 ```
@@ -130,8 +134,9 @@ failing on the first webhook — see docs/PAYMENTS.md.
 
 ## Known scope limitations (deferred, tracked in TASKS.md)
 
-- **Admin dashboard UI** — the auth foundation (AdminUser/AdminSession,
-  `requireAdminRole()`, login/logout routes) exists; no dashboard pages.
+- **Admin dashboard mutations** — the protected, read-only operational
+  overview, event inventory and order/payment views exist. Event editing,
+  refunds, CSV export and audit-log views are deferred.
 - **Scanner UI** — `TicketScan` table exists so a future migration isn't
   needed, but there is no scanner PWA or check-in endpoint yet.
 - **Real payment provider** — no Moroccan PSP is integrated; only the
@@ -141,10 +146,10 @@ failing on the first webhook — see docs/PAYMENTS.md.
   docs/SECURITY.md for the full checklist status.
 - **Refunds** — schema exists (`Refund` model,
   `PaymentProvider.refund()`), no refund flow/UI is wired up.
-- **`paid_but_unfulfillable` orders** have no automated resolution path
-  yet (should trigger an admin alert and/or automatic refund once the
-  admin dashboard and refund flow exist).
-- **E2E tests run against the dev database**, not an isolated ephemeral
-  one — acceptable for this session's single scaffolded flow, but should
-  move to a dedicated e2e database (or transaction-per-test rollback) as
-  the suite grows.
+- **`paid_but_unfulfillable`/`reconciliation_required` orders** are
+  surfaced in the admin dashboard but have no automated resolution path
+  yet (refund flow is still required).
+- **Local E2E tests run against the dev database**, not an isolated
+  ephemeral one. CI uses its disposable PostgreSQL service, but local
+  runs should move to a dedicated e2e database (or transaction-per-test
+  rollback) as the suite grows.
