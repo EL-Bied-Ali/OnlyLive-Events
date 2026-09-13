@@ -1,0 +1,193 @@
+[
+  {
+    "id": "two-buyers-last-ticket",
+    "scenario": "Two customers attempting to buy the final ticket concurrently",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/inventory-concurrency.test.ts"
+  },
+  {
+    "id": "n-buyers-n-minus-1-tickets",
+    "scenario": "N buyers race for N-1 tickets — exactly one is rejected",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/inventory-concurrency.test.ts"
+  },
+  {
+    "id": "reservation-expiration",
+    "scenario": "An expired reservation's stock is reclaimed and resold",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/inventory-concurrency.test.ts"
+  },
+  {
+    "id": "sweep-idempotent",
+    "scenario": "The background expiry sweep does not double-release stock when run twice",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/inventory-concurrency.test.ts"
+  },
+  {
+    "id": "abandoned-checkout",
+    "scenario": "Abandoned checkout / explicit hold cancellation releases stock immediately",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/access-control.test.ts",
+    "note": "Covered as a side effect of the ownership tests (releaseHold); no dedicated scenario test yet."
+  },
+  {
+    "id": "successful-payment",
+    "scenario": "Successful payment confirms the order and generates tickets",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "failed-payment",
+    "scenario": "Failed payment releases the hold and does not generate tickets",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "fake-webhook-forged-signature",
+    "scenario": "A forged/tampered webhook signature is rejected and changes no state",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "duplicate-webhook-same-event",
+    "scenario": "The exact same webhook event delivered twice is processed exactly once",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "duplicate-webhook-different-event-ids",
+    "scenario": "Two different event ids for the same logical payment still produce only one ticket set",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "payment-success-after-hold-expired",
+    "scenario": "Payment succeeds after the reservation already expired (and stock may have been resold) — order becomes paid_but_unfulfillable, no oversell",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "ticket-generation-after-payment",
+    "scenario": "Tickets (one per unit, unique tokens) are generated only after confirmed payment",
+    "category": "tickets",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "ticket-generation-before-payment",
+    "scenario": "No ticket exists while an order is still pending_payment",
+    "category": "tickets",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "qr-forgery-token-strength",
+    "scenario": "QR validation tokens are cryptographically random, unguessable, and never a sequential id or personal data",
+    "category": "tickets",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/tickets.test.ts",
+    "note": "Covers token/QR-payload strength. A live forgery attempt against a scanner endpoint can't be tested yet — no scanner exists this session."
+  },
+  {
+    "id": "qr-scanned-twice",
+    "scenario": "A ticket QR scanned twice returns ALREADY_USED on the second scan",
+    "category": "scanner",
+    "implemented": false,
+    "status": "pending",
+    "testFile": null,
+    "note": "No scanner endpoint yet — deferred, see TASKS.md."
+  },
+  {
+    "id": "qr-scanned-simultaneously-two-scanners",
+    "scenario": "The same QR scanned simultaneously by two scanners admits exactly one",
+    "category": "scanner",
+    "implemented": false,
+    "status": "pending",
+    "testFile": null,
+    "note": "No scanner endpoint yet — deferred, see TASKS.md."
+  },
+  {
+    "id": "cancelled-ticket-scan",
+    "scenario": "Scanning a cancelled ticket returns CANCELLED, not VALID",
+    "category": "scanner",
+    "implemented": false,
+    "status": "pending",
+    "testFile": null,
+    "note": "No scanner endpoint yet — deferred, see TASKS.md."
+  },
+  {
+    "id": "customer-accessing-another-order",
+    "scenario": "A customer cannot fetch another customer's order (404, not 403)",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/access-control.spec.ts"
+  },
+  {
+    "id": "unauthenticated-hold-creation",
+    "scenario": "An unauthenticated request to create a hold is rejected (401)",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/access-control.spec.ts"
+  },
+  {
+    "id": "customer-accessing-admin-api",
+    "scenario": "A customer session cannot call an admin-only API",
+    "category": "access-control",
+    "implemented": false,
+    "status": "pending",
+    "testFile": null,
+    "note": "requireAdminRole() exists and is structurally isolated from customer auth, but no protected admin data API exists yet to test against (admin dashboard is deferred)."
+  },
+  {
+    "id": "refund-state-transitions",
+    "scenario": "Refund/order state transitions follow the legal transition graph only",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/orders/stateMachine.test.ts",
+    "note": "Covers the pure order-status transition table (including refunded/partially_refunded). The actual refund execution flow (PaymentProvider.refund + Refund rows) is schema-only this session — not yet exercised."
+  },
+  {
+    "id": "e2e-purchase-flow",
+    "scenario": "End-to-end: register -> browse -> reserve -> checkout -> fake pay -> ticket page with QR",
+    "category": "e2e",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/purchase-flow.spec.ts"
+  },
+  {
+    "id": "cross-customer-hold-release",
+    "scenario": "A customer cannot release another customer's hold",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/access-control.test.ts"
+  }
+]
