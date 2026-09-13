@@ -182,6 +182,23 @@ See `.env.example` for the full list and generation instructions
 boot, so a misconfigured production deployment fails to start rather than
 failing on the first webhook — see docs/PAYMENTS.md.
 
+### Morocco timezone data depends on the Node runtime's bundled tzdata
+
+`lib/validation/catalog.ts`'s `parseMoroccoDateTime`/`formatMoroccoDateTime`
+resolve Africa/Casablanca wall-clock times via the Node runtime's own ICU
+timezone database, deliberately, since Morocco reverts to UTC+0 for a
+government-decreed window around Ramadan each year and otherwise stays at
+UTC+1 — a rule no application code should hardcode. The reversion window
+for a not-yet-reached year is only published a year or so ahead, so two
+Node builds released at different times can bundle different projections
+for the same future date (observed directly: Node 22 and Node 24 disagreed
+on a December 2026 instant during this PR's review). Practical
+consequence: pin the exact Node version across dev/CI/production, and
+re-verify event start/sales-window times shown in the admin UI after any
+Node upgrade for events scheduled near a Ramadan boundary. See
+`tests/unit/catalog-validation.test.ts` for why its regression dates are
+historical rather than future.
+
 ## Known scope limitations (deferred, tracked in TASKS.md)
 
 - **Remaining admin operations** — event/category/phase creation and
