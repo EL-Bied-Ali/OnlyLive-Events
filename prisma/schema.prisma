@@ -284,6 +284,12 @@ enum OrderStatus {
   refunded
   partially_refunded
   paid_but_unfulfillable
+  /// A payment.succeeded event arrived for an order already marked
+  /// failed/cancelled, and inventory could not be safely re-fulfilled.
+  /// The Payment is "paid" (money was captured) but the Order needs a
+  /// human to reconcile/refund — see docs/PAYMENTS.md. Not reachable
+  /// automatically from any other state.
+  reconciliation_required
 }
 
 model Order {
@@ -345,6 +351,14 @@ model Payment {
   provider          String
   providerPaymentId String?       @map("provider_payment_id")
   redirectUrl       String?       @map("redirect_url")
+  /// Claim marker for "a caller is currently calling
+  /// provider.createPayment for this payment". Set by the caller that
+  /// wins the atomic claim (see lib/orders/checkout.ts), cleared once
+  /// providerPaymentId/redirectUrl are stored or the attempt fails. A
+  /// stale claim (older than the recovery window) can be reclaimed by a
+  /// new caller, so a crashed/timed-out claimant never blocks retries
+  /// forever.
+  providerInitAt    DateTime?     @map("provider_init_at")
   status            PaymentStatus @default(pending)
   amountCents       Int           @map("amount_cents")
   currency          String        @default("MAD")
