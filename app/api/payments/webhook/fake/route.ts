@@ -11,7 +11,52 @@ type WebhookResult =
   | { kind: "duplicate" }
   | { kind: "invalid_signature" }
   | { kind: "amount_mismatch" }
+  | { kind: "event_collision" }
   | { kind: "processed"; outcome: string };
+
+/**
+ * Guards the reclaim path (an existing payment_events row with
+ * processedAt still null): the SAME (provider, external_event_id) key
+ * must not be reprocessed if the currently-resolved request disagrees
+ * with what was originally claimed on any immutable fact. Concretely:
+ *
+ * - a different Payment (the providerPaymentId this request resolved to
+ *   doesn't match what the claimed row recorded) — reprocessing would
+ *   apply fulfillment to the wrong order/payment while the audit trail
+ *   still points at the original one;
+ * - a different event type (e.g. the first attempt was "failed" and a
+ *   resend under the same event id now claims "succeeded") — that's a
+ *   changed fact about history, not a legitimate retry;
+ * - a different amount/currency than what the first attempt's raw
+ *   payload recorded, for the same reason;
+ * - the original attempt's signature was invalid — an event id that has
+ *   already been seen with an invalid signature must never be "upgraded"
+ *   to valid processing by a later attempt, signed or not; that would
+ *   let a forgery attempt succeed by resending the same id with a
+ *   corrected signature once the secret is guessed/leaked.
+ *
+ * Any of these is treated as a suspicious collision: rejected and
+ * audited, never silently reprocessed, and the existing row's
+ * rawPayload/signatureValid are left untouched so the historical record
+ * of the anomaly isn't overwritten by whatever the new attempt claims.
+ */
+function isConsistentWithExistingClaim(
+  existing: { paymentId: string; eventType: string; signatureValid: boolean; rawPayload: unknown },
+  payment: { id: string },
+  event: { type: string; amountCents: number; currency: string },
+): boolean {
+  if (existing.paymentId !== payment.id) return false;
+  if (existing.eventType !== event.type) return false;
+  if (existing.signatureValid === false) return false;
+
+  const raw = existing.rawPayload as { amountCents?: unknown; currency?: unknown } | null;
+  if (raw && typeof raw === "object") {
+    if (raw.amountCents !== undefined && raw.amountCents !== event.amountCents) return false;
+    if (raw.currency !== undefined && raw.currency !== event.currency) return false;
+  }
+
+  return true;
+}
 
 /**
  * The fake provider's simulated webhook callback. Deliberately exercises
@@ -87,6 +132,26 @@ export async function POST(request: NextRequest) {
         if (existing.processedAt !== null) {
           return { kind: "duplicate" };
         }
+        if (!isConsistentWithExistingClaim(existing, payment, event)) {
+          await tx.auditLog.create({
+            data: {
+              actorType: "system",
+              action: "payment.webhook_event_collision",
+              entityType: "PaymentEvent",
+              entityId: existing.id,
+              metadata: {
+                existingPaymentId: existing.paymentId,
+                resolvedPaymentId: payment.id,
+                existingEventType: existing.eventType,
+                incomingEventType: event.type,
+                existingSignatureValid: existing.signatureValid,
+                incomingSignatureValid: event.signatureValid,
+                externalEventId: event.externalEventId,
+              },
+            },
+          });
+          return { kind: "event_collision" };
+        }
         paymentEventId = existing.id;
       }
 
@@ -133,7 +198,10 @@ export async function POST(request: NextRequest) {
       switch (event.type) {
         case "payment.succeeded": {
           outcome = await confirmOrderPayment(payment.orderId, tx);
-          if (outcome === "paid" || outcome === "paid_but_unfulfillable") {
+          // Money was captured for any of these three outcomes — the
+          // difference between them is only whether/how the order could
+          // be fulfilled, never whether the payment itself succeeded.
+          if (outcome === "paid" || outcome === "paid_but_unfulfillable" || outcome === "reconciliation_required") {
             await tx.payment.update({ where: { id: payment.id }, data: { status: "paid" } });
           }
           break;
@@ -170,6 +238,8 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "INVALID_SIGNATURE" }, { status: 401 });
       case "amount_mismatch":
         return NextResponse.json({ error: "AMOUNT_MISMATCH" }, { status: 409 });
+      case "event_collision":
+        return NextResponse.json({ error: "EVENT_COLLISION" }, { status: 409 });
       case "processed":
         return NextResponse.json({ ok: true, outcome: result.outcome });
     }

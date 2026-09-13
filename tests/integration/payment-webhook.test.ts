@@ -101,6 +101,102 @@ describe("payment webhook — verification, idempotency, and fulfillment", () =>
     expect(tickets).toHaveLength(1);
   });
 
+  it("never reprocesses a previously invalid-signature event id as valid, even with a correct signature now", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    const payload = makePayload(fixture, "payment.succeeded");
+
+    // Simulate a prior forged attempt under this exact event id: claimed,
+    // signature invalid, never processed (by design — see the route).
+    await prisma.$executeRaw`
+      INSERT INTO payment_events (id, payment_id, provider, external_event_id, event_type, raw_payload, signature_valid, received_at)
+      VALUES (${crypto.randomUUID()}, ${fixture.payment.id}, 'fake', ${payload.eventId}, ${payload.type}, ${JSON.stringify(payload)}::jsonb, false, now())
+    `;
+
+    // Now resend the SAME event id, this time correctly signed. It must
+    // still be rejected as a collision, not silently processed.
+    const response = await post(payload);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "EVENT_COLLISION" });
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
+    expect(order.status).toBe("pending_payment");
+
+    const tickets = await prisma.ticket.findMany({ where: { orderItemId: fixture.orderItem.id } });
+    expect(tickets).toHaveLength(0);
+
+    // The original row's misleading fields are never overwritten by the
+    // new, differently-signed attempt.
+    const stored = await prisma.paymentEvent.findUniqueOrThrow({
+      where: { provider_externalEventId: { provider: "fake", externalEventId: payload.eventId } },
+    });
+    expect(stored.signatureValid).toBe(false);
+    expect(stored.processedAt).toBeNull();
+
+    const auditEntries = await prisma.auditLog.findMany({
+      where: { action: "payment.webhook_event_collision" },
+    });
+    expect(auditEntries.length).toBeGreaterThan(0);
+  });
+
+  it("rejects a reclaim attempt whose resolved payment differs from the originally claimed payment", async () => {
+    const fixtureA = await createOrderAwaitingPayment({ quantity: 1 });
+    const fixtureB = await createOrderAwaitingPayment({ quantity: 1 });
+
+    const sharedEventId = crypto.randomUUID();
+    // Simulate an interrupted claim originally made under Payment A.
+    await prisma.$executeRaw`
+      INSERT INTO payment_events (id, payment_id, provider, external_event_id, event_type, raw_payload, signature_valid, received_at)
+      VALUES (${crypto.randomUUID()}, ${fixtureA.payment.id}, 'fake', ${sharedEventId}, 'payment.succeeded', '{}'::jsonb, true, now())
+    `;
+
+    // A webhook now arrives whose providerPaymentId resolves to Payment
+    // B, but reuses that same external event id.
+    const collidingPayload = {
+      eventId: sharedEventId,
+      providerPaymentId: fixtureB.payment.providerPaymentId,
+      type: "payment.succeeded",
+      amountCents: fixtureB.payment.amountCents,
+      currency: fixtureB.payment.currency,
+    };
+    const response = await post(collidingPayload);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "EVENT_COLLISION" });
+
+    const orderA = await prisma.order.findUniqueOrThrow({ where: { id: fixtureA.order.id } });
+    const orderB = await prisma.order.findUniqueOrThrow({ where: { id: fixtureB.order.id } });
+    expect(orderA.status).toBe("pending_payment");
+    expect(orderB.status).toBe("pending_payment");
+
+    const auditEntries = await prisma.auditLog.findMany({ where: { action: "payment.webhook_event_collision" } });
+    expect(auditEntries.length).toBeGreaterThan(0);
+  });
+
+  it("rejects a reclaim attempt whose event type differs from what was originally claimed", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    const sharedEventId = crypto.randomUUID();
+
+    // Originally claimed as a "failed" event, interrupted before
+    // processing.
+    await prisma.$executeRaw`
+      INSERT INTO payment_events (id, payment_id, provider, external_event_id, event_type, raw_payload, signature_valid, received_at)
+      VALUES (${crypto.randomUUID()}, ${fixture.payment.id}, 'fake', ${sharedEventId}, 'payment.failed', '{}'::jsonb, true, now())
+    `;
+
+    const payload = {
+      eventId: sharedEventId,
+      providerPaymentId: fixture.payment.providerPaymentId,
+      type: "payment.succeeded",
+      amountCents: fixture.payment.amountCents,
+      currency: fixture.payment.currency,
+    };
+    const response = await post(payload);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: "EVENT_COLLISION" });
+
+    const tickets = await prisma.ticket.findMany({ where: { orderItemId: fixture.orderItem.id } });
+    expect(tickets).toHaveLength(0);
+  });
+
   it("rejects a forged/tampered signature and leaves order state unchanged", async () => {
     const fixture = await createOrderAwaitingPayment({ quantity: 1 });
     const payload = makePayload(fixture, "payment.succeeded");
@@ -174,24 +270,100 @@ describe("payment webhook — verification, idempotency, and fulfillment", () =>
     expect(tickets).toHaveLength(1);
   });
 
-  it("a succeeded event arriving after an already-failed event never retroactively generates tickets", async () => {
+  // --- Reconciliation: a payment.succeeded arriving after failed/cancelled ---
+  //
+  // The real PSP hasn't been selected, so its actual event lifecycle is
+  // unknown — this app must never assume a "failed" or "cancelled" order
+  // can't later receive a validly-signed "succeeded" event, and it must
+  // never silently ignore evidence that money was captured. See
+  // docs/PAYMENTS.md and lib/orders/fulfillment.ts::reconcileContradictorySuccess.
+
+  it("a succeeded event after an already-failed event fulfills the order when inventory is still available", async () => {
     const fixture = await createOrderAwaitingPayment({ quantity: 1 });
     await post(makePayload(fixture, "payment.failed"));
+
+    // Nobody else took the released stock, so reconciliation must be
+    // able to fulfill it directly rather than leaving a captured payment
+    // stranded on a "failed" order.
+    const response = await post(makePayload(fixture, "payment.succeeded"));
+    expect(response.status).toBe(200);
+
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } });
+    expect(payment.status).toBe("paid"); // money was captured — never hidden
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
+    expect(order.status).toBe("paid");
+
+    const tickets = await prisma.ticket.findMany({ where: { orderItemId: fixture.orderItem.id } });
+    expect(tickets).toHaveLength(1);
+
+    const inventory = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } });
+    expect(inventory.soldQuantity).toBe(1);
+    expect(inventory.reservedQuantity).toBe(0);
+
+    const auditEntries = await prisma.auditLog.findMany({
+      where: { entityId: fixture.order.id, action: "payment.contradictory_success_reconciled_and_fulfilled" },
+    });
+    expect(auditEntries).toHaveLength(1);
+  });
+
+  it("a succeeded event after an already-failed event requires reconciliation once the stock was resold, without overselling", async () => {
+    // total=1: once failed releases it, a second buyer immediately takes
+    // the only unit, so it's genuinely gone by the time the late
+    // succeeded event arrives.
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await post(makePayload(fixture, "payment.failed"));
+
+    const { createHold } = await import("@/lib/inventory");
+    const otherBuyer = await prisma.user.create({
+      data: { email: `other-${crypto.randomUUID()}@test.onlylive.ma`, passwordHash: "x", name: "Other buyer" },
+    });
+    await createHold({
+      ticketCategoryId: fixture.category.id,
+      salesPhaseId: fixture.phase.id,
+      userId: otherBuyer.id,
+      quantity: 1,
+    });
 
     const response = await post(makePayload(fixture, "payment.succeeded"));
     expect(response.status).toBe(200);
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } });
-    expect(payment.status).toBe("failed");
+    expect(payment.status).toBe("paid"); // money was still captured — must not be hidden
 
     const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
-    expect(order.status).toBe("failed");
+    expect(order.status).toBe("reconciliation_required");
 
     const tickets = await prisma.ticket.findMany({ where: { orderItemId: fixture.orderItem.id } });
-    expect(tickets).toHaveLength(0);
+    expect(tickets).toHaveLength(0); // never oversell
+
+    const inventory = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } });
+    expect(inventory.reservedQuantity + inventory.soldQuantity).toBe(1); // still exactly the other buyer's unit
+
+    const auditEntries = await prisma.auditLog.findMany({
+      where: { entityId: fixture.order.id, action: "payment.contradictory_success_requires_reconciliation" },
+    });
+    expect(auditEntries).toHaveLength(1);
   });
 
-  it("simultaneous succeeded and failed events for the same payment settle on exactly one outcome, never both", async () => {
+  it("a succeeded event after an already-cancelled event is reconciled the same way", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await post(makePayload(fixture, "payment.cancelled"));
+
+    const response = await post(makePayload(fixture, "payment.succeeded"));
+    expect(response.status).toBe(200);
+
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } });
+    expect(payment.status).toBe("paid");
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
+    expect(order.status).toBe("paid");
+
+    const tickets = await prisma.ticket.findMany({ where: { orderItemId: fixture.orderItem.id } });
+    expect(tickets).toHaveLength(1);
+  });
+
+  it("simultaneous succeeded and failed events for the same payment converge on paid when inventory is still available", async () => {
     const fixture = await createOrderAwaitingPayment({ quantity: 1 });
 
     const [successResponse, failResponse] = await Promise.all([
@@ -200,14 +372,19 @@ describe("payment webhook — verification, idempotency, and fulfillment", () =>
     ]);
     expect([successResponse.status, failResponse.status]).toEqual([200, 200]);
 
+    // Whichever event's transaction wins the Payment row lock first, the
+    // outcome is now deterministic: either succeeded applies directly,
+    // or failed applies first and is then reconciled back to paid since
+    // nothing else consumed the stock. The order must never be left
+    // "failed" while money was captured.
     const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
-    expect(["paid", "failed"]).toContain(order.status);
+    expect(order.status).toBe("paid");
 
     const payment = await prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } });
-    expect(payment.status).toBe(order.status);
+    expect(payment.status).toBe("paid");
 
     const tickets = await prisma.ticket.findMany({ where: { orderItemId: fixture.orderItem.id } });
-    expect(tickets).toHaveLength(order.status === "paid" ? 1 : 0);
+    expect(tickets).toHaveLength(1);
   });
 
   it("rejects a webhook claiming the wrong amount despite a valid signature", async () => {
