@@ -1,6 +1,14 @@
 import "dotenv/config";
+import { z } from "zod";
 import { prisma } from "@/lib/db";
 import { hashPassword } from "@/lib/auth/password";
+
+const adminSeedSchema = z.object({
+  email: z.string().trim().toLowerCase().email(),
+  // Deliberately higher than the customer minimum (10) — this account
+  // has super_admin privileges.
+  password: z.string().min(16).max(200),
+});
 
 async function main() {
   const venue = await prisma.venue.upsert({
@@ -85,21 +93,39 @@ async function main() {
     }
   }
 
-  const adminPasswordHash = await hashPassword("ChangeMe123!");
-  await prisma.adminUser.upsert({
-    where: { email: "admin@onlylive.ma" },
-    update: {},
-    create: {
-      email: "admin@onlylive.ma",
-      passwordHash: adminPasswordHash,
-      name: "OnlyLive Admin",
-      role: "super_admin",
-    },
-  });
+  // No default admin is ever created silently. An initial admin account
+  // is only seeded when ADMIN_SEED_EMAIL and ADMIN_SEED_PASSWORD are
+  // both explicitly provided — see docs/SECURITY.md for the bootstrap
+  // and password-rotation procedure. Credentials are never printed.
+  const rawEmail = process.env.ADMIN_SEED_EMAIL;
+  const rawPassword = process.env.ADMIN_SEED_PASSWORD;
+
+  if (!rawEmail && !rawPassword) {
+    console.log("Seed: ADMIN_SEED_EMAIL/ADMIN_SEED_PASSWORD not set — skipping admin user creation.");
+  } else {
+    const parsed = adminSeedSchema.safeParse({ email: rawEmail, password: rawPassword });
+    if (!parsed.success) {
+      throw new Error(
+        `Invalid ADMIN_SEED_EMAIL/ADMIN_SEED_PASSWORD: ${parsed.error.issues.map((i) => i.message).join("; ")}`,
+      );
+    }
+
+    const passwordHash = await hashPassword(parsed.data.password);
+    await prisma.adminUser.upsert({
+      where: { email: parsed.data.email },
+      update: { passwordHash },
+      create: {
+        email: parsed.data.email,
+        passwordHash,
+        name: "OnlyLive Admin",
+        role: "super_admin",
+      },
+    });
+    console.log(`Seed: admin user ensured (${parsed.data.email}). Credentials are not printed.`);
+  }
 
   console.log("Seed complete:");
   console.log(`  Event: ${event.title} (${event.slug})`);
-  console.log("  Admin: admin@onlylive.ma / ChangeMe123! (change this immediately outside dev)");
 }
 
 main()
