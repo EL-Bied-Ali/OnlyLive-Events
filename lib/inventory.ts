@@ -133,13 +133,21 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
     // every category — released automatically at transaction end.
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${event.id}), hashtext(${input.userId}))`;
 
+    // Excludes reservations that are 'active' in name only — expired
+    // (expires_at in the past) but not yet flipped by the sweep or by
+    // another category's lazy release — so a stale hold can never keep
+    // consuming this user's purchase allowance. This works without
+    // requiring the background sweep to have run first, matching the
+    // same lazy-expiry idiom used for inventory availability itself.
+    // This is a read-only count for the limit check, not a mutation, so
+    // it cannot double-decrement anything.
     const userTotals = await tx.$queryRaw<{ total: bigint }[]>`
       SELECT COALESCE(SUM(r.quantity), 0) AS total
       FROM reservations r
       JOIN ticket_categories tc ON tc.id = r.ticket_category_id
       WHERE r.user_id = ${input.userId}
         AND tc.event_id = ${event.id}
-        AND r.status IN ('active', 'converted')
+        AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= now()))
     `;
     const currentUserTotal = Number(userTotals[0]?.total ?? 0);
     if (currentUserTotal + input.quantity > MAX_TICKETS_PER_USER_PER_EVENT) {
