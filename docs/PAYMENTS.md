@@ -58,40 +58,91 @@ a real deployment. See `tests/unit/payments/productionGuard.test.ts`.
 
 `Order.status`: `pending_payment → paid | failed | cancelled |
 paid_but_unfulfillable`; `paid | paid_but_unfulfillable → refunded |
-partially_refunded`. See `lib/orders/stateMachine.ts` for the full,
-independently unit-tested transition table — that module is a pure
-documentation/validation layer; the actual concurrency-safe enforcement is
-the guarded SQL `UPDATE ... WHERE status = 'pending_payment'` in
+partially_refunded`; `failed | cancelled → paid | reconciliation_required`
+(see Reconciliation below); `reconciliation_required → refunded`. See
+`lib/orders/stateMachine.ts` for the full, independently unit-tested
+transition table — that module is a pure documentation/validation layer;
+the actual concurrency-safe enforcement is the guarded SQL
+`UPDATE ... WHERE status = 'pending_payment'` in
 `lib/orders/fulfillment.ts`, which is both the row lock and the guard.
 
 `Payment.status`: `pending → awaiting_payment → paid | failed |
 cancelled`; `paid → refunded | partially_refunded`.
 
-**Policy: `Payment.status` only changes on a real transition.** The
-webhook route (`app/api/payments/webhook/fake/route.ts`) only writes
-`Payment.status` when `confirmOrderPayment`/`failOrderPayment` return an
-outcome that actually applied (`paid`, `paid_but_unfulfillable`, `failed`,
-`cancelled`) — never when they return `already_handled` (the order had
-already left `pending_payment`) or `order_not_found`. This is what makes
-these all safe, in any order or concurrently:
+**Policy: `Payment.status` only changes on a real transition, and never
+hides evidence that money was captured.** The webhook route
+(`app/api/payments/webhook/fake/route.ts`) only writes `Payment.status`
+when `confirmOrderPayment`/`failOrderPayment` return an outcome that
+actually applied (`paid`, `paid_but_unfulfillable`,
+`reconciliation_required`, `failed`, `cancelled`) — never when they
+return `already_handled` (the order had already left `pending_payment`
+via a *different, non-contradictory* path) or `order_not_found`. This is
+what makes these all safe, in any order or concurrently:
 
 - `payment.succeeded` then `payment.failed` (or vice versa) for the same
-  payment — whichever arrives first wins; the second is acknowledged
-  (200) but is a no-op, and never overwrites a `paid` order's tickets or
-  flips a `failed` order to `paid` retroactively.
+  payment — whichever arrives first wins. If `succeeded` wins, a later
+  `failed` is acknowledged (200) but is a no-op. If `failed` wins
+  first, a later `succeeded` is **not** treated as a no-op — see
+  Reconciliation below, since that specific ordering is exactly the
+  "customer charged, order marked failed" risk this policy exists to
+  close.
 - Two differently-IDed events for the same logical payment.
 - Simultaneous `succeeded`/`failed` deliveries — the Payment row lock
-  (see Atomicity below) serializes them; exactly one outcome wins.
+  (see Atomicity below) serializes them; exactly one final outcome is
+  reached deterministically (see Reconciliation).
 
 `paid_but_unfulfillable` exists because a hold can expire (and its stock
 get resold) in the window between "customer clicks pay" and "provider
-confirms payment" — see `lib/orders/checkout.ts`'s checkout-expiry
-extension, which shrinks but cannot eliminate this race. When it happens,
-the customer's money was captured (`Payment.status = 'paid'`) but no
-tickets are generated; this is intentional (never oversell) but currently
-has **no automated resolution** — it needs an admin alert and/or automatic
-refund once the admin dashboard and refund flow exist (tracked in
-TASKS.md).
+confirms payment" while the order was still `pending_payment` — see
+`lib/orders/checkout.ts`'s checkout-expiry extension, which shrinks but
+cannot eliminate this race. When it happens, the customer's money was
+captured (`Payment.status = 'paid'`) but no tickets are generated; this is
+intentional (never oversell) but currently has **no automated
+resolution** — it needs an admin alert and/or automatic refund once the
+admin dashboard and refund flow exist (tracked in TASKS.md).
+
+## Reconciliation: a contradictory payment.succeeded after failed/cancelled
+
+**The real payment provider has not been selected yet.** The policy below
+is a conservative stopgap based on "never assume a payment lifecycle
+transition is impossible" and "never silently drop evidence that money
+was captured" — it is **not** derived from any real PSP's documented
+event guarantees. Once a provider is chosen, revisit this against its
+actual official lifecycle documentation (can a `succeeded` event really
+follow a `failed`/`cancelled` one for that provider? is a later event
+authoritative? is there a dispute/chargeback flow that interacts with
+this?) rather than assuming this heuristic still applies.
+
+If a validly-signed, amount/currency-matching `payment.succeeded` event
+arrives for an order the app had already settled as `failed` or
+`cancelled`, `confirmOrderPayment` routes it to
+`reconcileContradictorySuccess` (`lib/orders/fulfillment.ts`) instead of
+treating it as `already_handled`:
+
+1. It re-checks, atomically (locking each affected `TicketCategory`'s
+   `Inventory` row, same pattern as `createHold`), whether the order's
+   original items can still be fulfilled from current stock. The
+   original `Reservation` stays `cancelled` (it accurately was, at the
+   time of the earlier failure) — fulfillment here consumes fresh
+   inventory directly into `sold_quantity`, it does not reuse the old
+   hold.
+2. **If fulfillable**: tickets are generated and the order becomes
+   `paid` — a captured payment is never left stranded on a dead order
+   when avoidable.
+3. **If not** (the stock was resold in the meantime): the order becomes
+   `reconciliation_required` — no ticket is generated (never oversell),
+   and a human must resolve it (manually fulfil if stock frees up, or
+   refund). This is a terminal, human-only state: it is never
+   re-attempted automatically by a later event.
+4. Either way, `Payment.status` is set to `paid` (money was captured —
+   this is a fact, independent of whether the order could be fulfilled)
+   and an `AuditLog` entry is written
+   (`payment.contradictory_success_reconciled_and_fulfilled` or
+   `payment.contradictory_success_requires_reconciliation`).
+
+See `tests/integration/payment-webhook.test.ts` for: failed→succeeded
+while still fulfillable, failed→succeeded after the stock was resold,
+cancelled→succeeded, and the audit records both paths create.
 
 ## Atomicity: claiming and processing a webhook event
 
@@ -120,6 +171,24 @@ the transaction is additional defense in depth alongside the
 webhook deliveries for the *same* payment even when they carry different
 event ids.
 
+### Reclaim consistency
+
+Reclaiming a `payment_events` row (existing row, `processedAt` still
+null) only reprocesses it if the current request agrees with what was
+originally claimed on every immutable fact:
+`existing.paymentId === payment.id` (the currently-resolved Payment
+matches), `existing.eventType === event.type`, the original attempt's
+`signatureValid` was **not** `false` (an event id once seen with an
+invalid signature can never be "upgraded" to valid processing by a later
+attempt — that would let a forgery attempt succeed just by resending the
+same id once the secret is guessed/leaked), and the original raw
+payload's `amountCents`/`currency` (if present) match the current event's.
+Any mismatch is rejected (`409 EVENT_COLLISION`), audited
+(`payment.webhook_event_collision`), and — critically — the existing
+row's `rawPayload`/`signatureValid` are left untouched, so the historical
+record of the anomaly is never overwritten by whatever the colliding
+attempt claims. See `tests/integration/payment-webhook.test.ts`.
+
 ## Amount/currency verification
 
 Before any fulfillment logic runs, the webhook handler compares the
@@ -133,29 +202,55 @@ processed (so it isn't retried forever), and the handler returns
 ## Checkout idempotency
 
 `lib/orders/checkout.ts::startCheckout` guarantees **at most one** Order
-per Reservation:
+per Reservation, **and** at most one call to `provider.createPayment` per
+Payment — two distinct guarantees, both needed:
 
-- `ensurePendingOrderAndPayment` locks the `Reservation` row
-  (`FOR UPDATE`) first, so concurrent checkout requests for the *same*
-  reservation fully serialize — only the first creates an Order/Payment;
-  every other one (sequential retry or concurrent race) takes the
-  "already checked out" branch and returns the existing Order's
-  `redirectUrl`.
+**One Order per Reservation** (`ensurePendingOrderAndPayment`):
+- Locks the `Reservation` row (`FOR UPDATE`) first, so concurrent
+  checkout requests for the *same* reservation fully serialize — only
+  the first creates an Order/Payment; every other one (sequential retry
+  or concurrent race) takes the "already checked out" branch.
 - `order_items.reservation_id` carries a database `UNIQUE` constraint as
   defense in depth, independent of the application-level lock.
-- The external `provider.createPayment()` call happens **outside** the
-  database transaction (it's I/O, not something to hold a DB transaction
-  open for) and only when no `redirectUrl` is stored yet. If it throws —
-  network failure, provider outage, or `getPaymentProvider()` itself
-  failing to initialize — the already-committed Order/Payment are left
-  exactly as they were (`pending_payment` / `awaiting_payment`, no
-  `providerPaymentId`); the customer's retry re-enters the same function,
-  takes the "already checked out" branch, and safely retries **only** the
-  provider call against the same Payment row. A second Order is never
-  created because of a provider failure.
+- **Expiry guard**: if provider initialization never completed for the
+  existing Payment (no `redirectUrl` yet) and the reservation has since
+  expired — checked directly against `expires_at`, the same lazy-expiry
+  idiom as `lib/inventory.ts`, so this doesn't depend on the background
+  sweep having run — this throws `409 HOLD_EXPIRED` rather than letting
+  the caller start a brand-new provider payment for stock that may no
+  longer be reserved. If initialization *did* already complete, the
+  stored redirect is still returned regardless of expiry (the customer
+  may already have a real PSP session open).
+
+**One provider call per Payment** (`claimAndInitializeProvider`): a
+locked database row alone doesn't stop this — two concurrent callers can
+both pass "no redirectUrl yet" and both call the provider before either
+one writes back. `payments.provider_init_at` is a durable claim:
+- A caller atomically claims it with a guarded
+  `UPDATE ... WHERE provider_payment_id IS NULL AND (provider_init_at IS
+  NULL OR provider_init_at < now() - <timeout>)`. Only the winner calls
+  `provider.createPayment`; every other concurrent caller polls briefly
+  (checking whether the winner has since stored a `redirectUrl`) instead
+  of calling the provider itself.
+- The claim and the provider call are separate statements — no database
+  transaction spans the network I/O.
+- A stale claim (the claimant crashed or the request timed out) expires
+  after the timeout window and can be reclaimed by the next caller,
+  instead of blocking that Payment forever.
+- `idempotencyKey` is generated once when the Payment row is created and
+  is never regenerated across claims/retries — every attempt presents
+  the provider the same key.
+- On failure, the claim is released immediately (not left to expire) so
+  the very next retry can attempt again right away, and the
+  already-committed Order/Payment are left exactly as they were
+  (`pending_payment` / `awaiting_payment`, no `providerPaymentId`) — a
+  second Order is never created because of a provider failure.
 
 See `tests/integration/checkout-idempotency.test.ts` for sequential
-retry, concurrent retry, and provider-failure-then-retry scenarios.
+retry, concurrent retry (asserting `provider.createPayment` is called
+exactly once, not merely that one database Order exists),
+provider-failure-then-retry, and expired-retry-after-provider-failure
+scenarios.
 
 ## Hold cancellation vs. checkout
 

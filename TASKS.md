@@ -85,6 +85,62 @@ cancelled/sold-out/closed event, sales window, inactive category, phase
 quantity limit under concurrency, purchase-limit bypass via separate
 holds and across categories).
 
+## Completed (second payment-integrity audit — same branch)
+
+A second, independent audit reviewed the fixes above and found 5 further
+P1 issues plus one non-issue. All verified against actual code (none
+dismissed without evidence) and fixed:
+
+1. **Success-after-failure was silently dropped** — a validly-signed
+   `payment.succeeded` arriving after the order was already
+   `failed`/`cancelled` was treated as `already_handled`, leaving a
+   captured payment stranded on a dead order forever. Added
+   `reconcileContradictorySuccess` (`lib/orders/fulfillment.ts`): attempts
+   atomic re-fulfillment from current stock, landing on `paid` (new
+   `OrderStatus`) if possible or the new `reconciliation_required` status
+   (human-resolved, audit-logged) if not. `Payment.status` is set to
+   `paid` either way — money captured is never hidden. Documented as a
+   stopgap pending the real PSP's official event-lifecycle docs (see
+   docs/PAYMENTS.md's Reconciliation section) — this is explicitly not
+   assumed to be the final policy.
+2. **Concurrent provider initialization** — `startCheckout` prevented
+   duplicate database Orders but not duplicate *provider calls*:
+   concurrent callers could all see `redirectUrl: null` and all call
+   `provider.createPayment` at once. Added a durable claim
+   (`payments.provider_init_at`, guarded `UPDATE`) so only one caller
+   calls the provider; others poll briefly instead. A stale claim (crash/
+   timeout) can be reclaimed after a timeout window. The stable
+   `idempotencyKey` is preserved across claims/retries.
+3. **Expired retry after provider failure** — a retry could still start a
+   brand-new provider payment for a reservation that had since expired
+   and been swept, if the first provider call had failed. Added an
+   expiry check (direct `expires_at` comparison, not dependent on the
+   sweep) before allowing a *new* provider-initialization attempt; an
+   already-completed initialization's stored redirect is still returned
+   regardless of expiry.
+4. **Expired holds inflated the purchase-limit count** — the per-user/
+   event total counted `active` reservations that were expired in fact
+   (`expires_at` in the past) but not yet flipped by the sweep, wrongly
+   consuming a customer's allowance. The count now excludes them directly
+   in its `WHERE` clause, without depending on the sweep.
+5. **Webhook reclaim consistency** — reprocessing an interrupted
+   (`processedAt = null`) `payment_events` row didn't verify it still
+   matched the current request's resolved payment, event type, or prior
+   signature validity. Added a consistency check
+   (`isConsistentWithExistingClaim`); any mismatch is rejected
+   (`409 EVENT_COLLISION`) and audited rather than reprocessed, and the
+   original row's `rawPayload`/`signatureValid` are never overwritten.
+6. **Accidental `Hello-html` doc links** — checked; none exist in this
+   repository. Rejected as not applicable.
+
+New regression tests (all passing): reconciliation (failed→succeeded
+while fulfillable, after resale, cancelled→succeeded, audit records),
+concurrent-checkout asserting `provider.createPayment` is called exactly
+once, expired-retry-after-provider-failure (swept and lazy/unswept),
+expired-hold purchase-limit exclusion (same category and cross-category),
+and webhook reclaim collisions (invalid-signature upgrade attempt,
+payment-id mismatch, event-type mismatch).
+
 ## In progress
 
 - None.
@@ -98,9 +154,14 @@ holds and across categories).
    CANCELLED/WRONG_EVENT determination) — `TicketScan` schema already
    exists.
 3. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
-   from official docs (never speculatively).
+   from official docs (never speculatively) — and, at that point,
+   re-derive the reconciliation policy in
+   `lib/orders/fulfillment.ts::reconcileContradictorySuccess` from that
+   provider's actual documented event lifecycle rather than this
+   session's conservative stopgap.
 4. Refund flow (schema exists, no UI/logic yet) and an automated
-   resolution path for `paid_but_unfulfillable` orders.
+   resolution path for `paid_but_unfulfillable`/`reconciliation_required`
+   orders — currently both require a human to notice and act.
 5. Transactional email (order confirmation, ticket delivery, payment
    failure, refund confirmation) — must be idempotent, no duplicate
    tickets from a retried email job.

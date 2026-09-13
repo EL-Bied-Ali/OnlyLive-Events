@@ -325,5 +325,110 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/integration/hold-eligibility.test.ts"
+  },
+  {
+    "id": "reconciliation-failed-then-succeeded-fulfillable",
+    "scenario": "A payment.succeeded after an already-failed order is fulfilled directly (paid, ticket generated) when inventory is still available",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "reconciliation-failed-then-succeeded-unfulfillable",
+    "scenario": "A payment.succeeded after an already-failed order becomes reconciliation_required (no ticket, no oversell) once the stock was resold, while Payment.status still reflects the captured money",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "reconciliation-cancelled-then-succeeded",
+    "scenario": "A payment.succeeded after an already-cancelled order is reconciled the same way as failed-then-succeeded",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "reconciliation-audit-records",
+    "scenario": "Both reconciliation outcomes (fulfilled, or requires-reconciliation) create a distinct AuditLog entry",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "checkout-concurrent-provider-call-count",
+    "scenario": "Concurrent checkout requests for the same reservation call provider.createPayment exactly once, not merely produce one database Order",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/checkout-idempotency.test.ts"
+  },
+  {
+    "id": "checkout-expired-retry-after-provider-failure-swept",
+    "scenario": "provider.createPayment fails, the hold expires and is swept, then a retry does not call the provider again and returns an explicit HOLD_EXPIRED error",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/checkout-idempotency.test.ts"
+  },
+  {
+    "id": "checkout-expired-retry-after-provider-failure-unswept",
+    "scenario": "The same expired-retry refusal holds even when the background sweep hasn't run yet (lazy expires_at check)",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/checkout-idempotency.test.ts"
+  },
+  {
+    "id": "purchase-limit-excludes-expired-hold-same-category",
+    "scenario": "An expired-but-unswept hold does not keep consuming the user's purchase allowance, and inventory is released exactly once when the next hold's lock touches that category",
+    "category": "sales-eligibility",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/hold-eligibility.test.ts"
+  },
+  {
+    "id": "purchase-limit-excludes-expired-hold-cross-category",
+    "scenario": "The same exclusion works for an expired-but-unswept hold in a different category of the same event, without requiring that category's own lock to run",
+    "category": "sales-eligibility",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/hold-eligibility.test.ts"
+  },
+  {
+    "id": "webhook-reclaim-invalid-signature-never-upgraded",
+    "scenario": "An event id previously seen with an invalid signature is never reprocessed as valid by a later, correctly-signed attempt under the same id",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "webhook-reclaim-payment-mismatch",
+    "scenario": "Reclaiming an interrupted event whose resolved payment differs from the originally-claimed payment is rejected as an inconsistent collision, audited, neither order affected",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "webhook-reclaim-event-type-mismatch",
+    "scenario": "Reclaiming an interrupted event whose event type differs from what was originally claimed is rejected as an inconsistent collision",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/payment-webhook.test.ts"
+  },
+  {
+    "id": "docs-no-accidental-hello-html-links",
+    "scenario": "No accidental EL-Bied-Ali/Hello-html links exist anywhere in this repository",
+    "category": "documentation",
+    "implemented": true,
+    "status": "pass",
+    "testFile": null,
+    "note": "Verified by repository-wide grep during the second audit fix session; nothing found. Not applicable to this repo — no fix was needed."
   }
 ]
