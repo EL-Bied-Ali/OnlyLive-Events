@@ -100,3 +100,19 @@ export async function requireAdminForPage(): Promise<AdminUser> {
   }
   return adminUser;
 }
+
+/**
+ * Scanner pages are available to dedicated scanner accounts and to the
+ * two operational administrator roles. Support accounts remain read-only
+ * back-office users and cannot validate admission tickets.
+ */
+export async function requireScannerForPage(): Promise<AdminUser> {
+  const adminUser = await getValidAdminSession();
+  if (!adminUser) {
+    redirect("/scanner/login");
+  }
+  if (!(["super_admin", "admin", "scanner"] as AdminRole[]).includes(adminUser.role)) {
+    redirect("/");
+  }
+  return adminUser;
+}

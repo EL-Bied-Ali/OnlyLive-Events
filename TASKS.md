@@ -141,46 +141,52 @@ expired-hold purchase-limit exclusion (same category and cross-category),
 and webhook reclaim collisions (invalid-signature upgrade attempt,
 payment-id mismatch, event-type mismatch).
 
+## Completed (admin dashboard foundation — PR #2)
+
+- Protected, read-only `/admin` overview with confirmed revenue, ticket,
+  check-in and pending-payment metrics.
+- Event/category inventory and order/payment monitoring views, including
+  prominent reconciliation alerts.
+- Separate page/API authorization for admin/support roles; customer and
+  scanner accounts cannot enter the back office.
+- Admin authentication and access boundaries covered in Playwright; the
+  full browser suite now runs in CI against disposable PostgreSQL data.
+
 ## In progress
 
-- Admin dashboard foundation is implemented on
-  `feat/admin-dashboard-foundation` and awaiting review/merge: protected
-  overview, event inventory, order/payment monitoring, overview API and
-  administrator/scanner access-boundary e2e coverage.
+- Scanner PWA and atomic check-in endpoint are implemented on
+  `feat/atomic-qr-scanner` and awaiting full CI/PR review.
 
 ## Next
 
 1. Extend the admin dashboard beyond its read-only foundation with event/
    category/phase editing, refunds, CSV export and audit-log views. The
    overview, inventory and order/payment monitoring views now exist.
-2. Scanner PWA + check-in endpoint (atomic VALID/ALREADY_USED/INVALID/
-   CANCELLED/WRONG_EVENT determination) — `TicketScan` schema already
-   exists.
-3. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
+2. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
    from official docs (never speculatively) — and, at that point,
    re-derive the reconciliation policy in
    `lib/orders/fulfillment.ts::reconcileContradictorySuccess` from that
    provider's actual documented event lifecycle rather than this
    session's conservative stopgap.
-4. Refund flow (schema exists, no UI/logic yet) and an automated
+3. Refund flow (schema exists, no UI/logic yet) and an automated
    resolution path for `paid_but_unfulfillable`/`reconciliation_required`
    orders — currently both require a human to notice and act.
-5. Transactional email (order confirmation, ticket delivery, payment
+4. Transactional email (order confirmation, ticket delivery, payment
    failure, refund confirmation) — must be idempotent, no duplicate
    tickets from a retried email job.
-6. Rate limiting on `/api/customers/register`, customer login, and
+5. Rate limiting on `/api/customers/register`, customer login, and
    `/api/admin/login` (see docs/SECURITY.md — currently a documented gap).
-7. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
+6. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
    admin routes.
-8. Move local Playwright e2e tests off the dev database onto a dedicated
+7. Move local Playwright e2e tests off the dev database onto a dedicated
    ephemeral one. CI already runs them against an isolated ephemeral
    PostgreSQL service.
-9. Decide production managed-Postgres provider and write the backup
+8. Decide production managed-Postgres provider and write the backup
    strategy doc mentioned in CLAUDE.md's Observability section.
-10. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
+9. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
     needs OnlyLive's accountant/lawyer and the eventual PSP's
     requirements; do not draft speculative legal text.
-11. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
+10. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
     `lib/inventory.ts`) per-event-configurable if OnlyLive needs
     different caps for different shows.
 
@@ -192,6 +198,6 @@ payment-id mismatch, event-type mismatch).
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
 Admin write operations (event/category/phase editing, refunds, CSV and
-audit views), scanner UI, real payment provider, email delivery,
+audit views), offline scanning, real payment provider, email delivery,
 background worker infrastructure beyond the sweep endpoint, rate
 limiting, CSP headers, database backup strategy documentation.

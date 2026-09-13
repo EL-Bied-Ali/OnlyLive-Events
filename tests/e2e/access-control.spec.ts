@@ -59,6 +59,14 @@ test("a customer cannot fetch another customer's order", async ({ browser }) => 
   const adminOverviewResponse = await pageB.request.get("/api/admin/overview");
   expect(adminOverviewResponse.status()).toBe(401);
 
+  const scannerResponse = await pageB.request.post("/api/scanner/scan", {
+    data: {
+      eventId: "00000000-0000-0000-0000-000000000000",
+      validationToken: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    },
+  });
+  expect(scannerResponse.status()).toBe(401);
+
   await contextA.close();
   await contextB.close();
 });

@@ -110,34 +110,31 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/unit/tickets.test.ts",
-    "note": "Covers token/QR-payload strength. A live forgery attempt against a scanner endpoint can't be tested yet — no scanner exists this session."
+    "note": "Token strength is covered in unit tests; a live unknown-token attempt is rejected and recorded without storing the bearer token in tests/integration/ticket-scanning.test.ts."
   },
   {
     "id": "qr-scanned-twice",
     "scenario": "A ticket QR scanned twice returns ALREADY_USED on the second scan",
     "category": "scanner",
-    "implemented": false,
-    "status": "pending",
-    "testFile": null,
-    "note": "No scanner endpoint yet — deferred, see TASKS.md."
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/ticket-scanning.test.ts"
   },
   {
     "id": "qr-scanned-simultaneously-two-scanners",
     "scenario": "The same QR scanned simultaneously by two scanners admits exactly one",
     "category": "scanner",
-    "implemented": false,
-    "status": "pending",
-    "testFile": null,
-    "note": "No scanner endpoint yet — deferred, see TASKS.md."
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/ticket-scanning.test.ts"
   },
   {
     "id": "cancelled-ticket-scan",
     "scenario": "Scanning a cancelled ticket returns CANCELLED, not VALID",
     "category": "scanner",
-    "implemented": false,
-    "status": "pending",
-    "testFile": null,
-    "note": "No scanner endpoint yet — deferred, see TASKS.md."
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/ticket-scanning.test.ts"
   },
   {
     "id": "customer-accessing-another-order",
@@ -445,5 +442,37 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/e2e/admin-dashboard.spec.ts"
+  },
+  {
+    "id": "scanner-unknown-token",
+    "scenario": "An unknown QR token returns INVALID and its raw bearer value is never stored in scan history",
+    "category": "scanner",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/ticket-scanning.test.ts"
+  },
+  {
+    "id": "scanner-wrong-event",
+    "scenario": "A genuine ticket presented for another event returns WRONG_EVENT without exposing attendee details",
+    "category": "scanner",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/ticket-scanning.test.ts"
+  },
+  {
+    "id": "scanner-role-boundary",
+    "scenario": "Unauthenticated customers and support-only staff cannot call the ticket validation endpoint",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/scanner.spec.ts"
+  },
+  {
+    "id": "scanner-pwa-flow",
+    "scenario": "Scanner staff can sign in, select an event, and submit a QR token from the mobile scanner interface",
+    "category": "scanner",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/scanner.spec.ts"
   }
 ]
