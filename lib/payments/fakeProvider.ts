@@ -1,0 +1,92 @@
+import crypto from "node:crypto";
+import type {
+  CreatePaymentInput,
+  CreatePaymentResult,
+  ParsedWebhookEvent,
+  ParseWebhookInput,
+  PaymentProvider,
+  PaymentWebhookEventType,
+  RefundInput,
+  RefundResult,
+} from "@/lib/payments/provider";
+
+function getWebhookSecret(): string {
+  const secret = process.env.FAKE_PSP_WEBHOOK_SECRET;
+  if (!secret) {
+    throw new Error("FAKE_PSP_WEBHOOK_SECRET is not set");
+  }
+  return secret;
+}
+
+export function signFakeWebhookPayload(rawBody: string): string {
+  return crypto.createHmac("sha256", getWebhookSecret()).update(rawBody).digest("hex");
+}
+
+function timingSafeEqualHex(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "hex");
+  const bufB = Buffer.from(b, "hex");
+  if (bufA.length !== bufB.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+interface FakeWebhookPayload {
+  eventId: string;
+  providerPaymentId: string;
+  type: PaymentWebhookEventType;
+  amountCents: number;
+}
+
+/**
+ * Simulates a hosted-checkout PSP for local dev/testing without inventing
+ * a real API. `createPayment` never makes an external call — it points at
+ * the app's own /pay/fake/[paymentId] page, whose "simulate" buttons POST
+ * a genuinely HMAC-signed payload to the real webhook route, so the actual
+ * verification path (signature check -> idempotent PaymentEvent insert ->
+ * order-row-locked transition -> ticket generation) is exercised
+ * end-to-end and gets reused unchanged once a real PSP is chosen.
+ */
+export class FakeProvider implements PaymentProvider {
+  readonly name = "fake";
+
+  async createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult> {
+    return {
+      providerPaymentId: `fake_${crypto.randomUUID()}`,
+      redirectUrl: `/pay/fake/${input.paymentId}`,
+    };
+  }
+
+  async parseWebhook(input: ParseWebhookInput): Promise<ParsedWebhookEvent> {
+    const signature = input.headers["x-onlylive-fake-signature"];
+    const expected = signFakeWebhookPayload(input.rawBody);
+    const signatureValid = typeof signature === "string" && signature.length > 0 && timingSafeEqualHex(signature, expected);
+
+    let payload: FakeWebhookPayload;
+    try {
+      payload = JSON.parse(input.rawBody) as FakeWebhookPayload;
+    } catch {
+      return {
+        externalEventId: crypto.randomUUID(),
+        providerPaymentId: "",
+        type: "payment.failed",
+        amountCents: 0,
+        signatureValid: false,
+        raw: input.rawBody,
+      };
+    }
+
+    return {
+      externalEventId: payload.eventId,
+      providerPaymentId: payload.providerPaymentId,
+      type: payload.type,
+      amountCents: payload.amountCents,
+      signatureValid,
+      raw: payload,
+    };
+  }
+
+  async refund(_input: RefundInput): Promise<RefundResult> {
+    return { providerRefundId: `fake_refund_${crypto.randomUUID()}` };
+  }
+}
