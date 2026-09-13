@@ -2,6 +2,7 @@ import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { Adapter } from "next-auth/adapters";
 import type { AuthOptions } from "next-auth";
 import { getServerSession } from "next-auth/next";
+import { redirect } from "next/navigation";
 import CredentialsProvider from "next-auth/providers/credentials";
 import { prisma } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
@@ -69,6 +70,18 @@ export async function requireCustomer() {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) {
     throw new ApiError(401, "UNAUTHENTICATED", "Sign-in required");
+  }
+  return session.user as { id: string; email?: string | null; name?: string | null };
+}
+
+/**
+ * Same guard for Server Components/pages, which can't return a JSON 401 —
+ * redirects to the login page instead of throwing.
+ */
+export async function requireCustomerForPage(callbackUrl?: string) {
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+    redirect(callbackUrl ? `/login?callbackUrl=${encodeURIComponent(callbackUrl)}` : "/login");
   }
   return session.user as { id: string; email?: string | null; name?: string | null };
 }
