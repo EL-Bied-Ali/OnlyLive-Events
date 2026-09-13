@@ -36,6 +36,7 @@ interface FakeWebhookPayload {
   providerPaymentId: string;
   type: PaymentWebhookEventType;
   amountCents: number;
+  currency: string;
 }
 
 /**
@@ -71,6 +72,7 @@ export class FakeProvider implements PaymentProvider {
         providerPaymentId: "",
         type: "payment.failed",
         amountCents: 0,
+        currency: "",
         signatureValid: false,
         raw: input.rawBody,
       };
@@ -81,6 +83,7 @@ export class FakeProvider implements PaymentProvider {
       providerPaymentId: payload.providerPaymentId,
       type: payload.type,
       amountCents: payload.amountCents,
+      currency: payload.currency,
       signatureValid,
       raw: payload,
     };
