@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: onlylive
+          POSTGRES_PASSWORD: onlylive
+          POSTGRES_DB: onlylive_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U onlylive"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # Two logical databases (dev-equivalent + test) on the same service
+      # container, matching the dev-environment split documented in
+      # docs/ARCHITECTURE.md (tests must never run against non-test data).
+      DATABASE_URL: postgresql://onlylive:onlylive@localhost:5432/onlylive_ci
+      TEST_DATABASE_URL: postgresql://onlylive:onlylive@localhost:5432/onlylive_ci_test
+      NEXTAUTH_SECRET: ci-only-secret-not-for-real-use-0000000000000000
+      NEXTAUTH_URL: http://localhost:3000
+      ADMIN_SESSION_SECRET: ci-only-secret-not-for-real-use-1111111111111111
+      PAYMENT_PROVIDER: fake
+      FAKE_PSP_WEBHOOK_SECRET: ci-only-secret-not-for-real-use-2222222222222222
+      INTERNAL_API_SECRET: ci-only-secret-not-for-real-use-3333333333333333
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Create CI test database
+        run: |
+          PGPASSWORD=onlylive psql -h localhost -U onlylive -d onlylive_ci -c "CREATE DATABASE onlylive_ci_test;"
+
+      - name: Apply migrations (dev + test databases)
+        run: |
+          npx prisma migrate deploy
+          DATABASE_URL="$TEST_DATABASE_URL" npx prisma migrate deploy
+
+      - name: Unit + integration tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
