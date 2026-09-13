@@ -28,9 +28,9 @@ export default async function TicketPage({
     notFound();
   }
 
-  // The QR's validity is decided by the backend scanner check (future
-  // work) — this data URL is a rendering convenience only, never a source
-  // of truth for admission.
+  // The QR's validity is decided atomically by the backend scanner — this
+  // data URL is a rendering convenience only, never a source of truth for
+  // admission.
   const qrDataUrl = await renderTicketQrDataUrl(ticket.validationToken);
 
   const STATUS_LABELS: Record<string, string> = {

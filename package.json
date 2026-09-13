@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
   "scripts": {
     "postinstall": "prisma generate",
     "dev": "next dev",
@@ -23,9 +26,10 @@
     "@node-rs/argon2": "2.2.1",
     "@prisma/adapter-pg": "7.10.0",
     "@prisma/client": "7.10.0",
-    "pg": "8.23.0",
+    "@zxing/browser": "0.2.1",
     "next": "16.3.5",
     "next-auth": "4.24.15",
+    "pg": "8.23.0",
     "qrcode": "1.5.4",
     "react": "19.3.0",
     "react-dom": "19.3.0",
