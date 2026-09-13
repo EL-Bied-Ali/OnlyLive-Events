@@ -2,7 +2,9 @@
 
 ## Stack and why
 
-- **TypeScript + Next.js 16 (App Router), React 19.** Mandated by CLAUDE.md.
+- **Node.js 24 LTS, TypeScript + Next.js 16 (App Router), React 19.**
+  Node 24 is required by the current ZXing QR decoder and is supported by
+  the target Vercel runtime; CI enforces the same major version.
 - **PostgreSQL is the source of truth**, accessed via **Prisma 7** +
   `@prisma/adapter-pg` (Prisma 7 requires a driver adapter instead of a
   schema-level connection URL — see `prisma.config.ts` / `lib/db.ts`). The
