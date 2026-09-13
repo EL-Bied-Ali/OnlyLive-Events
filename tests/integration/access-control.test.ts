@@ -22,7 +22,6 @@ describe("access control — ownership checks below the HTTP layer", () => {
       salesPhaseId: phase.id,
       userId: owner.id,
       quantity: 1,
-      unitPriceCents: phase.priceCents,
     });
 
     await expect(releaseHold(hold.reservationId, attacker.id)).rejects.toMatchObject({
@@ -39,7 +38,6 @@ describe("access control — ownership checks below the HTTP layer", () => {
       salesPhaseId: phase.id,
       userId: owner.id,
       quantity: 1,
-      unitPriceCents: phase.priceCents,
     });
 
     await expect(releaseHold(hold.reservationId, owner.id)).resolves.toBeUndefined();
