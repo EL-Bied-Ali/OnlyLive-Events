@@ -23,6 +23,13 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  const testUsers = await prisma.adminUser.findMany({
+    where: { email: { in: [scannerEmail, supportEmail] } },
+    select: { id: true },
+  });
+  await prisma.ticketScan.deleteMany({
+    where: { scannerAdminUserId: { in: testUsers.map(({ id }) => id) } },
+  });
   await prisma.adminUser.deleteMany({ where: { email: { in: [scannerEmail, supportEmail] } } });
 });
 
@@ -46,7 +53,7 @@ test("scanner staff can sign in and securely reject an unknown ticket", async ({
   await page.getByLabel("Code du billet").fill("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
   await page.getByRole("button", { name: "Vérifier" }).click();
 
-  await expect(page.getByText("Billet invalide", { exact: true })).toBeVisible();
+  await expect(page.getByRole("paragraph").filter({ hasText: /^Billet invalide$/ })).toBeVisible();
   await expect(page.getByText("Ce QR code ne correspond à aucun billet OnlyLive.")).toBeVisible();
 
   const scanner = await prisma.adminUser.findUniqueOrThrow({ where: { email: scannerEmail } });

@@ -26,7 +26,7 @@ memory alone.
 - Seed script: the real Tiakola (Casablanca, 05 Dec 2026) event with
   VVIP/VIP/Gradins categories and Early Bird/Phase 1 sales phases, plus an
   optional environment-gated `super_admin` AdminUser.
-- Test suite: 70 Vitest unit/integration tests + 5 Playwright e2e tests,
+- Test suite: 76 Vitest unit/integration tests + 8 Playwright e2e tests,
   all passing (`npm test`, `npm run test:e2e`). See tests.json for the
   full mandated-scenario checklist and what's covered vs. still pending.
 - Docs: this file, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`,
@@ -152,10 +152,22 @@ payment-id mismatch, event-type mismatch).
 - Admin authentication and access boundaries covered in Playwright; the
   full browser suite now runs in CI against disposable PostgreSQL data.
 
+## Completed (atomic QR scanner — PR #3)
+
+- Mobile-first authenticated `/scanner` interface with rear-camera QR
+  decoding and a manual-code fallback.
+- Atomic server-side check-in with explicit `VALID`, `ALREADY_USED`,
+  `INVALID`, `CANCELLED` and `WRONG_EVENT` decisions; simultaneous scans
+  cannot admit the same ticket twice.
+- Scanner-only authorization boundary, network-only service worker, no
+  insecure offline validation, and SHA-256 audit digests instead of raw
+  bearer tokens.
+- Six PostgreSQL integration tests plus three Playwright scanner/access
+  tests, including concurrent scans from two devices.
+
 ## In progress
 
-- Scanner PWA and atomic check-in endpoint are implemented on
-  `feat/atomic-qr-scanner` and awaiting full CI/PR review.
+- None.
 
 ## Next
 
