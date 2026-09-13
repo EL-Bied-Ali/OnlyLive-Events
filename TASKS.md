@@ -26,7 +26,7 @@ memory alone.
 - Seed script: the real Tiakola (Casablanca, 05 Dec 2026) event with
   VVIP/VIP/Gradins categories and Early Bird/Phase 1 sales phases, plus an
   optional environment-gated `super_admin` AdminUser.
-- Test suite: 76 Vitest unit/integration tests + 8 Playwright e2e tests,
+- Test suite: 88 Vitest unit/integration tests + 10 Playwright e2e tests,
   all passing (`npm test`, `npm run test:e2e`). See tests.json for the
   full mandated-scenario checklist and what's covered vs. still pending.
 - Docs: this file, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`,
@@ -165,15 +165,31 @@ payment-id mismatch, event-type mismatch).
 - Six PostgreSQL integration tests plus three Playwright scanner/access
   tests, including concurrent scans from two devices.
 
+## Completed (admin catalogue management — current branch)
+
+- Authenticated event creation/editing, venue creation, category capacity
+  management and sales-phase creation/editing in the back office.
+- Only `admin` and `super_admin` can mutate the catalogue; `support`
+  remains read-only and scanner/customer sessions remain excluded.
+- Morocco wall-clock inputs are converted with the IANA
+  `Africa/Casablanca` timezone (including seasonal offset changes), never
+  with a hardcoded UTC offset.
+- Catalogue writes and purchases coordinate through shared/exclusive
+  transaction-scoped advisory locks. Capacity/phase limits cannot be
+  reduced below committed quantities, active phase windows cannot overlap,
+  and direct cancellation is blocked while tickets, live holds or pending
+  payments exist.
+- Every successful mutation writes its audit record in the same database
+  transaction.
+
 ## In progress
 
 - None.
 
 ## Next
 
-1. Extend the admin dashboard beyond its read-only foundation with event/
-   category/phase editing, refunds, CSV export and audit-log views. The
-   overview, inventory and order/payment monitoring views now exist.
+1. Extend the admin dashboard with refunds, CSV export and audit-log views.
+   Event/category/phase creation and editing now exist.
 2. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
    from official docs (never speculatively) — and, at that point,
    re-derive the reconciliation policy in
@@ -209,7 +225,6 @@ payment-id mismatch, event-type mismatch).
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
-Admin write operations (event/category/phase editing, refunds, CSV and
-audit views), offline scanning, real payment provider, email delivery,
+Refund operations, CSV and audit views, offline scanning, real payment provider, email delivery,
 background worker infrastructure beyond the sweep endpoint, rate
 limiting, CSP headers, database backup strategy documentation.

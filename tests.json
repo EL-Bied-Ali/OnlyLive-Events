@@ -474,5 +474,69 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/e2e/scanner.spec.ts"
+  },
+  {
+    "id": "admin-catalog-role-boundary",
+    "scenario": "Only admin/super-admin can mutate the catalogue while support remains read-only",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/admin-catalog.spec.ts"
+  },
+  {
+    "id": "admin-category-capacity-guard",
+    "scenario": "Category capacity cannot be reduced below sold plus currently reserved inventory",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-catalog.test.ts"
+  },
+  {
+    "id": "admin-phase-window-overlap",
+    "scenario": "Two active sales phases in one category cannot have overlapping windows",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-catalog.test.ts"
+  },
+  {
+    "id": "admin-phase-cap-guard",
+    "scenario": "A sales phase cap cannot be lowered below already sold or live-reserved quantities",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-catalog.test.ts"
+  },
+  {
+    "id": "admin-event-cancellation-guard",
+    "scenario": "Direct event cancellation is blocked while issued tickets, live holds or pending payments exist",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-catalog.test.ts"
+  },
+  {
+    "id": "admin-catalogue-audit-atomicity",
+    "scenario": "A successful catalogue mutation and its audit record commit in the same transaction",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-catalog.test.ts"
+  },
+  {
+    "id": "admin-catalogue-purchase-race",
+    "scenario": "A purchase waiting on an admin catalogue edit revalidates the new state before reserving stock",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-catalog.test.ts"
+  },
+  {
+    "id": "draft-event-not-public",
+    "scenario": "A draft event created in the admin catalogue returns 404 on its public URL",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/admin-catalog.spec.ts"
   }
 ]

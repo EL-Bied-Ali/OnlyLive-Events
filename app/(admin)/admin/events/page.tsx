@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { requireAdminForPage } from "@/lib/auth/admin";
 
 const EVENT_LABELS: Record<string, string> = {
   draft: "Brouillon",
@@ -10,22 +12,29 @@ const EVENT_LABELS: Record<string, string> = {
 };
 
 export default async function AdminEventsPage() {
-  const events = await prisma.event.findMany({
-    orderBy: { startsAt: "asc" },
-    include: {
-      venue: true,
-      ticketCategories: {
-        orderBy: { sortOrder: "asc" },
-        include: { inventory: true, salesPhases: { orderBy: { sortOrder: "asc" } } },
+  const [admin, events] = await Promise.all([
+    requireAdminForPage(),
+    prisma.event.findMany({
+      orderBy: { startsAt: "asc" },
+      include: {
+        venue: true,
+        ticketCategories: {
+          orderBy: { sortOrder: "asc" },
+          include: { inventory: true, salesPhases: { orderBy: { sortOrder: "asc" } } },
+        },
       },
-    },
-  });
+    }),
+  ]);
+  const canEdit = admin.role === "admin" || admin.role === "super_admin";
 
   return (
     <main className="admin-page">
       <header className="admin-page-header">
         <div><p className="admin-eyebrow">Catalogue et capacités</p><h1>Événements</h1></div>
-        <span className="admin-count">{events.length} événement(s)</span>
+        <div className="admin-header-actions">
+          <span className="admin-count">{events.length} événement(s)</span>
+          {canEdit ? <Link className="admin-primary-link" href="/admin/events/new">Créer un événement</Link> : null}
+        </div>
       </header>
 
       <section className="admin-event-cards">
@@ -40,6 +49,7 @@ export default async function AdminEventsPage() {
               <div className="admin-event-total">
                 <strong>{event.ticketCategories.reduce((sum, category) => sum + (category.inventory?.soldQuantity ?? 0), 0)}</strong>
                 <span>billets vendus</span>
+                {canEdit ? <Link href={`/admin/events/${event.id}`}>Gérer</Link> : null}
               </div>
             </header>
             <div className="admin-category-grid">

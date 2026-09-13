@@ -69,13 +69,13 @@ instrumentation.ts  boot-time config validation (payment provider)
   (marketing)/      event listing + detail (public)
   (customer)/       login, register, checkout, fake-pay sandbox, orders, tickets
   (admin-auth)/      separate admin login
-  (admin)/           protected operational overview, events, orders
+  (admin)/           protected overview, catalogue management, orders
   (scanner-auth)/    scanner-specific staff login
   (scanner)/         online-only mobile QR scanner PWA
   api/              route handlers (see below)
 /lib
   db.ts             Prisma client singleton (driver adapter)
-  admin/             read-only dashboard queries
+  admin/             dashboard queries + atomic catalogue mutations
   auth/             customer.ts (Auth.js), admin.ts (custom session), password.ts
   inventory.ts      the oversell-prevention critical section
   orders/           stateMachine.ts, fulfillment.ts, checkout.ts
@@ -142,6 +142,27 @@ TASKS.md, tests.json
    offline the UI blocks validation; no cached/offline decision can admit
    a duplicate ticket.
 
+## Request/data flow: admin catalogue mutation
+
+1. Admin pages read directly from PostgreSQL as Server Components. Forms
+   submit internal Next.js Server Actions; each action authenticates again
+   with `requireAdminRole(["super_admin", "admin"])` before validation or
+   mutation. `support` is intentionally read-only.
+2. Zod accepts only named fields. Event wall-clock inputs are converted
+   through the IANA `Africa/Casablanca` timezone, including Morocco's
+   seasonal offset changes, before UTC instants are stored.
+3. `lib/admin/catalog.ts` performs each mutation and its `AuditLog` insert
+   in one Prisma transaction. Category capacity cannot fall below
+   reserved + sold inventory; phase caps cannot fall below live/converted
+   reservations; active phase windows cannot overlap.
+4. Purchases take a shared transaction-scoped catalogue advisory lock;
+   catalogue writes take the matching exclusive lock. Many purchases can
+   still proceed concurrently, while an admin edit can never race a hold
+   that validated the old event/category/phase state.
+5. Setting an event to `cancelled` is refused if any ticket, unexpired hold
+   or pending-payment order exists. The dedicated cancellation/refund flow
+   must be implemented before those cases can be resolved safely.
+
 ## Deployment
 
 Target: Vercel or an equivalent Node.js serverless/edge-capable platform.
@@ -163,9 +184,9 @@ failing on the first webhook — see docs/PAYMENTS.md.
 
 ## Known scope limitations (deferred, tracked in TASKS.md)
 
-- **Admin dashboard mutations** — the protected, read-only operational
-  overview, event inventory and order/payment views exist. Event editing,
-  refunds, CSV export and audit-log views are deferred.
+- **Remaining admin operations** — event/category/phase creation and
+  editing exist. Refund execution, CSV export and audit-log views remain
+  deferred.
 - **Offline scanning** — deliberately unsupported. The scanner PWA blocks
   validation without a live server connection because safe offline
   multi-device reconciliation is not implemented.
