@@ -1,3 +1,4 @@
+import "dotenv/config";
 import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
@@ -14,7 +15,17 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"] },
+      use: {
+        ...devices["Desktop Chrome"],
+        // This environment pre-installs Chromium at a fixed path and
+        // pins PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD — our pinned
+        // @playwright/test version defaults to looking for a
+        // headless-shell build that isn't there, so point at the
+        // preinstalled binary explicitly instead of downloading one.
+        launchOptions: process.env.PLAYWRIGHT_CHROMIUM_PATH
+          ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_PATH }
+          : {},
+      },
     },
   ],
   webServer: {

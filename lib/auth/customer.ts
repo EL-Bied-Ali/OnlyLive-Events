@@ -10,9 +10,16 @@ import { loginSchema } from "@/lib/validation/auth";
 import { ApiError } from "@/lib/http/errors";
 
 export const authOptions: AuthOptions = {
+  // The adapter is kept registered for when an OAuth provider is added
+  // later, but next-auth v4's Credentials provider only supports JWT
+  // sessions (it throws CALLBACK_CREDENTIALS_JWT_ERROR under "database"
+  // strategy — there's no persisted account to hang a database session
+  // off of). This means customer sessions can't be revoked server-side
+  // the way admin sessions can; see docs/SECURITY.md for the tradeoff and
+  // mitigation (short maxAge, documented as a known limitation).
   adapter: PrismaAdapter(prisma) as Adapter,
   session: {
-    strategy: "database",
+    strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60,
   },
   pages: {
@@ -48,9 +55,15 @@ export const authOptions: AuthOptions = {
     }),
   ],
   callbacks: {
-    async session({ session, user }) {
-      if (session.user) {
-        session.user.id = user.id;
+    async jwt({ token, user }) {
+      if (user) {
+        token.sub = user.id;
+      }
+      return token;
+    },
+    async session({ session, token }) {
+      if (session.user && token.sub) {
+        session.user.id = token.sub;
       }
       return session;
     },
