@@ -22,10 +22,10 @@ export function signFakeWebhookPayload(rawBody: string): string {
 }
 
 function timingSafeEqualHex(a: string, b: string): boolean {
-  if (!/^[0-9a-f]+$/i.test(a) || !/^[0-9a-f]+$/i.test(b)) return false;
+  if (!/^[0-9a-f]{64}$/i.test(a) || !/^[0-9a-f]{64}$/i.test(b)) return false;
   const bufA = Buffer.from(a, "hex");
   const bufB = Buffer.from(b, "hex");
-  return bufA.length === bufB.length && crypto.timingSafeEqual(bufA, bufB);
+  return crypto.timingSafeEqual(bufA, bufB);
 }
 
 interface FakeWebhookPayload {
