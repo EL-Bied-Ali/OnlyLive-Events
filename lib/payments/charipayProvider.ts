@@ -9,6 +9,7 @@ import {
   type PaymentWebhookEventType,
   type RefundInput,
   type RefundResult,
+  type RefundStatusResult,
 } from "@/lib/payments/provider";
 
 const CHARIPAY_API_BASE_URL = "https://api-psp.charipay.ma";
@@ -28,8 +29,21 @@ function requireHttpsUrl(value: string | undefined, label: string): string {
   } catch {
     throw new Error(`ChariPay ${label} must be a valid HTTPS URL`);
   }
-  if (url.protocol !== "https:" || url.port) {
-    throw new Error(`ChariPay ${label} must use HTTPS on the default port`);
+  if (url.protocol !== "https:" || url.port || url.username || url.password) {
+    throw new Error(`ChariPay ${label} must use HTTPS on the default port without credentials`);
+  }
+  return url.toString();
+}
+
+function validateHostedCheckoutUrl(value: string): string {
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new ProviderRequestError("ChariPay returned an invalid checkoutUrl", false);
+  }
+  if (url.protocol !== "https:" || url.port || url.username || url.password) {
+    throw new ProviderRequestError("ChariPay returned an unsafe checkoutUrl", false);
   }
   return url.toString();
 }
@@ -39,10 +53,10 @@ function centsToMad(cents: number): number {
   return Number((cents / 100).toFixed(2));
 }
 
-function madToCents(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return null;
+function madToCents(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) return undefined;
   const cents = Math.round(value * 100);
-  return Math.abs(value * 100 - cents) < 1e-6 ? cents : null;
+  return Math.abs(value * 100 - cents) < 1e-6 ? cents : undefined;
 }
 
 function safeHexEqual(actual: string, expected: string): boolean {
@@ -76,52 +90,63 @@ function verifySignature(rawBody: string, headers: Record<string, string>): bool
 interface ChariPayPaymentSessionResponse {
   sessionId?: unknown;
   checkoutUrl?: unknown;
-  correlationId?: unknown;
 }
 
 interface ChariPayRefundResponse {
   refundId?: unknown;
   refundReference?: unknown;
   status?: unknown;
-  correlationId?: unknown;
 }
 
 interface ChariPayWebhookBody {
   externalId?: unknown;
   amount?: unknown;
   currency?: unknown;
+  refundId?: unknown;
   refundReference?: unknown;
   refundAmount?: unknown;
   sessionId?: unknown;
   metadata?: unknown;
 }
 
-async function parseApiResponse(response: Response): Promise<Record<string, unknown>> {
+function isRetryableOrAmbiguousStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
   const text = await response.text();
-  let body: Record<string, unknown> = {};
-  if (text) {
-    try {
-      body = JSON.parse(text) as Record<string, unknown>;
-    } catch {
-      throw new ProviderRequestError(
-        `ChariPay returned non-JSON response (${response.status})`,
-        response.status >= 500,
-        response.status,
-      );
-    }
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    throw new ProviderRequestError(
+      `ChariPay returned non-JSON response (${response.status})`,
+      isRetryableOrAmbiguousStatus(response.status),
+      response.status,
+    );
   }
+}
+
+async function parseApiResponse(response: Response): Promise<Record<string, unknown>> {
+  const body = await readJsonResponse(response);
   if (!response.ok) {
     const error = body.error as { code?: unknown; message?: unknown } | undefined;
     const code = typeof error?.code === "string" ? error.code : `HTTP_${response.status}`;
     const message = typeof error?.message === "string" ? error.message : "ChariPay request failed";
-    const correlationId = typeof body.correlationId === "string" ? ` correlationId=${body.correlationId}` : "";
     throw new ProviderRequestError(
-      `ChariPay ${code}: ${message}${correlationId}`,
-      response.status >= 500,
+      `ChariPay ${code}: ${message}`,
+      isRetryableOrAmbiguousStatus(response.status),
       response.status,
     );
   }
   return body;
+}
+
+function normalizeRefundStatus(value: unknown): RefundStatusResult["status"] | null {
+  if (value === "PENDING") return "pending";
+  if (value === "SUCCESS") return "succeeded";
+  if (value === "FAILED") return "failed";
+  return null;
 }
 
 export class ChariPayProvider implements PaymentProvider {
@@ -152,30 +177,35 @@ export class ChariPayProvider implements PaymentProvider {
         notifyOnFailure: true,
         config: {
           customer: { email: input.customerEmail },
-          urls: {
-            accept: returnUrl,
-            decline: returnUrl,
-            notification: webhookUrl,
-          },
+          urls: { accept: returnUrl, decline: returnUrl, notification: webhookUrl },
         },
-        metadata: {
-          onlylivePaymentId: input.paymentId,
-          onlyliveOrderId: input.orderId,
-        },
+        metadata: { onlylivePaymentId: input.paymentId, onlyliveOrderId: input.orderId },
       }),
     });
 
     const body = (await parseApiResponse(response)) as ChariPayPaymentSessionResponse;
     if (typeof body.sessionId !== "string" || typeof body.checkoutUrl !== "string") {
-      throw new Error("ChariPay payment-session response is missing sessionId or checkoutUrl");
+      throw new ProviderRequestError("ChariPay payment-session response is missing sessionId or checkoutUrl", false, response.status);
     }
-    return { providerPaymentId: body.sessionId, redirectUrl: body.checkoutUrl };
+    return {
+      providerPaymentId: body.sessionId,
+      redirectUrl: validateHostedCheckoutUrl(body.checkoutUrl),
+    };
   }
 
   async parseWebhook(input: ParseWebhookInput): Promise<ParsedWebhookEvent> {
     const signatureValid = verifySignature(input.rawBody, input.headers);
     const eventId = input.headers["chari-event-id"] ?? "";
-    const eventType = input.headers["chari-event-type"] ?? "";
+    const eventTypeRaw = input.headers["chari-event-type"] ?? "";
+    const supported = new Set<PaymentWebhookEventType>([
+      "payment.succeeded",
+      "payment.failed",
+      "refund.succeeded",
+      "refund.failed",
+    ]);
+    const eventType = supported.has(eventTypeRaw as PaymentWebhookEventType)
+      ? eventTypeRaw as PaymentWebhookEventType
+      : "payment.failed";
 
     let payload: ChariPayWebhookBody;
     try {
@@ -183,30 +213,10 @@ export class ChariPayProvider implements PaymentProvider {
     } catch {
       return {
         externalEventId: eventId,
-        providerPaymentId: "",
-        type: "payment.failed",
-        amountCents: 0,
-        currency: "MAD",
+        type: eventType,
         signatureValid: false,
+        payloadValid: false,
         raw: input.rawBody,
-      };
-    }
-
-    const supported = new Set<PaymentWebhookEventType>([
-      "payment.succeeded",
-      "payment.failed",
-      "refund.succeeded",
-      "refund.failed",
-    ]);
-    if (!supported.has(eventType as PaymentWebhookEventType) || !eventId) {
-      return {
-        externalEventId: eventId,
-        providerPaymentId: "",
-        type: "payment.failed",
-        amountCents: 0,
-        currency: "MAD",
-        signatureValid: false,
-        raw: payload,
       };
     }
 
@@ -220,23 +230,40 @@ export class ChariPayProvider implements PaymentProvider {
         : undefined;
     const refundExternalId = typeof payload.refundReference === "string" ? payload.refundReference : undefined;
     const amountCents = eventType.startsWith("refund.")
-      ? madToCents(payload.refundAmount) ?? 0
-      : madToCents(payload.amount) ?? 0;
+      ? madToCents(payload.refundAmount)
+      : madToCents(payload.amount);
+    const currency = typeof payload.currency === "string" ? payload.currency : undefined;
+    const providerPaymentId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+    const providerRefundId = typeof payload.refundId === "string" ? payload.refundId : undefined;
+
+    // Exact ChariPay webhook bodies remain sandbox-gated. Until a real signed
+    // delivery is captured, accept only the narrow provisional shape that can
+    // prove the immutable facts OnlyLive needs. Missing amount/reference data
+    // is fail-closed rather than defaulted to zero or fabricated.
+    const payloadValid = Boolean(
+      eventId
+      && supported.has(eventTypeRaw as PaymentWebhookEventType)
+      && amountCents !== undefined
+      && (eventType.startsWith("refund.") ? refundExternalId : paymentExternalId || providerPaymentId),
+    );
 
     return {
       externalEventId: eventId,
-      providerPaymentId: typeof payload.sessionId === "string" ? payload.sessionId : "",
+      providerPaymentId,
+      providerRefundId,
       paymentExternalId,
       refundExternalId,
-      type: eventType as PaymentWebhookEventType,
+      type: eventType,
       amountCents,
-      currency: typeof payload.currency === "string" ? payload.currency : "MAD",
+      currency,
       signatureValid,
+      payloadValid,
       raw: payload,
     };
   }
 
   async refund(input: RefundInput): Promise<RefundResult> {
+    if (input.currency !== "MAD") throw new Error(`ChariPay only supports MAD refunds, got ${input.currency}`);
     const response = await fetch(`${CHARIPAY_API_BASE_URL}/v1/refunds`, {
       method: "POST",
       headers: {
@@ -259,7 +286,32 @@ export class ChariPayProvider implements PaymentProvider {
       ? body.refundId
       : typeof body.refundReference === "string"
         ? body.refundReference
-        : null;
-    return { providerRefundId, state: "processing" };
+        : input.idempotencyKey;
+    const status = normalizeRefundStatus(body.status);
+    if (status === "failed") {
+      throw new ProviderRequestError("ChariPay reports this refund reference as FAILED", false, response.status);
+    }
+    return { providerRefundId, state: status === "succeeded" ? "succeeded" : "processing" };
+  }
+
+  async getRefundStatus(refundReference: string): Promise<RefundStatusResult> {
+    const response = await fetch(`${CHARIPAY_API_BASE_URL}/v1/refunds/${encodeURIComponent(refundReference)}`, {
+      method: "GET",
+      headers: { "X-CHARI-PAY-API-KEY": requiredEnv("CHARIPAY_API_KEY") },
+    });
+    if (response.status === 404) {
+      return { providerRefundId: null, status: "not_found" };
+    }
+    const body = (await parseApiResponse(response)) as ChariPayRefundResponse;
+    const status = normalizeRefundStatus(body.status);
+    if (!status) {
+      throw new ProviderRequestError("ChariPay refund lookup returned an unknown status", false, response.status);
+    }
+    const providerRefundId = typeof body.refundId === "string"
+      ? body.refundId
+      : typeof body.refundReference === "string"
+        ? body.refundReference
+        : refundReference;
+    return { providerRefundId, status };
   }
 }
