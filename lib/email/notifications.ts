@@ -1,158 +1,67 @@
 import "server-only";
-import crypto from "node:crypto";
-import { prisma } from "@/lib/db";
-import { getEmailProvider } from "@/lib/email";
-import type { EmailType } from "@prisma/client";
+import type { Prisma, EmailType } from "@prisma/client";
 
-function money(cents: number, currency: string) {
+type Tx = Prisma.TransactionClient;
+
+export function money(cents: number, currency: string): string {
   return new Intl.NumberFormat("fr-MA", { style: "currency", currency }).format(cents / 100);
 }
 
 /**
- * Claims (type, entityType, entityId) via the same INSERT ... ON CONFLICT
- * DO NOTHING RETURNING id idempotency idiom as payment_events, then sends.
- * A caller retriggering this for an order/refund that already got its
- * email (e.g. the webhook route being invoked again for an unrelated
- * reason) is a safe no-op — the claim simply finds nothing to insert.
+ * Enqueues a durable outbox row inside the caller's transaction — the
+ * SAME transaction that confirms the underlying business fact (payment
+ * webhook, refund). This is what closes the dual-write gap the previous
+ * "send after commit" design had: if the process crashes between the
+ * business transaction committing and the email being sent, the old
+ * design lost the notification silently; here the row is already
+ * committed as `pending` and `lib/email/dispatcher.ts` picks it up later,
+ * out-of-band, re-rendering content from live state (see the dispatcher —
+ * this function never builds subject/text, only queues the *fact* that a
+ * notification of this type is owed).
  *
- * A send failure is logged, never thrown: email delivery must never roll
- * back or block the business transaction that triggered it (payment
- * confirmation, refund). The claim row is left in place either way —
- * retrying a *failed* send isn't done by calling this again (that would
- * see the existing claim and no-op); it would need a background retry
- * job, not yet built (see TASKS.md).
+ * `createMany({ skipDuplicates: true })` is the same idempotent-insert
+ * idiom as PaymentEvent's `ON CONFLICT DO NOTHING`: a retriggering caller
+ * (the same business transition reached again, e.g. a redelivered
+ * webhook event that still resolves to a fresh transition) can never
+ * enqueue a second row for the same (type, entityType, entityId).
  */
-async function claimAndSend(
+async function enqueue(
+  tx: Tx,
   type: EmailType,
   entityType: string,
   entityId: string,
   recipientEmail: string,
-  subject: string,
-  text: string,
 ): Promise<void> {
-  const claimId = crypto.randomUUID();
-  const claimed = await prisma.$queryRaw<{ id: string }[]>`
-    INSERT INTO email_logs (id, type, entity_type, entity_id, recipient_email)
-    VALUES (${claimId}, ${type}::"EmailType", ${entityType}, ${entityId}, ${recipientEmail})
-    ON CONFLICT (type, entity_type, entity_id) DO NOTHING
-    RETURNING id
-  `;
-  if (claimed.length === 0) {
-    return;
-  }
-
-  try {
-    const result = await getEmailProvider().send({ to: recipientEmail, subject, text });
-    await prisma.emailLog.update({ where: { id: claimId }, data: { providerMessageId: result.providerMessageId } });
-  } catch (error) {
-    console.error(`Failed to send ${type} email for ${entityType}/${entityId}`, error);
-  }
+  await tx.emailOutbox.createMany({
+    data: [{ type, entityType, entityId, recipientEmail }],
+    skipDuplicates: true,
+  });
 }
 
 /**
- * Order confirmation + payment confirmation + ticket delivery, sent as
- * one email — in this system all three become true at the same instant
- * (the order transitions to "paid" and its tickets are generated in the
- * same database transaction), so splitting them into separate messages
- * would only fragment one event into three without adding information.
+ * Called from inside the payment webhook's transaction, only when
+ * `confirmOrderPayment` returns "paid" in this same call. Only fetches
+ * enough to know who to notify — the dispatcher re-fetches the order
+ * fresh (and re-validates it's still "paid") before rendering content, so
+ * this function is not the source of truth for what the email says.
  */
-export async function sendOrderConfirmationEmail(orderId: string): Promise<void> {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: {
-      user: { select: { email: true, name: true } },
-      event: { select: { title: true } },
-      items: {
-        include: {
-          ticketCategory: { select: { name: true } },
-          tickets: { select: { id: true } },
-        },
-      },
-    },
-  });
+export async function enqueueOrderConfirmationEmail(tx: Tx, orderId: string): Promise<void> {
+  const order = await tx.order.findUnique({ where: { id: orderId }, select: { user: { select: { email: true } } } });
   if (!order) return;
-
-  const ticketLines = order.items.flatMap((item) =>
-    item.tickets.map((ticket) => `- ${item.ticketCategory.name}: /orders/${order.id}/tickets/${ticket.id}`),
-  );
-
-  const text = [
-    `Bonjour ${order.user.name ?? ""},`.trim(),
-    "",
-    `Votre commande ${order.orderNumber} pour ${order.event.title} est confirmée.`,
-    `Total payé : ${money(order.totalAmountCents, order.currency)}`,
-    "",
-    "Vos billets :",
-    ...ticketLines,
-    "",
-    "— OnlyLive",
-  ].join("\n");
-
-  await claimAndSend(
-    "order_confirmation",
-    "order",
-    order.id,
-    order.user.email,
-    `Confirmation de commande ${order.orderNumber}`,
-    text,
-  );
+  await enqueue(tx, "order_confirmation", "order", orderId, order.user.email);
 }
 
-export async function sendPaymentFailedEmail(orderId: string): Promise<void> {
-  const order = await prisma.order.findUnique({
-    where: { id: orderId },
-    include: { user: { select: { email: true, name: true } }, event: { select: { title: true } } },
-  });
+export async function enqueuePaymentFailedEmail(tx: Tx, orderId: string): Promise<void> {
+  const order = await tx.order.findUnique({ where: { id: orderId }, select: { user: { select: { email: true } } } });
   if (!order) return;
-
-  const text = [
-    `Bonjour ${order.user.name ?? ""},`.trim(),
-    "",
-    `Le paiement de votre commande ${order.orderNumber} pour ${order.event.title} n'a pas abouti.`,
-    "Aucun montant n'a été débité. Vous pouvez réessayer depuis votre compte.",
-    "",
-    "— OnlyLive",
-  ].join("\n");
-
-  await claimAndSend(
-    "payment_failed",
-    "order",
-    order.id,
-    order.user.email,
-    `Échec du paiement — commande ${order.orderNumber}`,
-    text,
-  );
+  await enqueue(tx, "payment_failed", "order", orderId, order.user.email);
 }
 
-export async function sendRefundConfirmationEmail(refundId: string): Promise<void> {
-  const refund = await prisma.refund.findUnique({
+export async function enqueueRefundConfirmationEmail(tx: Tx, refundId: string): Promise<void> {
+  const refund = await tx.refund.findUnique({
     where: { id: refundId },
-    include: {
-      payment: {
-        include: {
-          order: { include: { user: { select: { email: true, name: true } }, event: { select: { title: true } } } },
-        },
-      },
-    },
+    select: { payment: { select: { order: { select: { user: { select: { email: true } } } } } } },
   });
   if (!refund) return;
-
-  const order = refund.payment.order;
-  const text = [
-    `Bonjour ${order.user.name ?? ""},`.trim(),
-    "",
-    `Un remboursement de ${money(refund.amountCents, refund.payment.currency)} a été émis pour votre commande ${order.orderNumber} (${order.event.title}).`,
-    `Motif : ${refund.reason}`,
-    "",
-    "— OnlyLive",
-  ].join("\n");
-
-  await claimAndSend(
-    "refund_confirmation",
-    "refund",
-    refund.id,
-    order.user.email,
-    `Remboursement — commande ${order.orderNumber}`,
-    text,
-  );
+  await enqueue(tx, "refund_confirmation", "refund", refundId, refund.payment.order.user.email);
 }
