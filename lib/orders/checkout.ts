@@ -199,7 +199,7 @@ async function claimAndInitializeProvider(
       console.error(
         "provider.createPayment failed",
         error instanceof ProviderRequestError
-          ? { name: error.name, status: error.status, outcomeUnknown: error.outcomeUnknown, correlationId: error.correlationId }
+          ? { name: error.name, message: error.message, status: error.status, outcomeUnknown: error.outcomeUnknown, correlationId: error.correlationId }
           : error instanceof Error
             ? { name: error.name }
             : { name: "unknown" },
