@@ -899,5 +899,22 @@
     "status": "pass",
     "testFile": "tests/e2e/admin-catalog.spec.ts",
     "note": "Positive end-to-end coverage proves token plumbing on the real Server Action transport; cryptographic rejection of cross-session/missing tokens is covered directly in tests/unit/adminCsrf.test.ts."
+  },
+  {
+    "id": "e2e-database-destructive-guard",
+    "scenario": "Playwright database preparation refuses missing/non-PostgreSQL URLs, remote hosts, names without an explicit e2e segment, and any configured dev/Vitest database collision",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/e2eDatabaseSafety.test.ts"
+  },
+  {
+    "id": "e2e-isolated-runtime",
+    "scenario": "The complete browser suite runs with direct Prisma access and the spawned Next.js server pinned to the dedicated E2E database and dedicated localhost origin, without reusing a developer server",
+    "category": "e2e",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/purchase-flow.spec.ts",
+    "note": "Configuration is enforced in playwright.config.ts and exercised by the full 17-test Playwright CI suite; auth, CSRF, scanner, catalogue, refund, reporting and purchase flows all pass on the isolated runtime."
   }
 ]

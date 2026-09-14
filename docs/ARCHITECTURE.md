@@ -33,38 +33,55 @@
   purchase flow, access-control checks, admin authentication/UI and the
   scanner staff flow).
 - **CI** (`.github/workflows/ci.yml`): `npm ci` → `prisma generate` →
-  typecheck → lint → apply migrations to a Postgres service container →
-  `npm test` → seed isolated browser-test data → Playwright →
-  `npm run build`. `postinstall: prisma generate` in
-  `package.json` makes a fresh `npm install`/`npm ci` reproducible without
-  a manual generate step; `prisma.config.ts` deliberately reads
-  `process.env.DATABASE_URL` directly (not `@prisma/config`'s throwing
-  `env()` helper) so `prisma generate` never requires a live database
-  connection — only `migrate`/`db push` genuinely need one.
+  typecheck → lint → create separate Vitest/Playwright databases → apply
+  migrations → `npm test` → Playwright (which independently resets,
+  migrates and seeds its own database) → `npm run build`.
+  `postinstall: prisma generate` in `package.json` makes a fresh
+  `npm install`/`npm ci` reproducible without a manual generate step;
+  `prisma.config.ts` deliberately reads `process.env.DATABASE_URL`
+  directly (not `@prisma/config`'s throwing `env()` helper) so
+  `prisma generate` never requires a live database connection — only
+  `migrate`/`db push` genuinely need one.
 
 ## Local dev environment note
 
 This sandbox has no reachable Docker daemon, so Postgres runs via the
 already-installed **PostgreSQL 16 apt package** (`sudo service postgresql
-start`), not `docker-compose`. Two local databases: `onlylive_dev` and
-`onlylive_test` (the latter used only by the Vitest integration suite —
-see `tests/setup.ts`, which refuses to run without `TEST_DATABASE_URL`
-set, precisely so tests can never accidentally hit dev data). Production
-deployment should target a managed Postgres (Neon/Supabase/RDS — **not
-yet decided**) compatible with Vercel.
+start`), not `docker-compose`. Local development uses three separate
+logical databases:
 
-Playwright's `webServer` in this environment needed an explicit Chromium
+- `onlylive_dev` (`DATABASE_URL`) — development application data only.
+- `onlylive_test` (`TEST_DATABASE_URL`) — Vitest unit/integration data;
+  `tests/setup.ts` refuses to run without this variable.
+- `onlylive_e2e` (`E2E_DATABASE_URL`) — Playwright only. `npm run
+  test:e2e` destructively resets this database before every browser run.
+  `scripts/e2eDatabaseSafety.ts` refuses the reset unless the database
+  name contains an explicit `e2e` segment and is distinct from both dev
+  and Vitest databases.
+
+Playwright also starts its **own** production-mode Next.js server on port
+3100 by default (`PLAYWRIGHT_PORT` can change it) and never reuses an
+already-running developer server. Both the Playwright runner's direct
+Prisma imports and the spawned server are forced to `E2E_DATABASE_URL`, so
+there is no path back to development data through `reuseExistingServer` or
+a mismatched server environment.
+
+Playwright's `webServer` in this environment may need an explicit Chromium
 `executablePath` (`PLAYWRIGHT_CHROMIUM_PATH` env var, read in
-`playwright.config.ts`) because the pinned `@playwright/test` version
-defaults to looking for a `headless_shell` build that isn't preinstalled
-here. Elsewhere, a normal `npx playwright install` (or an already-correct
-preinstalled browser) makes this unnecessary — leave the env var unset.
+`playwright.config.ts`) because the pinned `@playwright/test` version can
+look for a `headless_shell` build that isn't preinstalled here. Elsewhere,
+a normal `npx playwright install` (or an already-correct preinstalled
+browser) makes this unnecessary — leave the env var unset.
+
+Production deployment should target a managed Postgres
+(Neon/Supabase/RDS — **not yet decided**) compatible with Vercel.
 
 ## Folder structure
 
 ```
 instrumentation.ts  boot-time config validation (payment provider)
 /prisma            schema.prisma, migrations/, seed.ts
+/scripts           guarded local/CI test-database preparation
 /app
   (marketing)/      event listing + detail (public)
   (customer)/       login, register, checkout, fake-pay sandbox, orders, tickets
@@ -88,7 +105,7 @@ instrumentation.ts  boot-time config validation (payment provider)
   validation/       zod schemas per route
 /tests
   unit/, integration/   Vitest, against onlylive_test
-  e2e/                  Playwright, local dev DB / isolated CI DB
+  e2e/                  Playwright, against onlylive_e2e
 /docs               this file, SECURITY.md, PAYMENTS.md
 TASKS.md, tests.json
 ```
@@ -279,6 +296,25 @@ documented `x-forwarded-host` / `x-forwarded-proto` request shape has a unit
 regression test; a real preview/custom-domain smoke test remains required
 before production rollout.
 
+## Test database isolation
+
+`npm run test:e2e` first executes `scripts/prepare-e2e-db.ts`. Its pure
+safety gate (`scripts/e2eDatabaseSafety.ts`) validates the configured URL
+before any destructive command can run: the URL must be PostgreSQL, the
+named database must contain an explicit `e2e` segment, and it must not be
+the configured development or Vitest database. Only after those checks does
+the script run `prisma migrate reset --force` against the isolated URL and
+seed deterministic browser-test data.
+
+`playwright.config.ts` then overwrites the runner process's `DATABASE_URL`
+with `E2E_DATABASE_URL` before e2e test modules are loaded, and passes the
+same URL to the dedicated `next start` process. `reuseExistingServer` is
+always false and arbitrary external base URLs are not supported by this
+config, preventing an otherwise easy mismatch where tests prepare one DB
+but exercise a different already-running application. CI provisions a
+third disposable database (`onlylive_ci_e2e`) and executes this exact same
+path, so the local safety behavior is continuously verified.
+
 ## Deployment
 
 Target: Vercel or an equivalent Node.js serverless/edge-capable platform.
@@ -289,16 +325,16 @@ runtime).
 ### Environment variables
 
 See `.env.example` for the full list and generation instructions
-(`DATABASE_URL`, `TEST_DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`,
-`ADMIN_SESSION_SECRET`, `PAYMENT_PROVIDER`,
+(`DATABASE_URL`, `TEST_DATABASE_URL`, `E2E_DATABASE_URL`, `NEXTAUTH_SECRET`,
+`NEXTAUTH_URL`, `ADMIN_SESSION_SECRET`, `PAYMENT_PROVIDER`,
 `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION`, `FAKE_PSP_WEBHOOK_SECRET`,
 `INTERNAL_API_SECRET`, `RATE_LIMIT_KEY_SECRET`, the test-only
 `RATE_LIMITING_DISABLED`/`ALLOW_RATE_LIMITING_DISABLED_IN_PRODUCTION`,
-and the seed-only `ADMIN_SEED_EMAIL`/
-`ADMIN_SEED_PASSWORD`). `instrumentation.ts` validates
-payment-provider and rate-limit safety once at server boot, so a
-misconfigured production deployment fails to start rather than failing on
-the first customer request.
+optional local `PLAYWRIGHT_PORT`, and the seed-only `ADMIN_SEED_EMAIL`/
+`ADMIN_SEED_PASSWORD`). `instrumentation.ts` validates payment-provider
+and rate-limit safety once at server boot, so a misconfigured production
+deployment fails to start rather than failing on the first customer
+request.
 
 ### Morocco timezone data depends on the Node runtime's bundled tzdata
 
@@ -344,7 +380,3 @@ historical rather than future.
   surfaced in the admin dashboard's attention metrics and can be resolved
   with a full refund from the order detail page, but there is still no
   *automatic* trigger — an admin has to notice and act.
-- **Local E2E tests run against the dev database**, not an isolated
-  ephemeral one. CI uses its disposable PostgreSQL service, but local
-  runs should move to a dedicated e2e database (or transaction-per-test
-  rollback) as the suite grows.

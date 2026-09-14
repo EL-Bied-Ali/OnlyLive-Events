@@ -1,5 +1,43 @@
 import "dotenv/config";
 import { defineConfig, devices } from "@playwright/test";
+import { assertSafeE2eDatabase } from "./scripts/e2eDatabaseSafety";
+
+const SOURCE_DATABASE_ENV = "ONLYLIVE_PLAYWRIGHT_SOURCE_DATABASE_URL";
+
+// Playwright can re-evaluate this config in child processes. On the first
+// evaluation DATABASE_URL is the developer/CI app database; after we pin the
+// runner below, child processes inherit the E2E value. Preserve the original
+// source URL once so every re-evaluation still compares E2E against the real
+// non-E2E database instead of mistaking our own pinning for an unsafe setup.
+const sourceDatabaseUrl = process.env[SOURCE_DATABASE_ENV] ?? process.env.DATABASE_URL;
+
+const safeDatabase = assertSafeE2eDatabase({
+  e2eDatabaseUrl: process.env.E2E_DATABASE_URL,
+  developmentDatabaseUrl: sourceDatabaseUrl,
+  testDatabaseUrl: process.env.TEST_DATABASE_URL,
+});
+const e2eDatabaseUrl = safeDatabase.canonicalUrl;
+
+if (sourceDatabaseUrl && !process.env[SOURCE_DATABASE_ENV]) {
+  process.env[SOURCE_DATABASE_ENV] = sourceDatabaseUrl;
+}
+
+// Test files import Prisma directly, so the Playwright runner itself — not
+// just the spawned Next.js server — must be pinned to the isolated e2e DB.
+// The safety gate above also protects direct `npx playwright test` runs that
+// bypass the npm preparation script.
+process.env.DATABASE_URL = e2eDatabaseUrl;
+
+const e2ePort = Number(process.env.PLAYWRIGHT_PORT ?? "3100");
+if (!Number.isSafeInteger(e2ePort) || e2ePort < 1 || e2ePort > 65535) {
+  throw new Error("PLAYWRIGHT_PORT must be a valid TCP port.");
+}
+// Browser tests always target the isolated server started below. Supporting
+// an arbitrary external base URL here would make it possible to prepare one
+// DB while accidentally testing a different deployment/database. Use one
+// canonical loopback origin (`localhost`) consistently across Playwright,
+// NextAuth and explicit Origin headers so same-origin/CSRF checks cannot drift.
+const baseURL = `http://localhost:${e2ePort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -9,7 +47,7 @@ export default defineConfig({
   workers: 1,
   reporter: "list",
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
+    baseURL,
     trace: "on-first-retry",
   },
   projects: [
@@ -29,17 +67,18 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run build && npm run start",
-    url: "http://localhost:3000/api/health",
-    reuseExistingServer: !process.env.CI,
+    command: `npm run build && npm run start -- -p ${e2ePort}`,
+    url: `${baseURL}/api/health`,
+    // Never reuse a developer's existing Next.js process: it may be attached
+    // to DATABASE_URL and would defeat the database-isolation guarantee.
+    reuseExistingServer: false,
     timeout: 180_000,
     env: {
+      DATABASE_URL: e2eDatabaseUrl,
+      NEXTAUTH_URL: baseURL,
       // `next start` always runs with NODE_ENV=production, and the fake
-      // payment provider now refuses to boot in production without this
-      // explicit opt-in (see lib/payments/index.ts). A local/CI e2e run
-      // against `next start` is exactly the deliberate,
-      // non-production-traffic case that flag exists for — this is
-      // never set for a real deployment.
+      // payment provider refuses to boot in production without this explicit
+      // opt-in. E2E uses an isolated database and no real customer traffic.
       ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true",
       // Keep rate limiting enabled in browser tests so the real Auth.js
       // callback path is covered. The IP ceilings are deliberately above
