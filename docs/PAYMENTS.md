@@ -110,8 +110,11 @@ Order/Payment; sequential/concurrent retries reuse them. The database unique
 constraint on `order_items.reservation_id` is defense in depth.
 
 If provider initialization has not completed and the reservation has already
-expired, retry fails with `HOLD_EXPIRED`. An already-created redirect remains
-reusable because the customer may already be inside the provider session.
+expired, retry fails with `HOLD_EXPIRED`. If a provider session was already
+created, an expired local reservation does **not** blindly return the stored
+redirect: checkout returns `CHECKOUT_RECONCILIATION_REQUIRED` and inventory
+stays reserved until provider-aware reconciliation proves the session
+terminal/non-payable or confirms payment.
 
 ### At most one provider initialization in flight
 
@@ -123,9 +126,10 @@ window.
 The Payment's idempotency key is created once and reused for every provider
 retry. A provider/network failure never creates a second Order.
 
-For ChariPay the provider session receives the Order expiry as `expiresAt`, so
-its hosted payment session does not remain payable for the provider's longer
-default lifetime after OnlyLive's checkout reservation should end.
+For ChariPay the provider session receives an `expiresAt` one minute before
+the local Order/Reservation deadline. That guard window gives webhook/provider
+reconciliation time before local expiry; local expiry alone still never
+authorizes releasing order-linked inventory.
 
 ## Payment webhook authentication and idempotency
 
