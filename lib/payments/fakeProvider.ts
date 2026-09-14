@@ -8,6 +8,7 @@ import type {
   PaymentWebhookEventType,
   RefundInput,
   RefundResult,
+  RefundStatusResult,
 } from "@/lib/payments/provider";
 
 function getWebhookSecret(): string {
@@ -90,5 +91,11 @@ export class FakeProvider implements PaymentProvider {
 
   async refund(_input: RefundInput): Promise<RefundResult> {
     return { providerRefundId: `fake_refund_${crypto.randomUUID()}`, status: "succeeded" };
+  }
+
+  async getRefundStatus(refundReference: string): Promise<RefundStatusResult> {
+    // FakeProvider refunds are synchronous; any reference that reached this
+    // fallback path is already successful from the application's point of view.
+    return { providerRefundId: refundReference, status: "succeeded" };
   }
 }
