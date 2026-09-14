@@ -74,26 +74,64 @@ function validateOptions(options: RateLimitOptions): void {
   }
 }
 
+function currentWindow(options: RateLimitOptions): {
+  now: number;
+  windowStart: Date;
+  resetAt: Date;
+} {
+  validateOptions(options);
+  assertRateLimitingConfig();
+  const now = Date.now();
+  const windowStartMs = Math.floor(now / options.windowMs) * options.windowMs;
+  return {
+    now,
+    windowStart: new Date(windowStartMs),
+    resetAt: new Date(windowStartMs + options.windowMs),
+  };
+}
+
+function resultForCount(count: number, options: RateLimitOptions, now: number, resetAt: Date): RateLimitResult {
+  const allowed = count <= options.limit;
+  return {
+    allowed,
+    limit: options.limit,
+    remaining: Math.max(0, options.limit - count),
+    resetAt,
+    retryAfterSeconds: allowed ? 0 : Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000)),
+  };
+}
+
+/**
+ * Read the current bucket without consuming an attempt. This is used for
+ * account-level login protection so already-blocked accounts can fail fast,
+ * while successful credentials do not spend the account's failed-attempt
+ * budget. Callers must still consume the bucket when credentials fail.
+ */
+export async function inspectRateLimit(key: string, options: RateLimitOptions): Promise<RateLimitResult> {
+  const { now, windowStart, resetAt } = currentWindow(options);
+  if (process.env.RATE_LIMITING_DISABLED === "true") {
+    return { allowed: true, limit: options.limit, remaining: options.limit, resetAt, retryAfterSeconds: 0 };
+  }
+
+  const bucket = await prisma.rateLimitBucket.findFirst({
+    where: { key, windowStart },
+    select: { count: true },
+  });
+  return resultForCount(bucket?.count ?? 0, options, now, resetAt);
+}
+
 /**
  * Fixed-window limiter backed by Postgres. The atomic upsert works across
  * serverless instances. The counter is capped at limit + 1 so rejected
  * traffic cannot overflow the integer or create ever-growing values.
  */
 export async function consumeRateLimit(key: string, options: RateLimitOptions): Promise<RateLimitResult> {
-  validateOptions(options);
-  // Keep the startup validation in instrumentation.ts for fail-fast
-  // deployments, but enforce it here too in case this helper is ever used
-  // outside the normal Next.js boot path (tests, scripts, or another worker).
-  assertRateLimitingConfig();
-  const now = Date.now();
-  const windowStartMs = Math.floor(now / options.windowMs) * options.windowMs;
-  const resetAt = new Date(windowStartMs + options.windowMs);
+  const { now, windowStart, resetAt } = currentWindow(options);
 
   if (process.env.RATE_LIMITING_DISABLED === "true") {
     return { allowed: true, limit: options.limit, remaining: options.limit, resetAt, retryAfterSeconds: 0 };
   }
 
-  const windowStart = new Date(windowStartMs);
   const cappedCount = options.limit + 1;
   const rows = await prisma.$queryRaw<{ count: number }[]>`
     INSERT INTO rate_limit_buckets (key, window_start, count)
@@ -103,15 +141,7 @@ export async function consumeRateLimit(key: string, options: RateLimitOptions): 
     RETURNING count
   `;
   const count = rows[0]?.count ?? 1;
-  const allowed = count <= options.limit;
-
-  return {
-    allowed,
-    limit: options.limit,
-    remaining: Math.max(0, options.limit - count),
-    resetAt,
-    retryAfterSeconds: allowed ? 0 : Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000)),
-  };
+  return resultForCount(count, options, now, resetAt);
 }
 
 /** Compatibility helper for callers/tests that only need allow/deny. */
