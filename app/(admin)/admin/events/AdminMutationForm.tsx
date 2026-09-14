@@ -5,7 +5,7 @@ import {
   INITIAL_ADMIN_ACTION_STATE,
   type AdminActionState,
 } from "@/lib/admin/actionState";
-import { ADMIN_CSRF_FORM_FIELD } from "@/lib/auth/adminCsrf";
+import { ADMIN_CSRF_FORM_FIELD } from "@/lib/auth/adminCsrfShared";
 
 interface AdminMutationFormProps {
   action: (state: AdminActionState, formData: FormData) => Promise<AdminActionState>;
