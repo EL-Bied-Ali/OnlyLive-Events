@@ -52,6 +52,22 @@ function eventUpdateInput<T extends {
   };
 }
 
+async function waitUntilUserEventLockHeld(eventId: string, userId: string) {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const acquired = await prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<{ acquired: boolean }[]>`
+        SELECT pg_try_advisory_xact_lock(hashtext(${eventId}), hashtext(${userId})) AS acquired
+      `;
+      return Boolean(rows[0]?.acquired);
+    });
+    if (!acquired) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error("Timed out waiting for createHold to acquire the user/event advisory lock");
+}
+
 describe("admin catalogue integrity", () => {
   it("creates a category and its inventory atomically with an audit record", async () => {
     const { event } = await createTestCategory(10);
@@ -225,6 +241,50 @@ describe("admin catalogue integrity", () => {
       previousMaxTicketsPerUser: event.maxTicketsPerUser,
       maxTicketsPerUser: 3,
     });
+  });
+
+  it("rejects an admin cap decrease when a concurrent customer hold commits first", async () => {
+    const { event, category, phase } = await createTestCategory(20);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-user-cap-race")]);
+
+    let releaseInventory!: () => void;
+    let inventoryLocked!: () => void;
+    const mayReleaseInventory = new Promise<void>((resolve) => { releaseInventory = resolve; });
+    const inventoryLockAcquired = new Promise<void>((resolve) => { inventoryLocked = resolve; });
+
+    const blocker = prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`
+        SELECT ticket_category_id
+        FROM inventory
+        WHERE ticket_category_id = ${category.id}
+        FOR UPDATE
+      `;
+      inventoryLocked();
+      await mayReleaseInventory;
+    });
+
+    await inventoryLockAcquired;
+    const purchase = createHold({
+      ticketCategoryId: category.id,
+      salesPhaseId: phase.id,
+      userId: customer.id,
+      quantity: 3,
+    });
+    await waitUntilUserEventLockHeld(event.id, customer.id);
+
+    const adminDecrease = updateEvent(eventUpdateInput(event, { maxTicketsPerUser: 2 }), actor.id);
+    releaseInventory();
+    await blocker;
+
+    await expect(purchase).resolves.toMatchObject({ reservationId: expect.any(String) });
+    await expect(adminDecrease).rejects.toMatchObject({
+      code: "PURCHASE_LIMIT_BELOW_COMMITTED",
+      status: 409,
+    });
+    await expect(prisma.event.findUniqueOrThrow({ where: { id: event.id } })).resolves.toMatchObject({
+      maxTicketsPerUser: event.maxTicketsPerUser,
+    });
+    await expect(prisma.reservation.count({ where: { userId: customer.id } })).resolves.toBe(1);
   });
 
   it("blocks direct cancellation after tickets have been issued", async () => {
