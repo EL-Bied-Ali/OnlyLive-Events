@@ -232,14 +232,31 @@ dismissed without evidence) and fixed:
 
 ## In progress
 
-- None.
+- **ChariPay real PSP integration — draft PR #13**, stacked on PR #11 so
+  Claude can audit #11 independently. The adapter is derived from ChariPay's
+  published v1 API reference, not guessed endpoints: hosted checkout sessions,
+  stable `externalId` + idempotency keys, HMAC/timestamp webhook validation,
+  `Chari-Event-Id` deduplication, checkout expiry aligned to the OnlyLive hold,
+  and asynchronous refunds.
+- Real refunds are now designed as a two-phase flow: submitting a refund
+  creates a durable `processing` row before network I/O and reserves that
+  amount against concurrent refunds; tickets/payment/order/inventory change
+  only after a provider-confirmed success. Ambiguous network outcomes remain
+  reserved instead of risking a duplicate refund.
+- Contract/unit/integration coverage is being added for ChariPay request
+  shapes, webhook signature/timestamp/secret rotation, production config,
+  asynchronous refund settlement and historical FakeProvider compatibility.
+- **Not production-ready yet:** the exact signed webhook JSON mapping still
+  needs to be pinned against a real sandbox delivery (the public docs expose
+  the signing contract and delivery log, but say the exact signed body is read
+  from an emitted event). PR #13 stays draft until sandbox validation, full CI,
+  docs/manifests and an independent audit are complete.
 
 ## Next
 
-1. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
-   from official docs (never speculatively). Re-derive contradictory-event
-   reconciliation from that provider's real lifecycle and revisit holding a
-   database row lock across the real network refund call.
+1. Validate PR #13 against a real ChariPay sandbox account: create the
+   webhook endpoint, send a synthetic event, perform one successful/failed
+   hosted checkout and one refund, then pin the exact webhook payload fixtures.
 2. Select a real email provider (Resend/Postmark/SES/...) and implement its
    adapter from official docs; add background retry for failed sends.
 3. Decide the production managed-Postgres provider and document/test the
@@ -257,10 +274,13 @@ dismissed without evidence) and fixed:
 
 ## Blocked
 
-- Real PSP integration is blocked on OnlyLive selecting a provider.
+- ChariPay sandbox end-to-end validation is blocked on a sandbox API key,
+  webhook signing secret and a deliberate public HTTPS test/preview URL. Real
+  production go-live additionally requires OnlyLive merchant/KYB approval and
+  live credentials; no production secret should be committed or pasted here.
 - Real email delivery is blocked on OnlyLive selecting a provider.
-- Legal document drafting is blocked on legal/accountant review and the
-  eventual PSP's requirements.
+- Legal document drafting is blocked on legal/accountant review and ChariPay's
+  final merchant/go-live requirements.
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
