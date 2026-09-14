@@ -27,8 +27,7 @@ interface PaymentProvider {
   `signatureValid: boolean` — the webhook route never trusts
   `amountCents`/`currency` without comparing them against the `Payment`
   row first (see Amount/currency verification below).
-- `refund` is schema-ready (`Refund` model) but not wired into any flow
-  yet.
+- `refund` is wired into the admin dashboard — see Refunds below.
 
 ## Fake payments are blocked outside deliberate dev/test use
 
@@ -98,8 +97,9 @@ confirms payment" while the order was still `pending_payment` — see
 cannot eliminate this race. When it happens, the customer's money was
 captured (`Payment.status = 'paid'`) but no tickets are generated; this is
 intentional (never oversell) but currently has **no automated
-resolution** — it needs an admin alert and/or automatic refund once the
-admin dashboard and refund flow exist (tracked in TASKS.md).
+resolution** — an admin must notice it (surfaced in the dashboard's
+attention metrics) and manually issue a full refund from the order
+detail page; there is no automatic trigger yet (tracked in TASKS.md).
 
 ## Reconciliation: a contradictory payment.succeeded after failed/cancelled
 
@@ -252,6 +252,62 @@ exactly once, not merely that one database Order exists),
 provider-failure-then-retry, and expired-retry-after-provider-failure
 scenarios.
 
+## Refunds
+
+`lib/orders/refund.ts::initiateRefund` — admin-initiated (`admin`/
+`super_admin` only; `support` is read-only), full or partial:
+
+1. Locks the `Payment` and `Order` rows (`FOR UPDATE`) for the entire
+   operation, provider call included. This differs from checkout's
+   `provider_init_at` claim-then-verify split: it's safe here because
+   `FakeProvider.refund()` is synchronous local work with no real network
+   I/O, and refunds are a low-frequency, human-driven action rather than
+   high-concurrency checkout traffic. Holding the lock across a real PSP's
+   HTTP call would block other work against that payment for the
+   round-trip — if that matters once a real provider is integrated,
+   switch this to the same claim-then-verify split as
+   `lib/orders/checkout.ts`.
+2. Rejects (`409 PAYMENT_NOT_REFUNDABLE`) unless `Payment.status` is
+   `paid` or `partially_refunded`. Rejects (`409
+   REFUND_EXCEEDS_REMAINING`) an amount greater than `amountCents` minus
+   the sum of that payment's already-`succeeded` refunds.
+3. A partial refund (amount less than the full remaining balance) is only
+   a legal transition from `paid`/`partially_refunded` — see
+   `lib/orders/stateMachine.ts`. An order in `paid_but_unfulfillable` or
+   `reconciliation_required` has no fulfilled tickets to partially
+   retain, so only a full refund is accepted there (`409
+   PARTIAL_REFUND_NOT_ALLOWED` otherwise).
+4. On a full refund, every ticket still `valid` is cancelled and its
+   category's `sold_quantity` is released for resale. A ticket already
+   `used` is left untouched — the seat was consumed and is never resold
+   regardless of refund. A partial refund never touches tickets or
+   inventory, since which specific tickets a partial amount corresponds
+   to isn't specified by the current (order/payment-level, not
+   per-ticket) admin UI.
+5. **The provider call is never allowed to `throw` out of the transaction
+   callback.** Doing so would roll back this function's own bookkeeping
+   (marking the `Refund` row `failed`, writing the audit log) along with
+   everything else — the transaction would commit as if the attempt never
+   happened, silently discarding evidence of it. Failure is instead
+   returned as a value from the transaction and turned into a `502
+   PROVIDER_REFUND_FAILED` only after that transaction has committed with
+   the `Refund` row correctly left `failed`. A later retry attempt is not
+   blocked by the earlier failure.
+6. `RefundInput.idempotencyKey` (the `Refund` row's own id) is passed to
+   `provider.refund()` — `FakeProvider` ignores it, but a real adapter
+   must forward it to the PSP so a retried refund request can never
+   double-refund.
+
+See `tests/integration/refunds.test.ts`: full refund, partial refund
+(tickets/inventory untouched), a second partial refund completing the
+balance (only then are tickets cancelled), exceeding the remaining
+balance, refunding a never-paid or already-fully-refunded payment,
+partial refund rejected on `paid_but_unfulfillable`, an already-`used`
+ticket never cancelled/double-released, a provider failure leaving
+state unchanged and auditable followed by a successful retry, and
+concurrent refund attempts on the same payment serializing so their
+total never exceeds the paid amount.
+
 ## Hold cancellation vs. checkout
 
 Once a reservation's checkout has started (`reservation.order_id` is
@@ -298,5 +354,5 @@ later, a webhook confirmation.
 
 - Which Moroccan PSP to integrate (CMI, HPS/Onepay, or another —
   **undecided**, do not build against any of them speculatively).
-- Refund flow and UI.
-- Automated handling of `paid_but_unfulfillable` orders.
+- Automated (rather than admin-triggered) handling of
+  `paid_but_unfulfillable`/`reconciliation_required` orders.

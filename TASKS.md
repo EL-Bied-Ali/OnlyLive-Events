@@ -196,44 +196,67 @@ payment-id mismatch, event-type mismatch).
   role boundary as the rest of the dashboard; `scanner`/customer sessions
   are rejected.
 
+## Completed (admin refund flow — current branch)
+
+- `lib/orders/refund.ts::initiateRefund`: full or partial, admin/
+  super_admin only (`support` stays read-only — no form rendered, and the
+  Server Action re-checks the role itself regardless).
+- Validates the requested amount against the payment's actual remaining
+  refundable balance (`amountCents` minus the sum of prior `succeeded`
+  refunds); a partial refund is only a legal transition from
+  `paid`/`partially_refunded` — `paid_but_unfulfillable`/
+  `reconciliation_required` orders (no fulfilled tickets to partially
+  retain) accept only a full refund.
+- On a full refund, every still-`valid` ticket is cancelled and its
+  category's `sold_quantity` released for resale; an already-`used`
+  ticket is left untouched and never resold.
+- The Payment/Order row lock is held for the whole operation (provider
+  call included), so concurrent refund attempts on the same payment
+  serialize and their total can never exceed the paid amount. A provider
+  failure is recorded (`Refund.status = 'failed'`, audited) without
+  blocking a later retry — found and fixed during this session's own
+  review: an earlier draft `throw`n mid-transaction on provider failure,
+  which rolled back that very bookkeeping.
+- `/admin/orders/[orderId]`: new order detail page (payments, refund
+  history, tickets with status) linked from the orders list.
+
 ## In progress
 
 - None.
 
 ## Next
 
-1. Refund flow (schema exists, no UI/logic yet) and an automated
-   resolution path for `paid_but_unfulfillable`/`reconciliation_required`
-   orders — currently both require a human to notice and act. This was
-   the remaining piece of the original "admin dashboard: refunds, CSV
-   export, audit-log views" item; CSV export and audit-log views are
-   now done.
-2. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
+1. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
    from official docs (never speculatively) — and, at that point,
    re-derive the reconciliation policy in
    `lib/orders/fulfillment.ts::reconcileContradictorySuccess` from that
    provider's actual documented event lifecycle rather than this
-   session's conservative stopgap.
-3. Transactional email (order confirmation, ticket delivery, payment
+   session's conservative stopgap, and revisit whether `initiateRefund`
+   still safely holds a row lock across the real (network) provider call.
+2. Transactional email (order confirmation, ticket delivery, payment
    failure, refund confirmation) — must be idempotent, no duplicate
    tickets from a retried email job.
-4. Rate limiting on `/api/customers/register`, customer login, and
+3. Rate limiting on `/api/customers/register`, customer login, and
    `/api/admin/login` (see docs/SECURITY.md — currently a documented gap).
-5. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
+4. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
    admin routes.
-6. Move local Playwright e2e tests off the dev database onto a dedicated
+5. Move local Playwright e2e tests off the dev database onto a dedicated
    ephemeral one. CI already runs them against an isolated ephemeral
    PostgreSQL service.
-7. Decide production managed-Postgres provider and write the backup
+6. Decide production managed-Postgres provider and write the backup
    strategy doc mentioned in CLAUDE.md's Observability section.
-8. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
+7. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
     needs OnlyLive's accountant/lawyer and the eventual PSP's
     requirements; do not draft speculative legal text.
-9. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
+8. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
     `lib/inventory.ts`) per-event-configurable if OnlyLive needs
     different caps for different shows.
-10. Paginate the orders CSV export (currently capped at the most recent
+9. Paginate the orders CSV export (currently capped at the most recent
     20,000 rows with no way to reach older ones).
+10. An automatic (rather than admin-noticed) trigger for
+    `paid_but_unfulfillable`/`reconciliation_required` orders — the
+    refund action to resolve them now exists, but nothing surfaces them
+    beyond the dashboard's attention metrics.
 
 ## Blocked
 
@@ -242,6 +265,6 @@ payment-id mismatch, event-type mismatch).
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
-Refund operations, offline scanning, real payment provider, email delivery,
-background worker infrastructure beyond the sweep endpoint, rate
-limiting, CSP headers, database backup strategy documentation.
+Offline scanning, real payment provider, email delivery, background
+worker infrastructure beyond the sweep endpoint, rate limiting, CSP
+headers, database backup strategy documentation.

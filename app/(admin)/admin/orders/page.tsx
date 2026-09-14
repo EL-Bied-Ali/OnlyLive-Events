@@ -52,7 +52,7 @@ export default async function AdminOrdersPage({ searchParams }: { searchParams: 
       <section className="admin-panel">
         <div className="admin-table-wrap">
           <table className="admin-table admin-orders-table">
-            <thead><tr><th>Commande</th><th>Client</th><th>Billets</th><th>Paiement</th><th>Total</th><th>Créée le</th></tr></thead>
+            <thead><tr><th>Commande</th><th>Client</th><th>Billets</th><th>Paiement</th><th>Total</th><th>Créée le</th><th /></tr></thead>
             <tbody>
               {orders.map((order) => {
                 const payment = order.payments[0];
@@ -64,10 +64,11 @@ export default async function AdminOrdersPage({ searchParams }: { searchParams: 
                     <td><span className={`admin-status admin-status-${order.status}`}>{ORDER_LABELS[order.status] ?? order.status}</span><small>{payment?.provider ?? "—"}</small></td>
                     <td>{money(order.totalAmountCents, order.currency)}</td>
                     <td>{new Intl.DateTimeFormat("fr-MA", { dateStyle: "medium", timeStyle: "short" }).format(order.createdAt)}</td>
+                    <td><Link href={`/admin/orders/${order.id}`}>Détails</Link></td>
                   </tr>
                 );
               })}
-              {orders.length === 0 && <tr><td colSpan={6} className="admin-empty">Aucune commande pour ce filtre.</td></tr>}
+              {orders.length === 0 && <tr><td colSpan={7} className="admin-empty">Aucune commande pour ce filtre.</td></tr>}
             </tbody>
           </table>
         </div>
