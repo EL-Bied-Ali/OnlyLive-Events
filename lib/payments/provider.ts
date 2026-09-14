@@ -11,6 +11,9 @@ export interface CreatePaymentInput {
   currency: string;
   idempotencyKey: string;
   customerEmail: string;
+  customerFirstName: string;
+  customerLastName: string;
+  customerPhone: string;
   /** Browser return destination. A redirect is never proof of payment. */
   returnUrl: string;
   /** Provider callback endpoint. Required by the ChariPay adapter. */

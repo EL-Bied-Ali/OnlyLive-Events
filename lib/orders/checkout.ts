@@ -16,6 +16,23 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function chariCustomerName(name: string | null): { firstName: string; lastName: string } {
+  const parts = name?.trim().split(/\s+/).filter(Boolean) ?? [];
+  const firstName = parts[0] ?? "";
+  const lastName = parts.length > 1 ? parts.slice(1).join(" ") : firstName;
+  if (!firstName || !lastName) throw new ApiError(422, "PAYMENT_CUSTOMER_DETAILS_REQUIRED", "A customer name is required for payment");
+  return { firstName, lastName };
+}
+
+function chariCustomerPhone(phone: string | null): string {
+  let value = phone?.trim().replace(/[\s().-]/g, "") ?? "";
+  if (value.startsWith("00")) value = `+${value.slice(2)}`;
+  else if (/^0[5-7]\d{8}$/.test(value)) value = `+212${value.slice(1)}`;
+  else if (/^212[5-7]\d{8}$/.test(value)) value = `+${value}`;
+  if (!/^\+[1-9]\d{7,14}$/.test(value)) throw new ApiError(422, "PAYMENT_CUSTOMER_DETAILS_REQUIRED", "A valid phone number is required for payment");
+  return value;
+}
+
 export interface StartCheckoutResult {
   orderId: string;
   redirectUrl: string;
@@ -170,7 +187,9 @@ async function claimAndInitializeProvider(
       // migration must never reroute an existing payment initialization retry.
       const provider = getPaymentProviderByName(payment.provider);
       const callbackBaseUrl = provider.name === "charipay" ? getOnlyLivePublicUrl() : requestBaseUrl;
-      const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
+      const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true, name: true, phone: true } });
+      const customerName = chariCustomerName(user.name);
+      const customerPhone = chariCustomerPhone(user.phone);
       const providerExpiresAt = order.expiresAt
         ? new Date(order.expiresAt.getTime() - PROVIDER_EXPIRY_GUARD_MS)
         : undefined;
@@ -185,6 +204,9 @@ async function claimAndInitializeProvider(
         currency: payment.currency,
         idempotencyKey: payment.idempotencyKey,
         customerEmail: user.email,
+        customerFirstName: customerName.firstName,
+        customerLastName: customerName.lastName,
+        customerPhone,
         returnUrl: `${callbackBaseUrl}/orders/${order.id}`,
         webhookUrl: `${callbackBaseUrl}/api/payments/webhook/${provider.name}`,
         expiresAt: providerExpiresAt,

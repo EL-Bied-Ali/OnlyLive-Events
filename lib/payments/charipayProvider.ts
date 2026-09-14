@@ -219,7 +219,12 @@ export class ChariPayProvider implements PaymentProvider {
         expiresAt: input.expiresAt.toISOString(),
         notifyOnFailure: true,
         config: {
-          customer: { email: input.customerEmail },
+          customer: {
+            firstName: input.customerFirstName,
+            lastName: input.customerLastName,
+            email: input.customerEmail,
+            phone: input.customerPhone,
+          },
           urls: { accept: returnUrl, decline: returnUrl, notification: webhookUrl },
         },
         metadata: { onlylivePaymentId: input.paymentId, onlyliveOrderId: input.orderId },

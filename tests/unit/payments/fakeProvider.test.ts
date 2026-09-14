@@ -11,6 +11,9 @@ describe("FakeProvider", () => {
       currency: "MAD",
       idempotencyKey: "idem_1",
       customerEmail: "buyer@example.com",
+      customerFirstName: "Amine",
+      customerLastName: "Bennani",
+      customerPhone: "+212600000000",
       returnUrl: "http://localhost/orders/order_1",
     });
 
