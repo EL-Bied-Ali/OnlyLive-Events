@@ -1,3 +1,4 @@
+import { ChariPayProvider } from "@/lib/payments/charipayProvider";
 import { FakeProvider } from "@/lib/payments/fakeProvider";
 import type { PaymentProvider } from "@/lib/payments/provider";
 
@@ -10,9 +11,7 @@ import type { PaymentProvider } from "@/lib/payments/provider";
  * NODE_ENV=production — never for real customer traffic.
  */
 export function isFakePaymentsAllowed(): boolean {
-  if (process.env.NODE_ENV !== "production") {
-    return true;
-  }
+  if (process.env.NODE_ENV !== "production") return true;
   return process.env.ALLOW_FAKE_PAYMENTS_IN_PRODUCTION === "true";
 }
 
@@ -28,7 +27,9 @@ export function getPaymentProvider(): PaymentProvider {
   switch (provider) {
     case "fake":
       return new FakeProvider();
+    case "charipay":
+      return new ChariPayProvider();
     default:
-      throw new Error(`Unknown PAYMENT_PROVIDER: ${provider}. Only "fake" is implemented so far.`);
+      throw new Error(`Unknown PAYMENT_PROVIDER: ${provider}. Supported values: "fake", "charipay".`);
   }
 }
