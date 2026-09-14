@@ -74,7 +74,7 @@ describe("checkRateLimit", () => {
     expect(bucket.count).toBe(2);
   });
 
-  it("can inspect a bucket without consuming it", async () => {
+  it("can inspect a bucket without consuming it and blocks once the threshold is already reached", async () => {
     const key = `inspect-${crypto.randomUUID()}`;
     const options = { limit: 1, windowMs: 60_000 };
 
@@ -82,7 +82,9 @@ describe("checkRateLimit", () => {
     expect(await prisma.rateLimitBucket.findFirst({ where: { key } })).toBeNull();
 
     expect(await consumeRateLimit(key, options)).toMatchObject({ allowed: true, remaining: 0 });
-    expect(await inspectRateLimit(key, options)).toMatchObject({ allowed: true, remaining: 0 });
+    const thresholdReached = await inspectRateLimit(key, options);
+    expect(thresholdReached).toMatchObject({ allowed: false, remaining: 0 });
+    expect(thresholdReached.retryAfterSeconds).toBeGreaterThan(0);
 
     expect(await consumeRateLimit(key, options)).toMatchObject({ allowed: false, remaining: 0 });
     const blocked = await inspectRateLimit(key, options);
