@@ -95,6 +95,10 @@ export class ProviderRequestError extends Error {
     message: string,
     public readonly outcomeUnknown: boolean,
     public readonly status?: number,
+    /** Parsed provider backoff hint when available. */
+    public readonly retryAfterMs?: number,
+    /** Provider correlation/request id for support diagnostics; never a secret. */
+    public readonly correlationId?: string,
   ) {
     super(message);
     this.name = "ProviderRequestError";
