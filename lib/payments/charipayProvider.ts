@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import {
   ProviderRequestError,
+  type ClosePaymentSessionResult,
   type CreatePaymentInput,
   type CreatePaymentResult,
   type ParsedWebhookEvent,
@@ -184,6 +185,11 @@ function normalizeRefundStatus(value: unknown): RefundStatusResult["status"] | n
   if (value === "SUCCESS") return "succeeded";
   if (value === "FAILED") return "failed";
   return null;
+}
+
+function apiErrorCode(body: Record<string, unknown>): string | undefined {
+  const error = body.error as { code?: unknown } | undefined;
+  return typeof error?.code === "string" ? error.code : undefined;
 }
 
 export class ChariPayProvider implements PaymentProvider {
@@ -370,5 +376,64 @@ export class ChariPayProvider implements PaymentProvider {
         ? body.refundReference
         : refundReference;
     return { providerRefundId, status };
+  }
+
+  async closePaymentSession(providerPaymentId: string, requestId: string): Promise<ClosePaymentSessionResult> {
+    const response = await fetchWithTimeout(
+      `${CHARIPAY_API_BASE_URL}/v1/payment-sessions/${encodeURIComponent(providerPaymentId)}/cancel`,
+      {
+        method: "POST",
+        headers: {
+          "X-CHARI-PAY-API-KEY": requiredEnv("CHARIPAY_API_KEY"),
+          "X-Request-Id": requestId,
+        },
+      },
+    );
+    const correlationId = responseCorrelationId(response);
+
+    // The endpoint contract is explicit: a successful cancel makes the session
+    // non-payable. The response body is informational and is deliberately not
+    // trusted to widen this authorization to release inventory.
+    if (response.ok) {
+      return { state: "non_payable", providerStatus: "CANCELLED", correlationId };
+    }
+
+    let body: Record<string, unknown>;
+    try {
+      body = await readJsonResponse(response);
+    } catch (error) {
+      if (error instanceof ProviderRequestError) throw error;
+      throw new ProviderRequestError("ChariPay session cancellation response could not be read", true, response.status);
+    }
+    const code = apiErrorCode(body) ?? `HTTP_${response.status}`;
+
+    // 410 is the other provider state that proves a checkout can no longer be
+    // paid. In contrast, 409 may mean already paid OR already cancelled; never
+    // guess which one. 404 can also indicate environment/key drift. Both remain
+    // fail-closed until a signed webhook or human reconciliation resolves them.
+    if (response.status === 410 && code === "SESSION_EXPIRED") {
+      return { state: "non_payable", providerStatus: code, correlationId };
+    }
+    if (
+      (response.status === 409 && (code === "SESSION_ALREADY_CONSUMED" || code === "SESSION_NOT_ACTIVE"))
+      || (response.status === 404 && code === "SESSION_NOT_FOUND")
+    ) {
+      return {
+        state: "unknown",
+        providerStatus: code,
+        correlationId,
+        retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
+      };
+    }
+
+    const error = body.error as { message?: unknown } | undefined;
+    const message = typeof error?.message === "string" ? error.message : "ChariPay session cancellation failed";
+    throw new ProviderRequestError(
+      `ChariPay ${code}: ${message}`,
+      isRetryableOrAmbiguousStatus(response.status),
+      response.status,
+      parseRetryAfterMs(response.headers.get("retry-after")),
+      correlationId,
+    );
   }
 }
