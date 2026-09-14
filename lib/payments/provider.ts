@@ -85,9 +85,16 @@ export interface RefundResult {
   status: "pending" | "succeeded";
 }
 
+export interface RefundStatusResult {
+  providerRefundId: string;
+  status: "pending" | "succeeded" | "failed";
+}
+
 export interface PaymentProvider {
   readonly name: string;
   createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult>;
   parseWebhook(input: ParseWebhookInput): Promise<ParsedWebhookEvent>;
   refund(input: RefundInput): Promise<RefundResult>;
+  /** Provider-side fallback when a webhook is delayed/lost. */
+  getRefundStatus(refundReference: string): Promise<RefundStatusResult>;
 }
