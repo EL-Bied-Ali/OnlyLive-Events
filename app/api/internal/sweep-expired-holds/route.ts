@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sweepExpiredHolds } from "@/lib/inventory";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 import { pruneRateLimitBuckets } from "@/lib/rateLimit";
-import { reconcileProcessingRefunds } from "@/lib/orders/refund";
+import { reconcileProcessingRefundsFair } from "@/lib/orders/refundReconciliation";
 
 export const runtime = "nodejs";
 
@@ -26,7 +26,7 @@ async function runHousekeeping(request: NextRequest) {
     const [holds, rateLimits, refunds] = await Promise.all([
       sweepExpiredHolds(),
       pruneRateLimitBuckets(),
-      reconcileProcessingRefunds(),
+      reconcileProcessingRefundsFair(),
     ]);
     return NextResponse.json({
       ...holds,
