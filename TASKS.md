@@ -240,6 +240,29 @@ payment-id mismatch, event-type mismatch).
   failure is logged and swallowed, never allowed to roll back or block
   the payment/refund it's reporting on.
 
+## Completed (auth rate limiting — current branch, pending review)
+
+- `lib/rateLimit.ts::checkRateLimit`: a Postgres-backed fixed-window
+  counter (no Redis/external cache in this app), atomic via the same
+  `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` idiom as
+  `PaymentEvent`/`EmailLog`.
+- Applied per client IP to `/api/customers/register` (5/15min),
+  `/api/admin/login` (5/15min), and the customer login `authorize()`
+  callback (10/15min) — checked before any credential or
+  account-existence check, so a rate-limited request never leaks
+  anything about the account.
+- `RATE_LIMITING_DISABLED=true` bypasses it entirely; set only for the
+  Playwright `webServer` (see playwright.config.ts) — that suite performs
+  many distinct logins/registrations that all originate from one local
+  machine with no reverse proxy in front of it, so the server would
+  otherwise see one shared "unknown" IP and trip these limits well before
+  covering the intended scenarios. Never set for a real deployment.
+- New `rate_limit_buckets` table; no cleanup of past-window rows yet (see
+  Next). Migration verified against dev/test and a fresh database.
+- Known limitation: per-IP only, not per-account — a distributed attack
+  spread across many IPs against one account isn't caught. Not addressed
+  in this PR; flagged for the reviewer.
+
 ## In progress
 
 - None.
@@ -256,27 +279,29 @@ payment-id mismatch, event-type mismatch).
 2. Select a real email provider (Resend/Postmark/SES/...) and implement
    its adapter from official docs; add a background retry for a send
    that failed (currently logged and dropped — no retry mechanism yet).
-3. Rate limiting on `/api/customers/register`, customer login, and
-   `/api/admin/login` (see docs/SECURITY.md — currently a documented gap).
-4. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
+3. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
    admin routes.
-5. Move local Playwright e2e tests off the dev database onto a dedicated
+4. Move local Playwright e2e tests off the dev database onto a dedicated
    ephemeral one. CI already runs them against an isolated ephemeral
    PostgreSQL service.
-6. Decide production managed-Postgres provider and write the backup
+5. Decide production managed-Postgres provider and write the backup
    strategy doc mentioned in CLAUDE.md's Observability section.
-7. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
+6. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
     needs OnlyLive's accountant/lawyer and the eventual PSP's
     requirements; do not draft speculative legal text.
-8. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
+7. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
     `lib/inventory.ts`) per-event-configurable if OnlyLive needs
     different caps for different shows.
-9. Paginate the orders CSV export (currently capped at the most recent
+8. Paginate the orders CSV export (currently capped at the most recent
     20,000 rows with no way to reach older ones).
-10. An automatic (rather than admin-noticed) trigger for
+9. An automatic (rather than admin-noticed) trigger for
     `paid_but_unfulfillable`/`reconciliation_required` orders — the
     refund action to resolve them now exists, but nothing surfaces them
     beyond the dashboard's attention metrics.
+10. Per-account rate limiting (in addition to per-IP) — see the auth
+    rate limiting entry above.
+11. Periodic cleanup of old `rate_limit_buckets` rows — the table
+    currently grows unbounded.
 
 ## Blocked
 

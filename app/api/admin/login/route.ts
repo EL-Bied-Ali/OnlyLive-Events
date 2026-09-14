@@ -5,6 +5,7 @@ import { adminLoginSchema } from "@/lib/validation/admin";
 import { createAdminSession, ADMIN_SESSION_COOKIE } from "@/lib/auth/admin";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 import { writeAuditLog } from "@/lib/audit";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
@@ -13,8 +14,18 @@ export const runtime = "nodejs";
 // hardening, see docs/SECURITY.md).
 const INVALID_CREDENTIALS = new ApiError(401, "INVALID_CREDENTIALS", "Invalid email or password");
 
+// Admin accounts are high-value targets (full back-office access) and few
+// in number — a tighter allowance than customer-facing endpoints.
+const ADMIN_LOGIN_RATE_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
+
 export async function POST(request: NextRequest) {
   try {
+    const ip = getClientIp(request.headers);
+    const withinLimit = await checkRateLimit(`admin_login:${ip}`, ADMIN_LOGIN_RATE_LIMIT);
+    if (!withinLimit) {
+      throw new ApiError(429, "RATE_LIMITED", "Too many login attempts. Please try again later.");
+    }
+
     const body = await request.json();
     const parsed = adminLoginSchema.safeParse(body);
     if (!parsed.success) {

@@ -730,5 +730,61 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "rate-limit-window-enforcement",
+    "scenario": "checkRateLimit allows exactly the configured number of calls within a window and rejects the next",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-window-reset",
+    "scenario": "checkRateLimit resets once a new fixed window starts",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-key-isolation",
+    "scenario": "Different rate-limit keys never share a bucket",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-concurrent-atomicity",
+    "scenario": "checkRateLimit never lets more than the configured limit through under concurrent calls on the same key",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "register-rate-limited",
+    "scenario": "Customer registration is rate limited per IP (5/15min); a different IP is never affected by another IP's exhausted limit",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/authRateLimiting.test.ts"
+  },
+  {
+    "id": "admin-login-rate-limited",
+    "scenario": "Admin login is rate limited per IP (5/15min), checked before the credential check — even a correct password is rejected with 429 once the limit is hit",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/authRateLimiting.test.ts"
+  },
+  {
+    "id": "customer-login-rate-limited",
+    "scenario": "Customer login (Auth.js authorize()) is rate limited per IP (10/15min); exceeding it throws RATE_LIMITED instead of evaluating credentials",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/authRateLimiting.test.ts"
   }
 ]

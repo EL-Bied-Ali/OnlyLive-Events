@@ -533,3 +533,22 @@ model EmailLog {
   @@unique([type, entityType, entityId])
   @@map("email_logs")
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Rate limiting
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Fixed-window counter, keyed by an arbitrary caller-chosen string (e.g.
+/// "register:203.0.113.7") plus the window's start instant. No Redis/
+/// external cache exists in this app, so Postgres is the shared store —
+/// correctness across concurrent requests and multiple serverless
+/// instances needs one; an in-process counter would not be shared. See
+/// lib/rateLimit.ts.
+model RateLimitBucket {
+  key         String
+  windowStart DateTime @map("window_start")
+  count       Int      @default(1)
+
+  @@id([key, windowStart])
+  @@map("rate_limit_buckets")
+}

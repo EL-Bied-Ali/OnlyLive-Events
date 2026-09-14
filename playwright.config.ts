@@ -41,6 +41,11 @@ export default defineConfig({
       // non-production-traffic case that flag exists for — this is
       // never set for a real deployment.
       ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true",
+      // This suite performs many distinct logins/registrations that all
+      // originate from one local machine with no reverse proxy in front
+      // of it, so the server sees them all as one "unknown" IP — see
+      // lib/rateLimit.ts. Never set this for a real deployment.
+      RATE_LIMITING_DISABLED: "true",
     },
   },
 });

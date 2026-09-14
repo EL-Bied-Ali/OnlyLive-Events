@@ -84,6 +84,7 @@ instrumentation.ts  boot-time config validation (payment provider)
   scanner.ts         atomic ticket validation + scan audit records
   tickets.ts        validation token + QR
   audit.ts          writeAuditLog()
+  rateLimit.ts      Postgres-backed fixed-window rate limiter
   validation/       zod schemas per route
 /tests
   unit/, integration/   Vitest, against onlylive_test
@@ -224,6 +225,25 @@ TASKS.md, tests.json
    reporting on. There is no background retry for a failed send yet (see
    TASKS.md).
 
+## Rate limiting
+
+`lib/rateLimit.ts::checkRateLimit` is a fixed-window counter backed by
+Postgres (no Redis/external cache exists in this app), using the same
+`INSERT ... ON CONFLICT DO UPDATE ... RETURNING` idiom as
+`PaymentEvent`/`EmailLog` so the increment is atomic under concurrent
+requests. Applied per client IP (`x-forwarded-for`) to registration
+(5/15min), admin login (5/15min), and customer login (10/15min) — checked
+before any credential or account-existence check runs, so a rate-limited
+request never leaks anything about the account. `RATE_LIMITING_DISABLED`
+bypasses it entirely and is set only for the Playwright `webServer` (see
+playwright.config.ts): that suite performs many distinct logins/
+registrations that all originate from one local machine with no reverse
+proxy in front of it, so the server would otherwise see one shared
+"unknown" IP and trip these limits well before covering the intended
+scenarios. Never set it for a real deployment. Rate-limit buckets for past
+windows are never cleaned up — the table grows unbounded over time (see
+TASKS.md).
+
 ## Deployment
 
 Target: Vercel or an equivalent Node.js serverless/edge-capable platform.
@@ -274,7 +294,9 @@ historical rather than future.
   sandbox provider (logs the message, no real delivery) — no real
   provider (Resend/Postmark/SES/...) is integrated, and a failed send has
   no background retry yet.
-- **Rate limiting, CSP headers** — not yet implemented; see
+- **Rate limiting** — implemented per-IP on registration, admin login,
+  and customer login (`lib/rateLimit.ts`); per-account limiting across
+  many IPs is not. **CSP headers** — not yet implemented; see
   docs/SECURITY.md for the full checklist status.
 - **`paid_but_unfulfillable`/`reconciliation_required` orders** are
   surfaced in the admin dashboard's attention metrics and can be resolved

@@ -8,6 +8,12 @@ import { prisma } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
 import { loginSchema } from "@/lib/validation/auth";
 import { ApiError } from "@/lib/http/errors";
+import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
+
+// A customer's own repeated mistyped-password attempts are more common
+// than admin login, so this allowance is looser than the admin/register
+// limits — still enough to stop automated credential stuffing.
+const CUSTOMER_LOGIN_RATE_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
 
 export const authOptions: AuthOptions = {
   // The adapter is kept registered for when an OAuth provider is added
@@ -32,7 +38,16 @@ export const authOptions: AuthOptions = {
         email: { label: "Email", type: "email" },
         password: { label: "Mot de passe", type: "password" },
       },
-      async authorize(credentials) {
+      async authorize(credentials, req) {
+        const ip = getClientIp(req?.headers);
+        const withinLimit = await checkRateLimit(`login:${ip}`, CUSTOMER_LOGIN_RATE_LIMIT);
+        if (!withinLimit) {
+          // Thrown from authorize(), next-auth surfaces the message
+          // verbatim as the `error` field the client-side signIn() call
+          // resolves with (see app/(customer)/login/page.tsx).
+          throw new Error("RATE_LIMITED");
+        }
+
         const parsed = loginSchema.safeParse(credentials);
         if (!parsed.success) {
           return null;

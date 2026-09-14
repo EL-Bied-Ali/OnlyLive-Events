@@ -22,7 +22,11 @@ function LoginForm() {
     try {
       const result = await signIn("credentials", { email, password, redirect: false });
       if (result?.error) {
-        setError("Email ou mot de passe incorrect");
+        setError(
+          result.error === "RATE_LIMITED"
+            ? "Trop de tentatives. Réessayez dans quelques minutes."
+            : "Email ou mot de passe incorrect",
+        );
         return;
       }
       router.push(callbackUrl);
