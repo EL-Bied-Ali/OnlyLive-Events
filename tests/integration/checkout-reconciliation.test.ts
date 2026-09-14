@@ -1,0 +1,144 @@
+import crypto from "node:crypto";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { NextRequest } from "next/server";
+import { prisma } from "@/lib/db";
+import { createHold } from "@/lib/inventory";
+import { startCheckout } from "@/lib/orders/checkout";
+import { reconcileExpiredCheckouts } from "@/lib/orders/checkoutReconciliation";
+import { FakeProvider, signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
+import { POST as fakeWebhookPost } from "@/app/api/payments/webhook/fake/route";
+import { createTestCategory, createTestUser } from "../helpers/fixtures";
+
+const BASE_URL = "http://localhost:3000";
+
+async function setupExpiredCheckout() {
+  const { category, phase } = await createTestCategory(5);
+  const user = await createTestUser("checkout-reconcile");
+  const hold = await createHold({
+    ticketCategoryId: category.id,
+    salesPhaseId: phase.id,
+    userId: user.id,
+    quantity: 1,
+  });
+  const checkout = await startCheckout(hold.reservationId, user.id, BASE_URL);
+  const payment = await prisma.payment.findFirstOrThrow({ where: { orderId: checkout.orderId } });
+  const expiredAt = new Date(Date.now() - 1_000);
+  await prisma.$transaction([
+    prisma.reservation.update({ where: { id: hold.reservationId }, data: { expiresAt: expiredAt } }),
+    prisma.order.update({ where: { id: checkout.orderId }, data: { expiresAt: expiredAt } }),
+  ]);
+  return { category, user, reservationId: hold.reservationId, orderId: checkout.orderId, payment };
+}
+
+function fakeWebhookRequest(payload: unknown) {
+  const body = JSON.stringify(payload);
+  return new NextRequest("http://localhost/api/payments/webhook/fake", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-onlylive-fake-signature": signFakeWebhookPayload(body),
+    },
+    body,
+  });
+}
+
+describe("expired hosted checkout reconciliation", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("releases inventory only after the provider confirms the session is non-payable", async () => {
+    const fixture = await setupExpiredCheckout();
+    const closeSpy = vi.spyOn(FakeProvider.prototype, "closePaymentSession").mockResolvedValue({
+      state: "non_payable",
+      providerStatus: "EXPIRED",
+    });
+
+    const result = await reconcileExpiredCheckouts(1);
+    expect(result).toMatchObject({ checked: 1, closed: 1, unresolved: 0, errors: 0 });
+    expect(closeSpy).toHaveBeenCalledWith(fixture.payment.providerPaymentId, `checkout-reconcile-${fixture.payment.id}`);
+
+    const [reservation, order, payment, inventory] = await Promise.all([
+      prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),
+      prisma.order.findUniqueOrThrow({ where: { id: fixture.orderId } }),
+      prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } }),
+    ]);
+    expect(reservation.status).toBe("cancelled");
+    expect(order.status).toBe("cancelled");
+    expect(payment.status).toBe("cancelled");
+    expect(inventory.reservedQuantity).toBe(0);
+    expect(inventory.soldQuantity).toBe(0);
+  });
+
+  it("keeps inventory reserved and records attention when provider state is ambiguous", async () => {
+    const fixture = await setupExpiredCheckout();
+    vi.spyOn(FakeProvider.prototype, "closePaymentSession").mockResolvedValue({
+      state: "unknown",
+      providerStatus: "SESSION_ALREADY_CONSUMED",
+      correlationId: "corr-ambiguous",
+    });
+
+    const result = await reconcileExpiredCheckouts(1);
+    expect(result).toMatchObject({ checked: 1, closed: 0, unresolved: 1, errors: 0 });
+
+    const [reservation, order, payment, inventory, attention] = await Promise.all([
+      prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),
+      prisma.order.findUniqueOrThrow({ where: { id: fixture.orderId } }),
+      prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } }),
+      prisma.auditLog.findFirst({
+        where: {
+          action: "payment.checkout_reconciliation_required",
+          entityType: "Payment",
+          entityId: fixture.payment.id,
+        },
+      }),
+    ]);
+    expect(reservation.status).toBe("active");
+    expect(order.status).toBe("pending_payment");
+    expect(payment.status).toBe("awaiting_payment");
+    expect(inventory.reservedQuantity).toBe(1);
+    expect(attention).not.toBeNull();
+  });
+
+  it("never releases inventory when a captured-payment webhook wins before local finalization", async () => {
+    const fixture = await setupExpiredCheckout();
+    let resolveClose!: (value: { state: "non_payable"; providerStatus: string }) => void;
+    const closeSpy = vi.spyOn(FakeProvider.prototype, "closePaymentSession").mockImplementation(
+      () => new Promise((resolve) => {
+        resolveClose = resolve;
+      }),
+    );
+
+    const reconciliation = reconcileExpiredCheckouts(1);
+    await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+
+    const webhook = await fakeWebhookPost(fakeWebhookRequest({
+      eventId: crypto.randomUUID(),
+      providerPaymentId: fixture.payment.providerPaymentId,
+      type: "payment.succeeded",
+      amountCents: fixture.payment.amountCents,
+      currency: fixture.payment.currency,
+    }));
+    expect(webhook.status).toBe(200);
+
+    resolveClose({ state: "non_payable", providerStatus: "EXPIRED" });
+    const result = await reconciliation;
+    expect(result.closed).toBe(0);
+
+    const [reservation, order, payment, inventory, tickets] = await Promise.all([
+      prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),
+      prisma.order.findUniqueOrThrow({ where: { id: fixture.orderId } }),
+      prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } }),
+      prisma.ticket.count({ where: { eventId: fixture.category.eventId } }),
+    ]);
+    expect(reservation.status).toBe("converted");
+    expect(order.status).toBe("paid");
+    expect(payment.status).toBe("paid");
+    expect(inventory.reservedQuantity).toBe(0);
+    expect(inventory.soldQuantity).toBe(1);
+    expect(tickets).toBe(1);
+  });
+});
