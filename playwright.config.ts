@@ -1,13 +1,18 @@
 import "dotenv/config";
 import { defineConfig, devices } from "@playwright/test";
+import { assertSafeE2eDatabase } from "./scripts/e2eDatabaseSafety";
 
-const e2eDatabaseUrl = process.env.E2E_DATABASE_URL;
-if (!e2eDatabaseUrl) {
-  throw new Error("E2E_DATABASE_URL is required for Playwright. Refusing to fall back to DATABASE_URL.");
-}
+const safeDatabase = assertSafeE2eDatabase({
+  e2eDatabaseUrl: process.env.E2E_DATABASE_URL,
+  developmentDatabaseUrl: process.env.DATABASE_URL,
+  testDatabaseUrl: process.env.TEST_DATABASE_URL,
+});
+const e2eDatabaseUrl = safeDatabase.canonicalUrl;
 
 // Test files import Prisma directly, so the Playwright runner itself — not
 // just the spawned Next.js server — must be pinned to the isolated e2e DB.
+// The safety gate above also protects direct `npx playwright test` runs that
+// bypass the npm preparation script.
 process.env.DATABASE_URL = e2eDatabaseUrl;
 
 const e2ePort = Number(process.env.PLAYWRIGHT_PORT ?? "3100");
