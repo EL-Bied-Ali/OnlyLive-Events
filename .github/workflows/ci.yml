@@ -40,6 +40,7 @@ jobs:
       ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true"
       FAKE_PSP_WEBHOOK_SECRET: ci-only-secret-not-for-real-use-2222222222222222
       INTERNAL_API_SECRET: ci-only-secret-not-for-real-use-3333333333333333
+      RATE_LIMIT_KEY_SECRET: ci-only-secret-not-for-real-use-4444444444444444
 
     steps:
       - uses: actions/checkout@v4

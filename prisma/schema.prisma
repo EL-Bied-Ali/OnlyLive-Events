@@ -533,3 +533,22 @@ model EmailLog {
   @@unique([type, entityType, entityId])
   @@map("email_logs")
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Rate limiting
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Fixed-window counter keyed by an action scope plus an HMAC of the IP or
+/// normalized account/email; raw identities are never persisted. No Redis/
+/// external cache exists in this app, so Postgres is the shared store across
+/// concurrent serverless instances. Buckets are pruned after 48 hours by the
+/// authenticated housekeeping endpoint. See lib/rateLimit.ts.
+model RateLimitBucket {
+  key         String
+  windowStart DateTime @map("window_start")
+  count       Int      @default(1)
+
+  @@id([key, windowStart])
+  @@index([windowStart])
+  @@map("rate_limit_buckets")
+}

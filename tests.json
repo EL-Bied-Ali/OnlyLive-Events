@@ -730,5 +730,109 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "rate-limit-window-enforcement",
+    "scenario": "checkRateLimit allows exactly the configured number of calls within a window and rejects the next",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-window-reset",
+    "scenario": "checkRateLimit resets once a new fixed window starts",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-key-isolation",
+    "scenario": "Different rate-limit keys never share a bucket",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-concurrent-atomicity",
+    "scenario": "checkRateLimit never lets more than the configured limit through under concurrent calls on the same key",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "register-rate-limited",
+    "scenario": "Repeated registration attempts for one normalized email are limited even when the source IP changes, while another email remains independent",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/authRateLimiting.test.ts"
+  },
+  {
+    "id": "admin-login-rate-limited",
+    "scenario": "Admin login is limited per account across changing IPs before credential verification; rejection includes Retry-After/reset metadata",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/authRateLimiting.test.ts"
+  },
+  {
+    "id": "customer-login-rate-limited",
+    "scenario": "Customer login is limited per account across changing IPs; exceeding it throws RATE_LIMITED instead of evaluating credentials",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/authRateLimiting.test.ts"
+  },
+  {
+    "id": "rate-limit-identities-hmac-pseudonymized",
+    "scenario": "Rate-limit keys are deterministic but never contain the raw IP address or account email",
+    "category": "privacy",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-ip-validation-canonicalization",
+    "scenario": "Platform-owned Vercel IP is preferred; malformed values collapse to unknown and equivalent IPv6 forms canonicalize to one identity",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-counter-cap-response-metadata",
+    "scenario": "Rejected buckets cap at limit + 1 and return Retry-After plus reset/remaining metadata",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-production-config-guard",
+    "scenario": "Production refuses a missing/weak HMAC secret and refuses disabled rate limiting without the explicit isolated-test opt-in",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/rateLimitConfig.test.ts"
+  },
+  {
+    "id": "rate-limit-retention-pruning",
+    "scenario": "The authenticated housekeeping path can remove expired rate-limit buckets while retaining recent buckets",
+    "category": "privacy",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "customer-login-authjs-http-rate-limited",
+    "scenario": "The real Auth.js credentials callback surfaces RATE_LIMITED after the account allowance is exhausted",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/auth-rate-limiting.spec.ts"
   }
 ]

@@ -240,6 +240,26 @@ payment-id mismatch, event-type mismatch).
   failure is logged and swallowed, never allowed to roll back or block
   the payment/refund it's reporting on.
 
+## Completed (auth rate limiting — current branch, pending review)
+
+- `lib/rateLimit.ts`: an atomic Postgres-backed fixed-window counter shared
+  by every serverless instance. Rejected counters cap at `limit + 1` and
+  responses expose `Retry-After`/rate-limit reset metadata.
+- Authentication uses two independent HMAC-pseudonymized buckets: a
+  generous IP ceiling to avoid easy lockout of shared NATs, plus a tighter
+  normalized-account/email ceiling that still stops distributed guessing.
+  No raw IP or email is persisted in `rate_limit_buckets`.
+- Client-IP resolution prefers Vercel's platform header, validates IPv4/
+  IPv6, canonicalizes IPv6, and collapses malformed input to `unknown`.
+- Production startup fails if the HMAC secret is missing/weak or if rate
+  limiting is disabled without the explicit isolated-test opt-in.
+- The existing authenticated housekeeping route prunes buckets older than
+  48 hours, preventing unbounded storage and indefinite IP-derived data
+  retention.
+- Limits remain conservative defaults pending real traffic. Platform-edge
+  WAF rules must be staged in log mode and tuned before production; the DB
+  limiter is defense in depth, not a DDoS shield.
+
 ## In progress
 
 - None.
@@ -256,27 +276,28 @@ payment-id mismatch, event-type mismatch).
 2. Select a real email provider (Resend/Postmark/SES/...) and implement
    its adapter from official docs; add a background retry for a send
    that failed (currently logged and dropped — no retry mechanism yet).
-3. Rate limiting on `/api/customers/register`, customer login, and
-   `/api/admin/login` (see docs/SECURITY.md — currently a documented gap).
-4. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
+3. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
    admin routes.
-5. Move local Playwright e2e tests off the dev database onto a dedicated
+4. Move local Playwright e2e tests off the dev database onto a dedicated
    ephemeral one. CI already runs them against an isolated ephemeral
    PostgreSQL service.
-6. Decide production managed-Postgres provider and write the backup
+5. Decide production managed-Postgres provider and write the backup
    strategy doc mentioned in CLAUDE.md's Observability section.
-7. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
+6. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
     needs OnlyLive's accountant/lawyer and the eventual PSP's
     requirements; do not draft speculative legal text.
-8. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
+7. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
     `lib/inventory.ts`) per-event-configurable if OnlyLive needs
     different caps for different shows.
-9. Paginate the orders CSV export (currently capped at the most recent
+8. Paginate the orders CSV export (currently capped at the most recent
     20,000 rows with no way to reach older ones).
-10. An automatic (rather than admin-noticed) trigger for
+9. An automatic (rather than admin-noticed) trigger for
     `paid_but_unfulfillable`/`reconciliation_required` orders — the
     refund action to resolve them now exists, but nothing surfaces them
     beyond the dashboard's attention metrics.
+10. Stage Vercel WAF rate-limit rules in log mode before production, review
+    real traffic, then tune/enforce them without replacing the application
+    account-level limiter.
 
 ## Blocked
 

@@ -21,7 +21,11 @@ export function AdminLoginForm() {
         body: JSON.stringify({ email: form.get("email"), password: form.get("password") }),
       });
       if (!response.ok) {
-        setError("Email ou mot de passe incorrect.");
+        setError(
+          response.status === 429
+            ? "Trop de tentatives. Réessayez dans quelques minutes."
+            : "Email ou mot de passe incorrect.",
+        );
         return;
       }
       router.replace("/admin");

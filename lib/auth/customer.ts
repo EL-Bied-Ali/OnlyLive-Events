@@ -8,6 +8,12 @@ import { prisma } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
 import { loginSchema } from "@/lib/validation/auth";
 import { ApiError } from "@/lib/http/errors";
+import { buildRateLimitKey, consumeRateLimit, getClientIp, inspectRateLimit } from "@/lib/rateLimit";
+
+// Per-account limiting stops distributed guessing; the higher IP ceiling
+// avoids a few mistakes blocking many customers behind the same NAT.
+const CUSTOMER_LOGIN_IP_RATE_LIMIT = { limit: 100, windowMs: 15 * 60 * 1000 };
+const CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
 
 export const authOptions: AuthOptions = {
   // The adapter is kept registered for when an OAuth provider is added
@@ -32,24 +38,48 @@ export const authOptions: AuthOptions = {
         email: { label: "Email", type: "email" },
         password: { label: "Mot de passe", type: "password" },
       },
-      async authorize(credentials) {
+      async authorize(credentials, req) {
+        const ip = getClientIp(req?.headers);
+        const ipLimit = await consumeRateLimit(
+          buildRateLimitKey("customer_login_ip", ip),
+          CUSTOMER_LOGIN_IP_RATE_LIMIT,
+        );
+        if (!ipLimit.allowed) {
+          // Thrown from authorize(), next-auth surfaces the message
+          // verbatim as the `error` field the client-side signIn() call
+          // resolves with (see app/(customer)/login/page.tsx).
+          throw new Error("RATE_LIMITED");
+        }
+
         const parsed = loginSchema.safeParse(credentials);
         if (!parsed.success) {
           return null;
+        }
+
+        const accountKey = buildRateLimitKey("customer_login_account", parsed.data.email);
+        const accountState = await inspectRateLimit(accountKey, CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT);
+        if (!accountState.allowed) {
+          throw new Error("RATE_LIMITED");
         }
 
         const user = await prisma.user.findUnique({
           where: { email: parsed.data.email },
         });
         if (!user) {
+          const failedAttempt = await consumeRateLimit(accountKey, CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT);
+          if (!failedAttempt.allowed) throw new Error("RATE_LIMITED");
           return null;
         }
 
         const validPassword = await verifyPassword(user.passwordHash, parsed.data.password);
         if (!validPassword) {
+          const failedAttempt = await consumeRateLimit(accountKey, CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT);
+          if (!failedAttempt.allowed) throw new Error("RATE_LIMITED");
           return null;
         }
 
+        // Successful credentials deliberately do not consume the account-level
+        // failed-attempt budget. The per-IP limiter still counts every request.
         return { id: user.id, email: user.email, name: user.name };
       },
     }),
