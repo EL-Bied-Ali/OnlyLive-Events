@@ -128,7 +128,7 @@ async function parseJsonResponse(response: Response): Promise<unknown> {
   }
 }
 
-function refundStatus(body: unknown): RefundStatusResult["status"] {
+function refundStatus(body: unknown): "pending" | "succeeded" | "failed" {
   const record = asRecord(body);
   const value = record ? stringValue(findDocumentedValue(record, "status")) : undefined;
   switch (value) {
@@ -282,12 +282,8 @@ export class ChariPayProvider implements PaymentProvider {
     const providerRefundId = record
       ? stringValue(record.refundId) ?? stringValue(record.refundReference) ?? input.idempotencyKey
       : input.idempotencyKey;
-    const status = refundStatus(body);
 
-    return {
-      providerRefundId,
-      status: status === "succeeded" ? "succeeded" : "pending",
-    };
+    return { providerRefundId, status: refundStatus(body) };
   }
 
   async getRefundStatus(refundReference: string): Promise<RefundStatusResult> {
@@ -299,6 +295,9 @@ export class ChariPayProvider implements PaymentProvider {
       },
     });
     const body = await parseJsonResponse(response);
+    if (response.status === 404) {
+      return { providerRefundId: refundReference, status: "not_found" };
+    }
     if (!response.ok) throw new Error(providerErrorMessage(response.status, body));
     const record = asRecord(body);
     const providerRefundId = record
