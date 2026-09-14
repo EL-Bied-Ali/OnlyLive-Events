@@ -12,41 +12,27 @@ export interface InitiateRefundInput {
   actorId: string;
 }
 
-export interface InitiateRefundResult {
+export type InitiateRefundResult =
+  | { refundId: string; state: "processing" }
+  | { refundId: string; state: "succeeded"; paymentStatus: "refunded" | "partially_refunded"; orderStatus: OrderStatus };
+
+interface PreparedRefund {
   refundId: string;
-  paymentStatus: "refunded" | "partially_refunded";
-  orderStatus: OrderStatus;
+  paymentId: string;
+  paymentExternalId: string;
+  providerPaymentId: string;
+  amountCents: number;
+  reason: string;
 }
 
-type RefundOutcome =
-  | { kind: "succeeded"; refundId: string; paymentStatus: "refunded" | "partially_refunded"; orderStatus: OrderStatus }
-  | { kind: "failed"; refundId: string };
-
 /**
- * Admin-initiated refund. The Payment/Order row lock is held for the
- * entire operation, provider call included — safe today because
- * FakeProvider.refund() is synchronous local work with no real network
- * I/O, and refunds are a low-frequency, human-driven action rather than
- * high-concurrency checkout traffic. A real PSP adapter's refund() is an
- * external HTTP call and holding a row lock across it would block other
- * work against that payment for the round-trip; if that becomes a
- * problem once a real provider is integrated, split this into
- * checkout.ts's claim-then-verify pattern instead. See docs/PAYMENTS.md's
- * Refunds section.
- *
- * The provider call is deliberately never allowed to `throw` out of the
- * transaction callback: doing so would roll back this function's own
- * bookkeeping (marking the Refund row "failed", writing the audit log)
- * along with everything else, silently discarding evidence of the
- * attempt. Failure is instead returned as a value and turned into an
- * ApiError only after the transaction has committed.
+ * Phase 1: reserve refundable balance and create one durable Refund row.
+ * `processing` refunds count against the remaining balance, so two admins
+ * cannot concurrently submit refunds whose sum exceeds the original payment.
+ * No network I/O happens while Payment/Order row locks are held.
  */
-export async function initiateRefund(input: InitiateRefundInput): Promise<InitiateRefundResult> {
-  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
-    throw new ApiError(400, "INVALID_AMOUNT", "Refund amount must be a positive number of cents");
-  }
-
-  const outcome = await prisma.$transaction(async (tx): Promise<RefundOutcome> => {
+async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund> {
+  return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<
       { id: string; order_id: string; provider_payment_id: string | null; amount_cents: number; status: string }[]
     >`
@@ -54,9 +40,7 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       FROM payments WHERE id = ${input.paymentId} FOR UPDATE
     `;
     const payment = paymentRows[0];
-    if (!payment) {
-      throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
-    }
+    if (!payment) throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
     if (payment.status !== "paid" && payment.status !== "partially_refunded") {
       throw new ApiError(409, "PAYMENT_NOT_REFUNDABLE", `Cannot refund a payment with status "${payment.status}"`);
     }
@@ -68,16 +52,14 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       SELECT id, status FROM orders WHERE id = ${payment.order_id} FOR UPDATE
     `;
     const order = orderRows[0];
-    if (!order) {
-      throw new ApiError(404, "ORDER_NOT_FOUND", "Order not found for this payment");
-    }
+    if (!order) throw new ApiError(404, "ORDER_NOT_FOUND", "Order not found for this payment");
 
-    const alreadyRefunded = await tx.refund.aggregate({
-      where: { paymentId: payment.id, status: "succeeded" },
+    const committedRefunds = await tx.refund.aggregate({
+      where: { paymentId: payment.id, status: { in: ["processing", "succeeded"] } },
       _sum: { amountCents: true },
     });
-    const refundedSoFar = alreadyRefunded._sum.amountCents ?? 0;
-    const remaining = payment.amount_cents - refundedSoFar;
+    const committedSoFar = committedRefunds._sum.amountCents ?? 0;
+    const remaining = payment.amount_cents - committedSoFar;
     if (input.amountCents > remaining) {
       throw new ApiError(
         409,
@@ -86,13 +68,9 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       );
     }
 
-    const isFullyRefunded = input.amountCents === remaining;
-    const targetOrderStatus: OrderStatus = isFullyRefunded ? "refunded" : "partially_refunded";
-
+    const isFullAgainstCommittedBalance = input.amountCents === remaining;
+    const targetOrderStatus: OrderStatus = isFullAgainstCommittedBalance ? "refunded" : "partially_refunded";
     if (!canTransition(order.status, targetOrderStatus)) {
-      // paid_but_unfulfillable / reconciliation_required orders have no
-      // fulfilled tickets to partially retain — only a full refund is a
-      // legal transition for them (see lib/orders/stateMachine.ts).
       throw new ApiError(
         409,
         "PARTIAL_REFUND_NOT_ALLOWED",
@@ -109,49 +87,91 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
         initiatedByAdminUserId: input.actorId,
       },
     });
+    await tx.auditLog.create({
+      data: {
+        actorType: "admin",
+        actorId: input.actorId,
+        action: "refund.requested",
+        entityType: "refund",
+        entityId: refund.id,
+        metadata: { paymentId: payment.id, orderId: order.id, amountCents: input.amountCents },
+      },
+    });
 
-    let providerRefundId: string;
-    try {
-      const provider = getPaymentProvider();
-      const result = await provider.refund({
-        providerPaymentId: payment.provider_payment_id,
-        amountCents: input.amountCents,
-        reason: input.reason,
-        idempotencyKey: refund.id,
-      });
-      providerRefundId = result.providerRefundId;
-    } catch (error) {
-      await tx.refund.update({ where: { id: refund.id }, data: { status: "failed" } });
-      await tx.auditLog.create({
-        data: {
-          actorType: "admin",
-          actorId: input.actorId,
-          action: "refund.failed",
-          entityType: "refund",
-          entityId: refund.id,
-          metadata: {
-            paymentId: payment.id,
-            amountCents: input.amountCents,
-            error: error instanceof Error ? error.message : "unknown provider error",
-          },
-        },
-      });
-      return { kind: "failed", refundId: refund.id };
+    return {
+      refundId: refund.id,
+      paymentId: payment.id,
+      paymentExternalId: payment.id,
+      providerPaymentId: payment.provider_payment_id,
+      amountCents: input.amountCents,
+      reason: input.reason,
+    };
+  });
+}
+
+/**
+ * Applies the financial/ticket consequences only after the PSP has actually
+ * confirmed success. Idempotent: duplicate success webhooks are harmless.
+ */
+export async function finalizeRefundSuccess(
+  refundId: string,
+  providerRefundId?: string | null,
+): Promise<{ state: "succeeded"; paymentStatus: "refunded" | "partially_refunded"; orderStatus: OrderStatus; changed: boolean }> {
+  const outcome = await prisma.$transaction(async (tx) => {
+    const refundRows = await tx.$queryRaw<
+      { id: string; payment_id: string; amount_cents: number; status: string; provider_refund_id: string | null }[]
+    >`
+      SELECT id, payment_id, amount_cents, status, provider_refund_id
+      FROM refunds WHERE id = ${refundId} FOR UPDATE
+    `;
+    const refund = refundRows[0];
+    if (!refund) throw new ApiError(404, "REFUND_NOT_FOUND", "Refund not found");
+
+    const paymentRows = await tx.$queryRaw<
+      { id: string; order_id: string; amount_cents: number; status: string }[]
+    >`SELECT id, order_id, amount_cents, status FROM payments WHERE id = ${refund.payment_id} FOR UPDATE`;
+    const payment = paymentRows[0];
+    if (!payment) throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+    const orderRows = await tx.$queryRaw<{ id: string; status: OrderStatus }[]>`
+      SELECT id, status FROM orders WHERE id = ${payment.order_id} FOR UPDATE
+    `;
+    const order = orderRows[0];
+    if (!order) throw new ApiError(404, "ORDER_NOT_FOUND", "Order not found");
+
+    if (refund.status === "succeeded") {
+      return {
+        changed: false,
+        paymentStatus: payment.status as "refunded" | "partially_refunded",
+        orderStatus: order.status,
+      };
+    }
+
+    const succeededOthers = await tx.refund.aggregate({
+      where: { paymentId: payment.id, status: "succeeded", id: { not: refund.id } },
+      _sum: { amountCents: true },
+    });
+    const totalSucceeded = (succeededOthers._sum.amountCents ?? 0) + refund.amount_cents;
+    if (totalSucceeded > payment.amount_cents) {
+      throw new ApiError(409, "REFUND_INTEGRITY_ERROR", "Confirmed refunds exceed the original payment amount");
+    }
+    const fullyRefunded = totalSucceeded === payment.amount_cents;
+    const paymentStatus = fullyRefunded ? "refunded" : "partially_refunded";
+    const orderStatus: OrderStatus = fullyRefunded ? "refunded" : "partially_refunded";
+    if (!canTransition(order.status, orderStatus) && order.status !== orderStatus) {
+      throw new ApiError(409, "REFUND_STATE_CONFLICT", `Cannot apply confirmed refund to order status "${order.status}"`);
     }
 
     await tx.refund.update({
       where: { id: refund.id },
-      data: { status: "succeeded", providerRefundId },
+      data: {
+        status: "succeeded",
+        providerRefundId: providerRefundId ?? refund.provider_refund_id,
+      },
     });
+    await tx.payment.update({ where: { id: payment.id }, data: { status: paymentStatus } });
+    await tx.order.update({ where: { id: order.id }, data: { status: orderStatus } });
 
-    const newPaymentStatus = isFullyRefunded ? "refunded" : "partially_refunded";
-    await tx.payment.update({ where: { id: payment.id }, data: { status: newPaymentStatus } });
-    await tx.order.update({ where: { id: order.id }, data: { status: targetOrderStatus } });
-
-    if (isFullyRefunded) {
-      // Cancel every ticket still valid and release its stock for resale.
-      // A ticket already used keeps its scan history untouched — the seat
-      // was consumed and its slot is never resold regardless of refund.
+    if (fullyRefunded) {
       const items = await tx.orderItem.findMany({
         where: { orderId: order.id },
         select: { id: true, ticketCategoryId: true },
@@ -173,30 +193,118 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
 
     await tx.auditLog.create({
       data: {
-        actorType: "admin",
-        actorId: input.actorId,
+        actorType: "system",
         action: "refund.succeeded",
         entityType: "refund",
         entityId: refund.id,
         metadata: {
           paymentId: payment.id,
           orderId: order.id,
-          amountCents: input.amountCents,
-          orderStatus: targetOrderStatus,
+          amountCents: refund.amount_cents,
+          orderStatus,
+          providerRefundId: providerRefundId ?? refund.provider_refund_id,
         },
       },
     });
-
-    return { kind: "succeeded", refundId: refund.id, paymentStatus: newPaymentStatus, orderStatus: targetOrderStatus };
+    return { changed: true, paymentStatus, orderStatus };
   });
 
-  if (outcome.kind === "failed") {
-    throw new ApiError(502, "PROVIDER_REFUND_FAILED", "The payment provider rejected the refund");
+  if (outcome.changed) await sendRefundConfirmationEmail(refundId);
+  return { state: "succeeded", ...outcome };
+}
+
+/** A failed webhook frees the amount for a future refund attempt. */
+export async function finalizeRefundFailure(refundId: string, providerRefundId?: string | null): Promise<{ changed: boolean }> {
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<{ id: string; status: string; provider_refund_id: string | null }[]>`
+      SELECT id, status, provider_refund_id FROM refunds WHERE id = ${refundId} FOR UPDATE
+    `;
+    const refund = rows[0];
+    if (!refund) throw new ApiError(404, "REFUND_NOT_FOUND", "Refund not found");
+    if (refund.status === "succeeded" || refund.status === "failed") return { changed: false };
+
+    await tx.refund.update({
+      where: { id: refund.id },
+      data: { status: "failed", providerRefundId: providerRefundId ?? refund.provider_refund_id },
+    });
+    await tx.auditLog.create({
+      data: {
+        actorType: "system",
+        action: "refund.failed",
+        entityType: "refund",
+        entityId: refund.id,
+        metadata: { providerRefundId: providerRefundId ?? refund.provider_refund_id },
+      },
+    });
+    return { changed: true };
+  });
+}
+
+/**
+ * Admin initiation is now two-phase. The durable Refund row is committed
+ * before external I/O. ChariPay's 202 leaves it `processing` until a signed
+ * webhook settles it; FakeProvider can still settle immediately in tests.
+ *
+ * Any provider-call exception is treated as ambiguous: the Refund remains
+ * processing instead of being replaced by a new reference, preventing an
+ * HTTP timeout after provider acceptance from causing a duplicate refund.
+ */
+export async function initiateRefund(input: InitiateRefundInput): Promise<InitiateRefundResult> {
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+    throw new ApiError(400, "INVALID_AMOUNT", "Refund amount must be a positive number of cents");
   }
 
-  // Sent after the transaction has committed, never inside it — same
-  // reasoning as the payment webhook route.
-  await sendRefundConfirmationEmail(outcome.refundId);
+  const prepared = await prepareRefund(input);
+  const provider = getPaymentProvider();
 
-  return { refundId: outcome.refundId, paymentStatus: outcome.paymentStatus, orderStatus: outcome.orderStatus };
+  let result;
+  try {
+    result = await provider.refund({
+      providerPaymentId: prepared.providerPaymentId,
+      paymentExternalId: prepared.paymentExternalId,
+      amountCents: prepared.amountCents,
+      reason: prepared.reason,
+      idempotencyKey: prepared.refundId,
+    });
+  } catch (error) {
+    console.error("provider.refund submission outcome unknown", error);
+    await prisma.auditLog.create({
+      data: {
+        actorType: "system",
+        action: "refund.submission_unknown",
+        entityType: "refund",
+        entityId: prepared.refundId,
+        metadata: { error: error instanceof Error ? error.message : "unknown provider error" },
+      },
+    });
+    throw new ApiError(
+      502,
+      "PROVIDER_REFUND_STATUS_UNKNOWN",
+      "The provider did not confirm whether the refund request was accepted. It remains pending to prevent a duplicate refund.",
+    );
+  }
+
+  if (result.providerRefundId) {
+    await prisma.refund.update({ where: { id: prepared.refundId }, data: { providerRefundId: result.providerRefundId } });
+  }
+  if (result.state === "succeeded") {
+    const finalized = await finalizeRefundSuccess(prepared.refundId, result.providerRefundId);
+    return {
+      refundId: prepared.refundId,
+      state: "succeeded",
+      paymentStatus: finalized.paymentStatus,
+      orderStatus: finalized.orderStatus,
+    };
+  }
+
+  await prisma.auditLog.create({
+    data: {
+      actorType: "system",
+      action: "refund.submitted",
+      entityType: "refund",
+      entityId: prepared.refundId,
+      metadata: { providerRefundId: result.providerRefundId },
+    },
+  });
+  return { refundId: prepared.refundId, state: "processing" };
 }
