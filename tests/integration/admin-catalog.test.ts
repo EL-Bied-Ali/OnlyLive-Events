@@ -22,6 +22,36 @@ async function createActor() {
   });
 }
 
+function eventUpdateInput<T extends {
+  id: string;
+  slug: string;
+  title: string;
+  description: string;
+  venueId: string;
+  startsAt: Date;
+  doorsOpenAt: Date | null;
+  salesOpenAt: Date;
+  salesCloseAt: Date;
+  maxTicketsPerUser: number;
+  status: "draft" | "published" | "on_sale" | "sold_out" | "closed" | "cancelled";
+  coverImageUrl: string | null;
+}>(event: T, overrides: Partial<{ maxTicketsPerUser: number; status: T["status"] }> = {}) {
+  return {
+    eventId: event.id,
+    slug: event.slug,
+    title: event.title,
+    description: event.description,
+    venueId: event.venueId,
+    startsAt: event.startsAt,
+    doorsOpenAt: event.doorsOpenAt ?? undefined,
+    salesOpenAt: event.salesOpenAt,
+    salesCloseAt: event.salesCloseAt,
+    maxTicketsPerUser: overrides.maxTicketsPerUser ?? event.maxTicketsPerUser,
+    status: overrides.status ?? event.status,
+    coverImageUrl: event.coverImageUrl ?? undefined,
+  };
+}
+
 describe("admin catalogue integrity", () => {
   it("creates a category and its inventory atomically with an audit record", async () => {
     const { event } = await createTestCategory(10);
@@ -128,6 +158,39 @@ describe("admin catalogue integrity", () => {
     ).rejects.toMatchObject({ code: "PHASE_LIMIT_BELOW_COMMITTED", status: 409 });
   });
 
+  it("refuses to lower the per-user event cap below one customer's committed quantity", async () => {
+    const { event, category, phase } = await createTestCategory(20);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-user-cap")]);
+    await createHold({ ticketCategoryId: category.id, salesPhaseId: phase.id, userId: customer.id, quantity: 3 });
+
+    await expect(updateEvent(eventUpdateInput(event, { maxTicketsPerUser: 2 }), actor.id)).rejects.toMatchObject({
+      code: "PURCHASE_LIMIT_BELOW_COMMITTED",
+      status: 409,
+    });
+
+    await expect(prisma.event.findUniqueOrThrow({ where: { id: event.id } })).resolves.toMatchObject({
+      maxTicketsPerUser: event.maxTicketsPerUser,
+    });
+  });
+
+  it("allows lowering the per-user event cap to the largest committed quantity and audits the change", async () => {
+    const { event, category, phase } = await createTestCategory(20);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-user-cap-exact")]);
+    await createHold({ ticketCategoryId: category.id, salesPhaseId: phase.id, userId: customer.id, quantity: 3 });
+
+    const updated = await updateEvent(eventUpdateInput(event, { maxTicketsPerUser: 3 }), actor.id);
+    expect(updated.maxTicketsPerUser).toBe(3);
+
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { actorId: actor.id, action: "event.updated", entityId: event.id },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(audit.metadata).toMatchObject({
+      previousMaxTicketsPerUser: event.maxTicketsPerUser,
+      maxTicketsPerUser: 3,
+    });
+  });
+
   it("blocks direct cancellation after tickets have been issued", async () => {
     const { event, category, phase } = await createTestCategory(1);
     const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-cancel")]);
@@ -159,22 +222,7 @@ describe("admin catalogue integrity", () => {
     });
 
     await expect(
-      updateEvent(
-        {
-          eventId: event.id,
-          slug: event.slug,
-          title: event.title,
-          description: event.description,
-          venueId: event.venueId,
-          startsAt: event.startsAt,
-          doorsOpenAt: event.doorsOpenAt ?? undefined,
-          salesOpenAt: event.salesOpenAt,
-          salesCloseAt: event.salesCloseAt,
-          status: "cancelled",
-          coverImageUrl: event.coverImageUrl ?? undefined,
-        },
-        actor.id,
-      ),
+      updateEvent(eventUpdateInput(event, { status: "cancelled" }), actor.id),
     ).rejects.toMatchObject({ code: "CANCELLATION_WORKFLOW_REQUIRED", status: 409 });
   });
 
@@ -184,20 +232,7 @@ describe("admin catalogue integrity", () => {
     await createHold({ ticketCategoryId: category.id, salesPhaseId: phase.id, userId: customer.id, quantity: 1 });
 
     await expect(
-      updateEvent(
-        {
-          eventId: event.id,
-          slug: event.slug,
-          title: event.title,
-          description: event.description,
-          venueId: event.venueId,
-          startsAt: event.startsAt,
-          salesOpenAt: event.salesOpenAt,
-          salesCloseAt: event.salesCloseAt,
-          status: "cancelled",
-        },
-        actor.id,
-      ),
+      updateEvent(eventUpdateInput(event, { status: "cancelled" }), actor.id),
     ).rejects.toMatchObject({ code: "CANCELLATION_WORKFLOW_REQUIRED", status: 409 });
   });
 
@@ -215,20 +250,7 @@ describe("admin catalogue integrity", () => {
     });
 
     await expect(
-      updateEvent(
-        {
-          eventId: event.id,
-          slug: event.slug,
-          title: event.title,
-          description: event.description,
-          venueId: event.venueId,
-          startsAt: event.startsAt,
-          salesOpenAt: event.salesOpenAt,
-          salesCloseAt: event.salesCloseAt,
-          status: "cancelled",
-        },
-        actor.id,
-      ),
+      updateEvent(eventUpdateInput(event, { status: "cancelled" }), actor.id),
     ).rejects.toMatchObject({ code: "CANCELLATION_WORKFLOW_REQUIRED", status: 409 });
   });
 
