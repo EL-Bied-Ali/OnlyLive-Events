@@ -70,7 +70,10 @@ export class FakeProvider implements PaymentProvider {
     } catch {
       return {
         externalEventId: "",
+        providerPaymentId: "",
         type: "payment.failed",
+        amountCents: 0,
+        currency: "",
         signatureValid: false,
         payloadValid: false,
         raw: input.rawBody,
@@ -80,13 +83,13 @@ export class FakeProvider implements PaymentProvider {
     const payloadValid = isFakePayload(payload);
     return {
       externalEventId: typeof payload.eventId === "string" ? payload.eventId : "",
-      providerPaymentId: typeof payload.providerPaymentId === "string" ? payload.providerPaymentId : undefined,
+      providerPaymentId: typeof payload.providerPaymentId === "string" ? payload.providerPaymentId : "",
       providerRefundId: typeof payload.providerRefundId === "string" ? payload.providerRefundId : undefined,
       paymentExternalId: typeof payload.paymentExternalId === "string" ? payload.paymentExternalId : undefined,
       refundExternalId: typeof payload.refundExternalId === "string" ? payload.refundExternalId : undefined,
       type: (typeof payload.type === "string" ? payload.type : "payment.failed") as PaymentWebhookEventType,
-      amountCents: typeof payload.amountCents === "number" ? payload.amountCents : undefined,
-      currency: typeof payload.currency === "string" ? payload.currency : undefined,
+      amountCents: typeof payload.amountCents === "number" ? payload.amountCents : 0,
+      currency: typeof payload.currency === "string" ? payload.currency : "",
       signatureValid,
       payloadValid,
       raw: payload,
