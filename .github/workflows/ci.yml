@@ -74,7 +74,10 @@ jobs:
           npx prisma migrate deploy
           DATABASE_URL="$TEST_DATABASE_URL" npx prisma migrate deploy
 
-      - name: Unit + integration tests twice on the same DB
+      - name: Unit + integration tests
+        run: npm test
+
+      - name: Repeat unit + integration tests twice on the same DB
         run: |
           npm test
           npm test

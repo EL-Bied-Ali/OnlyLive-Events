@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import {
+  ProviderInputError,
   ProviderRequestError,
   type ClosePaymentSessionResult,
   type CreatePaymentInput,
@@ -16,6 +17,27 @@ import {
 const CHARIPAY_API_BASE_URL = "https://api-psp.charipay.ma";
 const WEBHOOK_MAX_SKEW_MS = 5 * 60 * 1000;
 const REQUEST_TIMEOUT_MS = 12_000;
+
+function chariCustomerName(name: string | null | undefined): { firstName: string; lastName: string } {
+  const parts = name?.trim().split(/\s+/).filter(Boolean) ?? [];
+  const firstName = parts[0] ?? "";
+  const lastName = parts.length > 1 ? parts.slice(1).join(" ") : firstName;
+  if (!firstName || !lastName) {
+    throw new ProviderInputError("PAYMENT_CUSTOMER_DETAILS_REQUIRED", "A customer name is required for payment");
+  }
+  return { firstName, lastName };
+}
+
+function chariCustomerPhone(phone: string | null | undefined): string {
+  let value = phone?.trim().replace(/[\s().-]/g, "") ?? "";
+  if (value.startsWith("00")) value = `+${value.slice(2)}`;
+  else if (/^0[5-7]\d{8}$/.test(value)) value = `+212${value.slice(1)}`;
+  else if (/^212[5-7]\d{8}$/.test(value)) value = `+${value}`;
+  if (!/^\+[1-9]\d{7,14}$/.test(value)) {
+    throw new ProviderInputError("PAYMENT_CUSTOMER_DETAILS_REQUIRED", "A valid phone number is required for payment");
+  }
+  return value;
+}
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -112,7 +134,7 @@ interface ChariPayWebhookBody {
 }
 
 function isRetryableOrAmbiguousStatus(status: number): boolean {
-  return status === 408 || status === 409 || status === 429 || status >= 500;
+  return status === 408 || status === 429 || status >= 500;
 }
 
 function parseRetryAfterMs(value: string | null): number | undefined {
@@ -169,12 +191,15 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
     const code = typeof error?.code === "string" ? error.code : `HTTP_${response.status}`;
     const message = typeof error?.message === "string" ? error.message : "ChariPay request failed";
     const outcomeUnknown = isRetryableOrAmbiguousStatus(response.status) || code === "IDEMPOTENCY_CONFLICT";
+    const correlationId = typeof body.correlationId === "string"
+      ? body.correlationId
+      : responseCorrelationId(response);
     throw new ProviderRequestError(
       `ChariPay ${code}: ${message}`,
       outcomeUnknown,
       response.status,
       parseRetryAfterMs(response.headers.get("retry-after")),
-      responseCorrelationId(response),
+      correlationId,
     );
   }
   return body;
@@ -197,6 +222,8 @@ export class ChariPayProvider implements PaymentProvider {
 
   async createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult> {
     if (input.currency !== "MAD") throw new Error(`ChariPay only supports MAD in this integration, got ${input.currency}`);
+    const customerName = chariCustomerName(input.customerName);
+    const customerPhone = chariCustomerPhone(input.customerPhone);
     const returnUrl = requireHttpsUrl(input.returnUrl, "returnUrl");
     const webhookUrl = requireHttpsUrl(input.webhookUrl, "webhookUrl");
     if (!input.expiresAt || input.expiresAt <= new Date()) {
@@ -220,10 +247,10 @@ export class ChariPayProvider implements PaymentProvider {
         notifyOnFailure: true,
         config: {
           customer: {
-            firstName: input.customerFirstName,
-            lastName: input.customerLastName,
+            firstName: customerName.firstName,
+            lastName: customerName.lastName,
             email: input.customerEmail,
-            phone: input.customerPhone,
+            phone: customerPhone,
           },
           urls: { accept: returnUrl, decline: returnUrl, notification: webhookUrl },
         },

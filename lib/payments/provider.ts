@@ -11,9 +11,9 @@ export interface CreatePaymentInput {
   currency: string;
   idempotencyKey: string;
   customerEmail: string;
-  customerFirstName: string;
-  customerLastName: string;
-  customerPhone: string;
+  /** Generic customer identity. Provider adapters decide what they require. */
+  customerName?: string | null;
+  customerPhone?: string | null;
   /** Browser return destination. A redirect is never proof of payment. */
   returnUrl: string;
   /** Provider callback endpoint. Required by the ChariPay adapter. */
@@ -97,6 +97,16 @@ export interface ClosePaymentSessionResult {
   providerStatus?: string;
   correlationId?: string;
   retryAfterMs?: number;
+}
+
+export class ProviderInputError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ProviderInputError";
+  }
 }
 
 /**

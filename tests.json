@@ -1020,5 +1020,29 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/unit/vercelCronConfig.test.ts"
+  },
+  {
+    "id": "payment-provider-customer-requirements-isolated",
+    "scenario": "FakeProvider checkout succeeds without a phone while ChariPay alone validates its required customer name/phone data before provider network I/O",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/checkout-provider-routing.test.ts"
+  },
+  {
+    "id": "historical-fake-provider-init-routing",
+    "scenario": "An existing uninitialized Payment persisted with provider=fake is still initialized through FakeProvider after the configured default provider changes to ChariPay",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/checkout-provider-routing.test.ts"
+  },
+  {
+    "id": "vitest-same-db-three-pass-pollution-check",
+    "scenario": "CI runs the complete Vitest suite once on the fresh migrated test DB and then twice more without resetting that DB, exposing cross-file/order pollution flakes before Playwright/build",
+    "category": "test-isolation",
+    "implemented": true,
+    "status": "pass",
+    "testFile": ".github/workflows/ci.yml"
   }
 ]

@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChariPayProvider } from "@/lib/payments/charipayProvider";
-import { ProviderRequestError } from "@/lib/payments/provider";
+import { ProviderInputError, ProviderRequestError } from "@/lib/payments/provider";
 
 const API_KEY = "chari_sk_test_unit-test-key";
 const WEBHOOK_SECRET = "unit-test-charipay-webhook-secret";
@@ -55,8 +55,7 @@ describe("ChariPayProvider", () => {
       currency: "MAD",
       idempotencyKey: "idem-789",
       customerEmail: "buyer@example.com",
-      customerFirstName: "Amine",
-      customerLastName: "Bennani",
+      customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order-456",
       webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
@@ -90,6 +89,24 @@ describe("ChariPayProvider", () => {
     });
   });
 
+  it("keeps ChariPay customer validation inside the adapter", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const base = {
+      paymentId: "payment-customer", orderId: "order-customer", amountCents: 1000, currency: "MAD",
+      idempotencyKey: "idem-customer", customerEmail: "buyer@example.com", customerName: "Amine Bennani",
+      returnUrl: "https://onlylive.ma/orders/order-customer",
+      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
+      expiresAt: new Date(Date.now() + 60_000),
+    };
+    const provider = new ChariPayProvider();
+    await expect(provider.createPayment(base)).rejects.toBeInstanceOf(ProviderInputError);
+    await expect(provider.createPayment({ ...base, customerPhone: "bad-phone" })).rejects.toMatchObject({
+      code: "PAYMENT_CUSTOMER_DETAILS_REQUIRED",
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("refuses non-MAD checkout and unsafe callbacks before network I/O", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -100,8 +117,7 @@ describe("ChariPayProvider", () => {
       amountCents: 1000,
       idempotencyKey: "idem",
       customerEmail: "buyer@example.com",
-      customerFirstName: "Amine",
-      customerLastName: "Bennani",
+      customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order",
       webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
@@ -125,8 +141,7 @@ describe("ChariPayProvider", () => {
       currency: "MAD",
       idempotencyKey: "idem",
       customerEmail: "buyer@example.com",
-      customerFirstName: "Amine",
-      customerLastName: "Bennani",
+      customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order",
       webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
@@ -147,8 +162,7 @@ describe("ChariPayProvider", () => {
       currency: "MAD",
       idempotencyKey: "idem",
       customerEmail: "buyer@example.com",
-      customerFirstName: "Amine",
-      customerLastName: "Bennani",
+      customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order",
       webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
@@ -279,6 +293,17 @@ describe("ChariPayProvider", () => {
         idempotencyKey: `refund-${status}`,
       })).rejects.toMatchObject({ outcomeUnknown: true, status });
     }
+  });
+
+  it("classifies 409 by provider code and preserves safe retry diagnostics", async () => {
+    const provider = new ChariPayProvider();
+    const input = { providerPaymentId: "ps", paymentExternalId: "payment", amountCents: 1000, currency: "MAD", reason: "test", idempotencyKey: "refund-409" };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "SESSION_NOT_ACTIVE" } }, 409)));
+    await expect(provider.refund(input)).rejects.toMatchObject({ outcomeUnknown: false, status: 409 });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "IDEMPOTENCY_CONFLICT" } }, 409)));
+    await expect(provider.refund(input)).rejects.toMatchObject({ outcomeUnknown: true, status: 409 });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ error: { code: "RATE_LIMITED" }, correlationId: "corr-safe-123" }), { status: 429, headers: { "content-type": "application/json", "retry-after": "2" } })));
+    await expect(provider.refund(input)).rejects.toMatchObject({ outcomeUnknown: true, status: 429, retryAfterMs: 2000, correlationId: "corr-safe-123" });
   });
 
   it("treats a provider 4xx validation rejection as definitive", async () => {

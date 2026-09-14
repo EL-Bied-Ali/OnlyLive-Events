@@ -22,10 +22,11 @@ async function setupExpiredCheckout() {
   });
   const checkout = await startCheckout(hold.reservationId, user.id, BASE_URL);
   const payment = await prisma.payment.findFirstOrThrow({ where: { orderId: checkout.orderId } });
-  const expiredAt = new Date(Date.now() - 1_000);
+  const expiredAt = new Date("2001-01-01T00:00:00.000Z");
   await prisma.$transaction([
     prisma.reservation.update({ where: { id: hold.reservationId }, data: { expiresAt: expiredAt } }),
     prisma.order.update({ where: { id: checkout.orderId }, data: { expiresAt: expiredAt } }),
+    prisma.payment.update({ where: { id: payment.id }, data: { updatedAt: expiredAt } }),
   ]);
   return { category, user, reservationId: hold.reservationId, orderId: checkout.orderId, payment };
 }
@@ -54,8 +55,7 @@ describe("expired hosted checkout reconciliation", () => {
       providerStatus: "EXPIRED",
     });
 
-    const result = await reconcileExpiredCheckouts(1);
-    expect(result).toMatchObject({ checked: 1, closed: 1, unresolved: 0, errors: 0 });
+    await reconcileExpiredCheckouts(1);
     expect(closeSpy).toHaveBeenCalledWith(fixture.payment.providerPaymentId, `checkout-reconcile-${fixture.payment.id}`);
 
     const [reservation, order, payment, inventory] = await Promise.all([
@@ -73,14 +73,14 @@ describe("expired hosted checkout reconciliation", () => {
 
   it("keeps inventory reserved and records attention when provider state is ambiguous", async () => {
     const fixture = await setupExpiredCheckout();
-    vi.spyOn(FakeProvider.prototype, "closePaymentSession").mockResolvedValue({
+    const closeSpy = vi.spyOn(FakeProvider.prototype, "closePaymentSession").mockResolvedValue({
       state: "unknown",
       providerStatus: "SESSION_ALREADY_CONSUMED",
       correlationId: "corr-ambiguous",
     });
 
-    const result = await reconcileExpiredCheckouts(1);
-    expect(result).toMatchObject({ checked: 1, closed: 0, unresolved: 1, errors: 0 });
+    await reconcileExpiredCheckouts(1);
+    expect(closeSpy).toHaveBeenCalledWith(fixture.payment.providerPaymentId, `checkout-reconcile-${fixture.payment.id}`);
 
     const [reservation, order, payment, inventory, attention] = await Promise.all([
       prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),

@@ -107,6 +107,24 @@ describe("ChariPay webhook route", () => {
     await expect(response.json()).resolves.toMatchObject({ ok: true, test: true });
   });
 
+  it("processes a historical ChariPay payment after the default provider changes", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    vi.stubEnv("PAYMENT_PROVIDER", "fake");
+
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents),
+      "payment.succeeded",
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({
+      provider: "charipay",
+      status: "paid",
+    });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
+  });
+
   it("fails closed on a correctly signed but incomplete payload", async () => {
     const fixture = await createChariPendingOrder();
     enableChariPay();

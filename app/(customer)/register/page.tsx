@@ -51,7 +51,6 @@ export default function RegisterPage() {
           placeholder="Téléphone (+212...)"
           value={form.phone}
           onChange={(event) => setForm({ ...form, phone: event.target.value })}
-          required
           style={{ padding: 10 }}
         />
         <input

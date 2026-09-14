@@ -251,6 +251,7 @@ dismissed without evidence) and fixed:
   webhook signature/timestamp/secret rotation, real route dedup/collision and
   financial-integrity checks, sandbox/live deployment guards, asynchronous
   refund reconciliation/replay and historical FakeProvider compatibility.
+- ChariPay reconciliation tests avoid pristine-database assumptions; CI runs the complete Vitest suite three times total (one fresh pass plus two additional passes on the same populated database) to catch pollution/order flakes.
 - **Not production-ready yet:** the exact signed webhook JSON mapping still
   needs to be pinned against a real sandbox delivery (the public docs expose
   the signing contract and delivery log, but say the exact signed body is read

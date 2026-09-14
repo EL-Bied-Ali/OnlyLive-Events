@@ -4,7 +4,10 @@ export const registerSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(10).max(200),
   name: z.string().trim().min(1).max(120),
-  phone: z.string().trim().min(8).max(30),
+  phone: z.preprocess(
+    (value) => typeof value === "string" && value.trim() === "" ? undefined : value,
+    z.string().trim().min(8).max(30).optional(),
+  ),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

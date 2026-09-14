@@ -242,9 +242,11 @@ value.
 - Immediate `succeeded` (FakeProvider): finalize directly.
 - Accepted asynchronous request (ChariPay): keep `processing`; do not alter
   tickets, Payment, Order or inventory.
-- Definitive provider rejection (e.g. provider 4xx): mark that Refund failed so
-  its reserved amount becomes available for a later business attempt.
-- Ambiguous outcome (network exception or provider 5xx): keep the Refund
+- Definitive provider rejection (ordinary validation/business-rule 4xx): mark
+  that Refund failed so its reserved amount becomes available for a later
+  business attempt. `409 IDEMPOTENCY_CONFLICT` is the exception: preserve the
+  original refund reference and reconcile it instead of guessing.
+- Ambiguous outcome (network exception, 408, 429, or provider 5xx): keep the Refund
   `processing` and reserved. A timeout may have happened after provider
   acceptance; creating a new random refund would risk returning money twice.
 
@@ -289,10 +291,11 @@ unknown money-moving outcome.
 
 For ChariPay HTTP responses:
 
-- 4xx: definitive rejection;
-- 5xx: ambiguous outcome because provider acceptance cannot safely be ruled
-  out;
-- transport/network exception: ambiguous.
+- ordinary validation/business-rule 4xx: definitive rejection;
+- `409 IDEMPOTENCY_CONFLICT`: preserve/reconcile the original intent;
+- 408/429/5xx: ambiguous outcome because provider acceptance cannot safely be
+  ruled out (`Retry-After` is preserved for 429);
+- transport/network exception or timeout: ambiguous.
 
 This distinction matters most for refunds. Checkout creation also remains
 provider-idempotent through the stable Payment idempotency key.

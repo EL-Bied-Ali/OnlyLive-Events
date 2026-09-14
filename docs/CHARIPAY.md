@@ -20,6 +20,8 @@ OnlyLive uses `POST /v1/payment-sessions`, never direct card endpoints. PAN/CVV 
 
 For each session the adapter sends MAD major units, stable OnlyLive Payment id as `externalId`, a stable `Idempotency-Key`, order id, buyer email, HTTPS callbacks, `singleUse:true`, `notifyOnFailure:true`, and reconciliation ids in metadata.
 
+Generic checkout passes optional customer name/phone data unchanged. ChariPay-specific name splitting, Moroccan/international phone normalization, and required-field validation live inside the ChariPay adapter; FakeProvider and future providers do not inherit ChariPay customer requirements. Registration therefore keeps phone optional, while a ChariPay checkout fails with `PAYMENT_CUSTOMER_DETAILS_REQUIRED` before network I/O when the provider-required customer data is missing or invalid.
+
 `Idempotency-Key` protects network retries and `externalId` protects business re-issue. Both must remain stable for one OnlyLive Payment.
 
 ChariPay must return `sessionId` and an HTTPS `checkoutUrl`. A malformed successful response is treated as an unknown provider outcome, never as proof that no session exists.
