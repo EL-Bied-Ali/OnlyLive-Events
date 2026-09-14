@@ -17,7 +17,15 @@ describe("rate-limit production configuration", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("RATE_LIMITING_DISABLED", "false");
     vi.stubEnv("RATE_LIMIT_KEY_SECRET", "short");
-    expect(() => assertRateLimitingConfig()).toThrow(/at least 32 characters/);
+    expect(() => assertRateLimitingConfig()).toThrow(/unique random secret/);
+  });
+
+  it("rejects the public .env.example placeholder even though it is long enough", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("RATE_LIMITING_DISABLED", "false");
+    vi.stubEnv("RATE_LIMIT_KEY_SECRET", "replace-with-a-random-32-byte-base64-secret");
+    expect(() => assertRateLimitingConfig()).toThrow(/unique random secret/);
+    expect(() => buildRateLimitKey("login", "203.0.113.7")).toThrow(/unique random secret/);
   });
 
   it("rejects disabling rate limiting in production without explicit test-only opt-in", () => {

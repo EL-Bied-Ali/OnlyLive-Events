@@ -17,15 +17,22 @@ export interface RateLimitResult {
 }
 
 const DEVELOPMENT_KEY_SECRET = "onlylive-rate-limit-development-key-never-use-in-production";
+const EXAMPLE_KEY_SECRET = "replace-with-a-random-32-byte-base64-secret";
 export const RATE_LIMIT_RETENTION_MS = 48 * 60 * 60 * 1000;
+
+function assertProductionKeySecret(secret: string | undefined): asserts secret is string {
+  if (!secret || secret.length < 32 || secret === DEVELOPMENT_KEY_SECRET || secret === EXAMPLE_KEY_SECRET) {
+    throw new Error("RATE_LIMIT_KEY_SECRET must be a unique random secret of at least 32 characters in production");
+  }
+}
 
 function keySecret(): string {
   const configured = process.env.RATE_LIMIT_KEY_SECRET;
-  if (configured) return configured;
   if (process.env.NODE_ENV === "production") {
-    throw new Error("RATE_LIMIT_KEY_SECRET is required in production");
+    assertProductionKeySecret(configured);
+    return configured;
   }
-  return DEVELOPMENT_KEY_SECRET;
+  return configured || DEVELOPMENT_KEY_SECRET;
 }
 
 /**
@@ -47,10 +54,7 @@ export function assertRateLimitingConfig(): void {
     );
   }
 
-  const secret = process.env.RATE_LIMIT_KEY_SECRET;
-  if (!secret || secret.length < 32) {
-    throw new Error("RATE_LIMIT_KEY_SECRET must be set to at least 32 characters in production");
-  }
+  assertProductionKeySecret(process.env.RATE_LIMIT_KEY_SECRET);
 }
 
 /** Persist only a deterministic HMAC, never a raw IP address or email. */
