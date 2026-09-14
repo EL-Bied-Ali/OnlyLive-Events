@@ -6,6 +6,7 @@ import {
   checkRateLimit,
   consumeRateLimit,
   getClientIp,
+  inspectRateLimit,
   pruneRateLimitBuckets,
   rateLimitHeaders,
 } from "@/lib/rateLimit";
@@ -71,6 +72,22 @@ describe("checkRateLimit", () => {
 
     const bucket = await prisma.rateLimitBucket.findFirstOrThrow({ where: { key } });
     expect(bucket.count).toBe(2);
+  });
+
+  it("can inspect a bucket without consuming it", async () => {
+    const key = `inspect-${crypto.randomUUID()}`;
+    const options = { limit: 1, windowMs: 60_000 };
+
+    expect(await inspectRateLimit(key, options)).toMatchObject({ allowed: true, remaining: 1 });
+    expect(await prisma.rateLimitBucket.findFirst({ where: { key } })).toBeNull();
+
+    expect(await consumeRateLimit(key, options)).toMatchObject({ allowed: true, remaining: 0 });
+    expect(await inspectRateLimit(key, options)).toMatchObject({ allowed: true, remaining: 0 });
+
+    expect(await consumeRateLimit(key, options)).toMatchObject({ allowed: false, remaining: 0 });
+    const blocked = await inspectRateLimit(key, options);
+    expect(blocked.allowed).toBe(false);
+    expect(blocked.retryAfterSeconds).toBeGreaterThan(0);
   });
 
   it("prunes expired buckets while retaining recent ones", async () => {
