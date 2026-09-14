@@ -8,6 +8,7 @@ import type {
   PaymentWebhookEventType,
   RefundInput,
   RefundResult,
+  RefundStatusResult,
 } from "@/lib/payments/provider";
 
 const CHARIPAY_API_BASE = "https://api-psp.charipay.ma";
@@ -124,6 +125,17 @@ async function parseJsonResponse(response: Response): Promise<unknown> {
     return JSON.parse(text) as unknown;
   } catch {
     throw new Error(`ChariPay returned non-JSON HTTP ${response.status}`);
+  }
+}
+
+function refundStatus(body: unknown): RefundStatusResult["status"] {
+  const record = asRecord(body);
+  const value = record ? stringValue(findDocumentedValue(record, "status")) : undefined;
+  switch (value) {
+    case "SUCCESS": return "succeeded";
+    case "FAILED": return "failed";
+    case "PENDING": return "pending";
+    default: throw new Error(`ChariPay refund response has unknown status: ${value ?? "missing"}`);
   }
 }
 
@@ -270,12 +282,29 @@ export class ChariPayProvider implements PaymentProvider {
     const providerRefundId = record
       ? stringValue(record.refundId) ?? stringValue(record.refundReference) ?? input.idempotencyKey
       : input.idempotencyKey;
-    const status = stringValue(record?.status);
+    const status = refundStatus(body);
 
     return {
       providerRefundId,
-      status: status === "SUCCESS" ? "succeeded" : "pending",
+      status: status === "succeeded" ? "succeeded" : "pending",
     };
+  }
+
+  async getRefundStatus(refundReference: string): Promise<RefundStatusResult> {
+    const response = await fetch(`${CHARIPAY_API_BASE}/v1/refunds/${encodeURIComponent(refundReference)}`, {
+      method: "GET",
+      headers: {
+        "x-chari-pay-api-key": requiredEnv("CHARIPAY_API_KEY"),
+        "x-request-id": crypto.randomUUID(),
+      },
+    });
+    const body = await parseJsonResponse(response);
+    if (!response.ok) throw new Error(providerErrorMessage(response.status, body));
+    const record = asRecord(body);
+    const providerRefundId = record
+      ? stringValue(record.refundId) ?? stringValue(record.refundReference) ?? refundReference
+      : refundReference;
+    return { providerRefundId, status: refundStatus(body) };
   }
 }
 
