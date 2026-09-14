@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { ADMIN_CSRF_HEADER } from "@/lib/auth/adminCsrfShared";
 
 export function AdminLogoutButton({ csrfToken }: { csrfToken: string }) {
   const router = useRouter();
@@ -12,7 +13,7 @@ export function AdminLogoutButton({ csrfToken }: { csrfToken: string }) {
     try {
       const response = await fetch("/api/admin/logout", {
         method: "POST",
-        headers: { "x-csrf-token": csrfToken },
+        headers: { [ADMIN_CSRF_HEADER]: csrfToken },
       });
       if (!response.ok) return;
       router.replace("/admin/login");
