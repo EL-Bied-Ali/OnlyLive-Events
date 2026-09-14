@@ -80,6 +80,8 @@ export default defineConfig({
       // payment provider refuses to boot in production without this explicit
       // opt-in. E2E uses an isolated database and no real customer traffic.
       ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true",
+      // Same production guard, for the sandbox console email provider.
+      ALLOW_CONSOLE_EMAIL_IN_PRODUCTION: "true",
       // Keep rate limiting enabled in browser tests so the real Auth.js
       // callback path is covered. The IP ceilings are deliberately above
       // this serial suite's normal traffic.

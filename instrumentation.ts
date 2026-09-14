@@ -8,7 +8,11 @@ export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { getPaymentProvider } = await import("@/lib/payments");
     const { assertRateLimitingConfig } = await import("@/lib/rateLimit");
+    const { getEmailProvider } = await import("@/lib/email");
+    const { getAppBaseUrl } = await import("@/lib/appUrl");
     getPaymentProvider();
     assertRateLimitingConfig();
+    getEmailProvider();
+    getAppBaseUrl();
   }
 }
