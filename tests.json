@@ -834,5 +834,70 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/e2e/auth-rate-limiting.spec.ts"
+  },
+  {
+    "id": "admin-csrf-session-bound-token",
+    "scenario": "The admin CSRF token is deterministic for one session, differs across sessions, and a token from session A cannot be replayed against session B",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/adminCsrf.test.ts"
+  },
+  {
+    "id": "admin-csrf-route-token-required",
+    "scenario": "A cookie-authenticated admin mutation rejects a missing or mismatched CSRF token even when the request is same-origin",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/adminCsrf.test.ts"
+  },
+  {
+    "id": "admin-csrf-origin-validation",
+    "scenario": "Admin mutation source validation rejects cross-site, cross-origin, missing-origin and scheme-mismatch requests while accepting same-origin traffic",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/adminCsrf.test.ts"
+  },
+  {
+    "id": "admin-csrf-vercel-forwarded-origin",
+    "scenario": "The same-origin guard accepts Vercel's documented x-forwarded-host/x-forwarded-proto request shape and a reverse-proxy public-origin shape",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/adminCsrf.test.ts"
+  },
+  {
+    "id": "browser-security-headers",
+    "scenario": "Public responses include the CSP baseline, nosniff, strict referrer policy and permissions policy required by the scanner/browser threat model",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/security-headers.spec.ts"
+  },
+  {
+    "id": "admin-login-cross-origin-rejected",
+    "scenario": "A forged cross-origin POST to the admin login endpoint is rejected with CSRF_REJECTED before credential processing",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/security-headers.spec.ts"
+  },
+  {
+    "id": "scanner-csrf-token-required",
+    "scenario": "A valid scanner session cannot mutate ticket state through the scanner API without the session-bound CSRF token, while the real scanner UI succeeds with it",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/scanner.spec.ts"
+  },
+  {
+    "id": "admin-server-action-csrf-plumbing",
+    "scenario": "Catalogue and refund browser flows continue to succeed after their Server Actions require the hidden session-bound CSRF field injected by the shared AdminMutationForm",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/admin-catalog.spec.ts",
+    "note": "Positive end-to-end coverage proves token plumbing on the real Server Action transport; cryptographic rejection of cross-session/missing tokens is covered directly in tests/unit/adminCsrf.test.ts."
   }
 ]
