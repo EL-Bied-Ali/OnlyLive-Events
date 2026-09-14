@@ -167,7 +167,7 @@ async function renderReconciliationAlert(entityId: string): Promise<RenderedEmai
     "",
     `Statut actuel : ${order.status}. Cette commande ne se résoudra pas automatiquement —`,
     "vérifiez le stock disponible pour cet événement puis remboursez ou honorez manuellement",
-    `la commande depuis /admin/orders/${order.id}.`,
+    `la commande depuis ${absoluteAppUrl(`/admin/orders/${order.id}`)}.`,
     "",
     "— OnlyLive",
   ].join("\n");

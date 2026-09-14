@@ -91,7 +91,10 @@ export async function enqueueRefundConfirmationEmail(tx: Tx, refundId: string): 
  * re-derives it from the order's live status at send time (see
  * `renderReconciliationAlert` in lib/email/dispatcher.ts), consistent with
  * every other enqueue* function here only recording the *fact* that a
- * notification is owed, never the content.
+ * notification is owed, never the content. Unlike the previous one-shot
+ * send design, a provider failure for one recipient is retried by the
+ * dispatcher like any other outbox row, and this is a safe no-op if
+ * called again for an order that's already enqueued its alerts.
  */
 export async function enqueueReconciliationAlertEmail(tx: Tx, orderId: string): Promise<void> {
   const recipients = await tx.adminUser.findMany({

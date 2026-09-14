@@ -1044,5 +1044,21 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "reconciliation-alert-direct-idempotency",
+    "scenario": "Calling sendReconciliationAlertEmail directly twice in a row for the same order sends exactly one email per admin, exercising the entityId claim itself rather than the webhook layer's already_handled short-circuit",
+    "category": "notifications",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "reconciliation-alert-no-active-admins-noop",
+    "scenario": "sendReconciliationAlertEmail is a silent no-op when no active admin/super_admin exists",
+    "category": "notifications",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
   }
 ]

@@ -353,15 +353,24 @@ running this migration — not a concern for the app's current state.
   (webhook route, right after the transaction commits) — money was
   captured but no ticket was issued, and this no longer depends on an
   admin happening to check the dashboard's attention metrics.
-- Every active `admin`/`super_admin` is notified independently
-  (`support`/`scanner` are excluded — they can't act on a refund); each
-  gets its own idempotent `email_logs` claim (`entityId =
-  "${orderId}:${adminUserId}"`), so a redelivered webhook event can't
-  double-alert, and a genuinely new admin still gets notified even after
-  others already have been for the same order.
+- Every active `admin`/`super_admin` at the moment the order transitions
+  is notified independently (`support`/`scanner` are excluded — they
+  can't act on a refund); each gets its own idempotent `email_logs` claim
+  (`entityId = "${orderId}:${adminUserId}"`), so a redelivered webhook
+  event can't double-alert any one admin.
 - Resolution itself (fulfil manually or refund) remains a manual admin
   action from the order detail page — only detection/notification is
   automatic now (see docs/PAYMENTS.md's Open decisions).
+- **Known limitation, not fixed here** (tracked for the
+  `fix/email-delivery-audit-1` durable-outbox refactor): the alert is
+  one-shot, sent exactly once from the webhook route on the transition
+  into one of these two statuses. An admin created/activated *after* that
+  one call already ran is never retroactively notified for that order,
+  and a provider send failure for one recipient is not retried (same
+  caveat as every other transactional email in this app — see the
+  background-retry item in "Next" below). The per-admin claim only prevents
+  double-alerting one admin; it does not guarantee every eventual admin
+  is alerted.
 
 ## In progress
 

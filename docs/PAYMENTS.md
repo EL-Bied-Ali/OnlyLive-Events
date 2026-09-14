@@ -98,10 +98,15 @@ cannot eliminate this race. When it happens, the customer's money was
 captured (`Payment.status = 'paid'`) but no tickets are generated; this is
 intentional (never oversell), and resolution is still a manual admin
 action from the order detail page (fulfil manually if stock frees up, or
-refund) — but every admin/super_admin is now emailed the moment this
-happens (`lib/email/notifications.ts::sendReconciliationAlertEmail`,
-triggered right after the webhook transaction commits), rather than
-relying solely on an admin noticing the dashboard's attention metrics.
+refund). Every admin/super_admin active at that moment is also emailed
+(`lib/email/notifications.ts::sendReconciliationAlertEmail`, triggered
+right after the webhook transaction commits), as a best-effort push
+alongside — not a replacement for — the dashboard's attention metrics:
+the alert is sent exactly once and isn't retried if the email provider
+fails, and an admin added afterward isn't retroactively notified for an
+already-settled order (tracked for the `fix/email-delivery-audit-1`
+durable-outbox refactor). The dashboard remains the reliable source of
+truth for these orders regardless of email delivery.
 
 ## Reconciliation: a contradictory payment.succeeded after failed/cancelled
 
@@ -135,10 +140,12 @@ treating it as `already_handled`:
    `reconciliation_required` — no ticket is generated (never oversell),
    and a human must resolve it (manually fulfil if stock frees up, or
    refund). This is a terminal, human-only state: it is never
-   re-attempted automatically by a later event — but every admin/
-   super_admin is emailed as soon as it happens (see the alert described
-   just above `paid_but_unfulfillable`), so "human must resolve it" no
-   longer depends on someone happening to check the dashboard.
+   re-attempted automatically by a later event — every admin/super_admin
+   active at that moment is also emailed (see the best-effort alert
+   described just above `paid_but_unfulfillable`), but the dashboard's
+   attention metrics remain the reliable way "human must resolve it" gets
+   noticed, since the email isn't retried on a provider failure and
+   doesn't reach an admin added afterward.
 4. Either way, `Payment.status` is set to `paid` (money was captured —
    this is a fact, independent of whether the order could be fulfilled)
    and an `AuditLog` entry is written

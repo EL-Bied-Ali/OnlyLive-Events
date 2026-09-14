@@ -561,6 +561,51 @@ describe("reconciliation alert — enqueue fan-out and delivery", () => {
     expect(rowsForInactiveAdmin).toHaveLength(0);
   });
 
+  it("enqueueReconciliationAlertEmail is idempotent per admin when called twice directly for the same order", async () => {
+    // Unlike the redelivered-webhook test above, this calls the function
+    // itself twice in a row — the webhook route never does this (a
+    // settled order's next event resolves to "already_handled" and never
+    // reaches this function again), so this is the only test that
+    // actually exercises the `${orderId}:${adminId}` EmailOutbox claim's
+    // own uniqueness rather than the webhook layer's outcome-based guard.
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await prisma.reservation.update({ where: { id: fixture.reservationId }, data: { status: "expired" } });
+
+    const admin = await prisma.adminUser.create({
+      data: {
+        email: `recon-direct-${crypto.randomUUID()}@test.onlylive.ma`,
+        passwordHash: "not-used-in-tests",
+        name: "Direct Call Admin",
+        role: "admin",
+      },
+    });
+
+    await prisma.$transaction((tx) => enqueueReconciliationAlertEmail(tx, fixture.order.id));
+    await prisma.$transaction((tx) => enqueueReconciliationAlertEmail(tx, fixture.order.id));
+
+    const rows = await prisma.emailOutbox.findMany({
+      where: { type: "reconciliation_alert", entityType: "order", recipientEmail: admin.email },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.entityId).toBe(`${fixture.order.id}:${admin.id}`);
+  });
+
+  it("enqueueReconciliationAlertEmail is a silent no-op when no active admin/super_admin exists", async () => {
+    // A fake tx rather than mocking the real prisma client: findMany's
+    // resolved value is all this function branches on, and a real
+    // transaction can't easily be made to see zero active admins without
+    // mutating rows other tests in this shared, non-isolated database
+    // depend on.
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    const fakeTx = {
+      adminUser: { findMany: vi.fn().mockResolvedValue([]) },
+      emailOutbox: { createMany: vi.fn() },
+    } as unknown as Parameters<typeof enqueueReconciliationAlertEmail>[0];
+
+    await expect(enqueueReconciliationAlertEmail(fakeTx, fixture.order.id)).resolves.toBeUndefined();
+    expect(fakeTx.emailOutbox.createMany).not.toHaveBeenCalled();
+  });
+
   it("is a silent no-op for an unknown order id rather than throwing, and enqueues nothing", async () => {
     const unknownId = crypto.randomUUID();
     await expect(prisma.$transaction((tx) => enqueueReconciliationAlertEmail(tx, unknownId))).resolves.toBeUndefined();
