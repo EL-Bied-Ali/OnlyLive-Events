@@ -43,7 +43,15 @@ function subscribeToConnectivity(callback: () => void) {
 const getOnlineSnapshot = () => navigator.onLine;
 const getServerOnlineSnapshot = () => true;
 
-export function ScannerClient({ staffName, events }: { staffName: string; events: ScannerEvent[] }) {
+export function ScannerClient({
+  staffName,
+  events,
+  csrfToken,
+}: {
+  staffName: string;
+  events: ScannerEvent[];
+  csrfToken: string;
+}) {
   const router = useRouter();
   const [eventId, setEventId] = useState(events[0]?.id ?? "");
   const [cameraActive, setCameraActive] = useState(false);
@@ -72,7 +80,7 @@ export function ScannerClient({ staffName, events }: { staffName: string; events
     try {
       const response = await fetch("/api/scanner/scan", {
         method: "POST",
-        headers: { "content-type": "application/json" },
+        headers: { "content-type": "application/json", "x-csrf-token": csrfToken },
         body: JSON.stringify({ eventId, validationToken: validationToken.trim() }),
       });
       if (response.status === 401) {
@@ -95,7 +103,7 @@ export function ScannerClient({ staffName, events }: { staffName: string; events
       busyRef.current = false;
       setProcessing(false);
     }
-  }, [eventId, router]);
+  }, [csrfToken, eventId, router]);
 
   const startCamera = useCallback(async () => {
     if (!eventId || !online) return;
@@ -157,7 +165,15 @@ export function ScannerClient({ staffName, events }: { staffName: string; events
     <main className="scanner-page">
       <header className="scanner-header">
         <div className="scanner-brand"><span className="admin-brand-mark" aria-hidden="true">OL</span><div><h1>Scanner</h1><small>{staffName}</small></div></div>
-        <button type="button" onClick={async () => { await fetch("/api/admin/logout", { method: "POST" }); router.replace("/scanner/login"); router.refresh(); }}>Quitter</button>
+        <button type="button" onClick={async () => {
+          const response = await fetch("/api/admin/logout", {
+            method: "POST",
+            headers: { "x-csrf-token": csrfToken },
+          });
+          if (!response.ok) return;
+          router.replace("/scanner/login");
+          router.refresh();
+        }}>Quitter</button>
       </header>
 
       <section className="scanner-event-picker">
