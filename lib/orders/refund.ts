@@ -26,15 +26,16 @@ interface PreparedRefund {
   paymentExternalId: string;
   providerPaymentId: string;
   amountCents: number;
+  currency: string;
   reason: string;
 }
 
 async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<
-      { id: string; order_id: string; provider_payment_id: string | null; amount_cents: number; status: string }[]
+      { id: string; order_id: string; provider_payment_id: string | null; amount_cents: number; currency: string; status: string }[]
     >`
-      SELECT id, order_id, provider_payment_id, amount_cents, status
+      SELECT id, order_id, provider_payment_id, amount_cents, currency, status
       FROM payments WHERE id = ${input.paymentId} FOR UPDATE
     `;
     const payment = paymentRows[0];
@@ -102,6 +103,7 @@ async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund
       paymentExternalId: payment.id,
       providerPaymentId: payment.provider_payment_id,
       amountCents: input.amountCents,
+      currency: payment.currency,
       reason: input.reason,
     };
   });
@@ -143,6 +145,9 @@ export async function finalizeRefundSuccess(
         orderStatus: order.status,
       };
     }
+    if (refund.status === "failed") {
+      throw new ApiError(409, "REFUND_STATE_CONFLICT", "A failed refund cannot later be finalized as succeeded without reconciliation evidence");
+    }
 
     const succeededOthers = await tx.refund.aggregate({
       where: { paymentId: payment.id, status: "succeeded", id: { not: refund.id } },
@@ -161,10 +166,7 @@ export async function finalizeRefundSuccess(
 
     await tx.refund.update({
       where: { id: refund.id },
-      data: {
-        status: "succeeded",
-        providerRefundId: providerRefundId ?? refund.provider_refund_id,
-      },
+      data: { status: "succeeded", providerRefundId: providerRefundId ?? refund.provider_refund_id },
     });
     await tx.payment.update({ where: { id: payment.id }, data: { status: paymentStatus } });
     await tx.order.update({ where: { id: order.id }, data: { status: orderStatus } });
@@ -175,6 +177,8 @@ export async function finalizeRefundSuccess(
         select: { id: true, ticketCategoryId: true },
       });
       for (const item of items) {
+        // Used tickets remain used and never re-enter inventory. Only tickets
+        // that are still valid are cancelled/released on a confirmed full refund.
         const cancelled = await tx.ticket.updateMany({
           where: { orderItemId: item.id, status: "valid" },
           data: { status: "cancelled" },
@@ -184,6 +188,7 @@ export async function finalizeRefundSuccess(
             UPDATE inventory
             SET sold_quantity = sold_quantity - ${cancelled.count}
             WHERE ticket_category_id = ${item.ticketCategoryId}
+              AND sold_quantity >= ${cancelled.count}
           `;
         }
       }
@@ -207,6 +212,8 @@ export async function finalizeRefundSuccess(
     return { changed: true, paymentStatus, orderStatus };
   });
 
+  // The finalizer is idempotent: exactly one transition has changed=true, so
+  // retries/replayed webhooks cannot send duplicate confirmation emails.
   if (outcome.changed) await sendRefundConfirmationEmail(refundId);
   return { state: "succeeded", ...outcome };
 }
@@ -237,25 +244,23 @@ export async function finalizeRefundFailure(refundId: string, providerRefundId?:
   });
 }
 
-export async function initiateRefund(input: InitiateRefundInput): Promise<InitiateRefundResult> {
-  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
-    throw new ApiError(400, "INVALID_AMOUNT", "Refund amount must be a positive number of cents");
-  }
-
-  const prepared = await prepareRefund(input);
+async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateRefundResult> {
   const provider = getPaymentProvider();
-
   let result;
   try {
     result = await provider.refund({
       providerPaymentId: prepared.providerPaymentId,
       paymentExternalId: prepared.paymentExternalId,
       amountCents: prepared.amountCents,
+      currency: prepared.currency,
       reason: prepared.reason,
       idempotencyKey: prepared.refundId,
     });
   } catch (error) {
-    console.error("provider.refund submission failed", error);
+    console.error(
+      "provider.refund submission failed",
+      error instanceof ProviderRequestError ? { name: error.name, status: error.status, outcomeUnknown: error.outcomeUnknown } : { name: "unknown" },
+    );
 
     const definitiveRejection =
       provider.name === "fake" ||
@@ -273,7 +278,7 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
         entityType: "refund",
         entityId: prepared.refundId,
         metadata: {
-          error: error instanceof Error ? error.message : "unknown provider error",
+          provider: provider.name,
           providerStatus: error instanceof ProviderRequestError ? error.status : null,
         },
       },
@@ -308,4 +313,122 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
     },
   });
   return { refundId: prepared.refundId, state: "processing" };
+}
+
+export async function initiateRefund(input: InitiateRefundInput): Promise<InitiateRefundResult> {
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+    throw new ApiError(400, "INVALID_AMOUNT", "Refund amount must be a positive number of cents");
+  }
+  return submitPreparedRefund(await prepareRefund(input));
+}
+
+const REFUND_RECONCILIATION_MIN_AGE_MS = 30_000;
+
+/**
+ * Reconciles asynchronous/ambiguous refunds without ever creating a new
+ * business reference. A missing provider record is replayed with the exact
+ * same Refund.id/refundReference, which ChariPay documents as idempotent.
+ */
+export async function reconcileProcessingRefunds(batchSize = 20): Promise<{
+  checked: number;
+  succeeded: number;
+  failed: number;
+  replayed: number;
+  pending: number;
+  errors: number;
+}> {
+  const provider = getPaymentProvider();
+  const cutoff = new Date(Date.now() - REFUND_RECONCILIATION_MIN_AGE_MS);
+  const refunds = await prisma.refund.findMany({
+    where: {
+      status: "processing",
+      createdAt: { lte: cutoff },
+      payment: { provider: provider.name },
+    },
+    include: { payment: true },
+    orderBy: { createdAt: "asc" },
+    take: Math.max(1, Math.min(batchSize, 100)),
+  });
+
+  const stats = { checked: 0, succeeded: 0, failed: 0, replayed: 0, pending: 0, errors: 0 };
+  for (const refund of refunds) {
+    stats.checked += 1;
+    if (!refund.payment.providerPaymentId) {
+      stats.errors += 1;
+      await prisma.auditLog.create({
+        data: {
+          actorType: "system",
+          action: "refund.reconciliation_error",
+          entityType: "refund",
+          entityId: refund.id,
+          metadata: { reason: "missing_provider_payment_id" },
+        },
+      });
+      continue;
+    }
+
+    try {
+      const reference = refund.providerRefundId ?? refund.id;
+      const status = await provider.getRefundStatus(reference);
+      if (status.status === "succeeded") {
+        await finalizeRefundSuccess(refund.id, status.providerRefundId ?? refund.providerRefundId);
+        stats.succeeded += 1;
+        continue;
+      }
+      if (status.status === "failed") {
+        await finalizeRefundFailure(refund.id, status.providerRefundId ?? refund.providerRefundId);
+        stats.failed += 1;
+        continue;
+      }
+      if (status.status === "pending") {
+        if (status.providerRefundId && status.providerRefundId !== refund.providerRefundId) {
+          await prisma.refund.updateMany({
+            where: { id: refund.id, status: "processing" },
+            data: { providerRefundId: status.providerRefundId },
+          });
+        }
+        stats.pending += 1;
+        continue;
+      }
+
+      // The lookup found no provider record. Replay the original intent using
+      // the SAME Refund.id/reference; never mint a fresh refundReference.
+      const replay = await provider.refund({
+        providerPaymentId: refund.payment.providerPaymentId,
+        paymentExternalId: refund.payment.id,
+        amountCents: refund.amountCents,
+        currency: refund.payment.currency,
+        reason: refund.reason,
+        idempotencyKey: refund.id,
+      });
+      stats.replayed += 1;
+      if (replay.providerRefundId) {
+        await prisma.refund.updateMany({
+          where: { id: refund.id, status: "processing" },
+          data: { providerRefundId: replay.providerRefundId },
+        });
+      }
+      if (replay.state === "succeeded") {
+        await finalizeRefundSuccess(refund.id, replay.providerRefundId);
+        stats.succeeded += 1;
+      } else {
+        stats.pending += 1;
+      }
+    } catch (error) {
+      stats.errors += 1;
+      await prisma.auditLog.create({
+        data: {
+          actorType: "system",
+          action: "refund.reconciliation_error",
+          entityType: "refund",
+          entityId: refund.id,
+          metadata: {
+            provider: provider.name,
+            providerStatus: error instanceof ProviderRequestError ? error.status : null,
+          },
+        },
+      });
+    }
+  }
+  return stats;
 }
