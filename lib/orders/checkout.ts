@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { CHECKOUT_EXTENSION_MS } from "@/lib/inventory";
-import { getPaymentProvider } from "@/lib/payments";
+import { getOnlyLivePublicUrl, getPaymentProvider } from "@/lib/payments";
 import { ApiError } from "@/lib/http/errors";
 import type { Order, Payment } from "@prisma/client";
 
@@ -124,7 +124,7 @@ async function claimAndInitializeProvider(
   order: Order,
   payment: Payment,
   userId: string,
-  baseUrl: string,
+  requestBaseUrl: string,
 ): Promise<StartCheckoutResult> {
   let current = payment;
 
@@ -150,6 +150,10 @@ async function claimAndInitializeProvider(
 
     try {
       const provider = getPaymentProvider();
+      // FakeProvider may use the incoming application origin in isolated local
+      // tests. Real PSP callback/return URLs never trust request.url/Host: they
+      // are derived from the explicitly configured canonical public origin.
+      const callbackBaseUrl = provider.name === "charipay" ? getOnlyLivePublicUrl() : requestBaseUrl;
       const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
       const created = await provider.createPayment({
         paymentId: payment.id,
@@ -158,8 +162,8 @@ async function claimAndInitializeProvider(
         currency: payment.currency,
         idempotencyKey: payment.idempotencyKey,
         customerEmail: user.email,
-        returnUrl: `${baseUrl}/orders/${order.id}`,
-        webhookUrl: `${baseUrl}/api/payments/webhook/${provider.name}`,
+        returnUrl: `${callbackBaseUrl}/orders/${order.id}`,
+        webhookUrl: `${callbackBaseUrl}/api/payments/webhook/${provider.name}`,
         expiresAt: order.expiresAt ?? undefined,
       });
 
@@ -169,7 +173,7 @@ async function claimAndInitializeProvider(
       });
       return { orderId: order.id, redirectUrl: updated.redirectUrl! };
     } catch (error) {
-      console.error("provider.createPayment failed", error);
+      console.error("provider.createPayment failed", error instanceof Error ? error.name : "unknown error");
       await prisma.payment.updateMany({
         where: { id: payment.id, providerPaymentId: null },
         data: { providerInitAt: null },
@@ -189,9 +193,9 @@ async function claimAndInitializeProvider(
   );
 }
 
-export async function startCheckout(reservationId: string, userId: string, baseUrl: string): Promise<StartCheckoutResult> {
+export async function startCheckout(reservationId: string, userId: string, requestBaseUrl: string): Promise<StartCheckoutResult> {
   const { order, payment } = await ensurePendingOrderAndPayment(reservationId, userId);
-  return claimAndInitializeProvider(order, payment, userId, baseUrl);
+  return claimAndInitializeProvider(order, payment, userId, requestBaseUrl);
 }
 
 export async function getPaymentForFakeCheckoutPage(paymentId: string) {
