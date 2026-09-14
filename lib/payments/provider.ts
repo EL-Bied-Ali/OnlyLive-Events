@@ -13,8 +13,8 @@ export interface CreatePaymentInput {
   customerEmail: string;
   /** Browser return destination. A redirect is never proof of payment. */
   returnUrl: string;
-  /** Provider callback endpoint. Must be public HTTPS for ChariPay. */
-  webhookUrl: string;
+  /** Provider callback endpoint. Required by the ChariPay adapter. */
+  webhookUrl?: string;
 }
 
 export interface CreatePaymentResult {
@@ -36,13 +36,9 @@ export type PaymentWebhookEventType =
   | "refund.failed";
 
 export interface ParsedWebhookEvent {
-  /** Stable provider event id used for webhook deduplication. */
   externalEventId: string;
-  /** Provider payment/session reference when the event is payment-scoped. */
   providerPaymentId: string;
-  /** Stable OnlyLive Payment id echoed through provider externalId/metadata when available. */
   paymentExternalId?: string;
-  /** Stable OnlyLive Refund id echoed through refundReference when refund-scoped. */
   refundExternalId?: string;
   type: PaymentWebhookEventType;
   amountCents: number;
@@ -53,21 +49,14 @@ export interface ParsedWebhookEvent {
 
 export interface RefundInput {
   providerPaymentId: string;
-  /** Stable OnlyLive Payment id used as ChariPay's payment externalId. */
   paymentExternalId: string;
   amountCents: number;
   reason: string;
-  /** Stable refund reference. Replaying it must never create a second refund. */
   idempotencyKey: string;
 }
 
 export interface RefundResult {
-  /** Provider refund id/reference when returned by the provider. */
   providerRefundId: string | null;
-  /**
-   * `succeeded` is used by the local FakeProvider. Real ChariPay refunds are
-   * asynchronous and return `processing`; final state arrives by webhook.
-   */
   state: "processing" | "succeeded";
 }
 
