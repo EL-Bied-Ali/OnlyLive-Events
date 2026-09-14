@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   ADMIN_CSRF_HEADER,
   assertAdminCsrf,
+  assertAdminCsrfToken,
   assertSameOriginMutation,
   createAdminCsrfToken,
 } from "@/lib/auth/adminCsrf";
@@ -54,6 +55,16 @@ describe("admin CSRF synchronizer token", () => {
     expect(first).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
+  it("verifies a token independently of transport and rejects cross-session replay", () => {
+    const sessionA = "opaque-session-token-a";
+    const sessionB = "opaque-session-token-b";
+    const tokenA = createAdminCsrfToken(sessionA);
+
+    expect(() => assertAdminCsrfToken(sessionA, tokenA)).not.toThrow();
+    expect(() => assertAdminCsrfToken(sessionB, tokenA)).toThrow("Invalid CSRF token");
+    expect(() => assertAdminCsrfToken(sessionA, undefined)).toThrow("CSRF token is required");
+  });
+
   it("accepts a same-origin request with the token derived from its session", () => {
     expect(() => assertAdminCsrf(mutationRequest())).not.toThrow();
   });
@@ -87,7 +98,20 @@ describe("pre-authentication same-origin guard", () => {
     expect(() => assertSameOriginMutation(request)).toThrow("Cross-origin request rejected");
   });
 
-  it("honors the reverse proxy host and protocol when reconstructing the public origin", () => {
+  it("accepts Vercel's documented forwarding-header shape", () => {
+    const request = new NextRequest("https://onlylive-events.vercel.app/api/admin/login", {
+      method: "POST",
+      headers: {
+        host: "onlylive-events.vercel.app",
+        "x-forwarded-host": "onlylive-events.vercel.app",
+        "x-forwarded-proto": "https",
+        origin: "https://onlylive-events.vercel.app",
+      },
+    });
+    expect(() => assertSameOriginMutation(request)).not.toThrow();
+  });
+
+  it("honors a reverse proxy's public host and protocol when reconstructing the public origin", () => {
     const request = new NextRequest("http://internal:3000/api/admin/login", {
       method: "POST",
       headers: {
