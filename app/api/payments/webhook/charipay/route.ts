@@ -11,10 +11,9 @@ export const runtime = "nodejs";
 
 type WebhookResult =
   | { kind: "duplicate" }
-  | { kind: "invalid_signature" }
   | { kind: "amount_mismatch" }
   | { kind: "event_collision" }
-  | { kind: "processed"; outcome: string; orderId?: string; refundId?: string };
+  | { kind: "processed"; outcome: string; orderId?: string; refundId?: string; paymentEventId?: string };
 
 function consistentClaim(
   existing: { paymentId: string; eventType: string; signatureValid: boolean; rawPayload: unknown },
@@ -102,15 +101,15 @@ export async function POST(request: NextRequest) {
       }
 
       if (event.type === "refund.succeeded" || event.type === "refund.failed") {
-        // Refund finalization uses its own row-locked transaction after this
-        // event claim commits. We only mark the event processed here after
-        // returning a dispatch outcome; the outer handler performs the
-        // idempotent finalizer immediately afterward.
-        await tx.paymentEvent.update({ where: { id: paymentEventId }, data: { processedAt: new Date() } });
+        // Do NOT set processedAt yet. The refund finalizer runs after this
+        // claim transaction commits. If the process crashes before/during
+        // finalization, ChariPay's retry sees processedAt=null and safely
+        // retries the idempotent finalizer instead of losing the event.
         return {
           kind: "processed",
           outcome: event.type,
           refundId: refund!.id,
+          paymentEventId,
         } as const;
       }
 
@@ -154,12 +153,13 @@ export async function POST(request: NextRequest) {
     if (result.kind === "duplicate") return NextResponse.json({ ok: true, duplicate: true });
     if (result.kind === "amount_mismatch") return NextResponse.json({ error: "AMOUNT_MISMATCH" }, { status: 409 });
     if (result.kind === "event_collision") return NextResponse.json({ error: "EVENT_COLLISION" }, { status: 409 });
-    if (result.kind === "invalid_signature") return NextResponse.json({ error: "INVALID_SIGNATURE" }, { status: 401 });
 
-    if (result.outcome === "refund.succeeded" && result.refundId) {
+    if (result.outcome === "refund.succeeded" && result.refundId && result.paymentEventId) {
       await finalizeRefundSuccess(result.refundId);
-    } else if (result.outcome === "refund.failed" && result.refundId) {
+      await prisma.paymentEvent.update({ where: { id: result.paymentEventId }, data: { processedAt: new Date() } });
+    } else if (result.outcome === "refund.failed" && result.refundId && result.paymentEventId) {
       await finalizeRefundFailure(result.refundId);
+      await prisma.paymentEvent.update({ where: { id: result.paymentEventId }, data: { processedAt: new Date() } });
     } else if (result.outcome === "paid" && result.orderId) {
       await sendOrderConfirmationEmail(result.orderId);
     } else if ((result.outcome === "failed" || result.outcome === "cancelled") && result.orderId) {
