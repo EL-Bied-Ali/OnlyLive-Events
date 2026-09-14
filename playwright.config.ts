@@ -14,7 +14,10 @@ const e2ePort = Number(process.env.PLAYWRIGHT_PORT ?? "3100");
 if (!Number.isSafeInteger(e2ePort) || e2ePort < 1 || e2ePort > 65535) {
   throw new Error("PLAYWRIGHT_PORT must be a valid TCP port.");
 }
-const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${e2ePort}`;
+// Browser tests always target the isolated server started below. Supporting
+// an arbitrary external base URL here would make it possible to prepare one
+// DB while accidentally testing a different deployment/database.
+const baseURL = `http://127.0.0.1:${e2ePort}`;
 
 export default defineConfig({
   testDir: "./tests/e2e",
