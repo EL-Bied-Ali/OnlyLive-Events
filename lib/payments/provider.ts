@@ -82,12 +82,12 @@ export interface RefundResult {
   /** Stable reference used to reconcile future provider callbacks/status. */
   providerRefundId: string;
   /** Some PSPs settle asynchronously; do not mark business state refunded until succeeded. */
-  status: "pending" | "succeeded";
+  status: "pending" | "succeeded" | "failed";
 }
 
 export interface RefundStatusResult {
   providerRefundId: string;
-  status: "pending" | "succeeded" | "failed";
+  status: "pending" | "succeeded" | "failed" | "not_found";
 }
 
 export interface PaymentProvider {
