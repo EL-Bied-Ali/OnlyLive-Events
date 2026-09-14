@@ -1,6 +1,21 @@
 import "dotenv/config";
 import { defineConfig, devices } from "@playwright/test";
 
+const e2eDatabaseUrl = process.env.E2E_DATABASE_URL;
+if (!e2eDatabaseUrl) {
+  throw new Error("E2E_DATABASE_URL is required for Playwright. Refusing to fall back to DATABASE_URL.");
+}
+
+// Test files import Prisma directly, so the Playwright runner itself — not
+// just the spawned Next.js server — must be pinned to the isolated e2e DB.
+process.env.DATABASE_URL = e2eDatabaseUrl;
+
+const e2ePort = Number(process.env.PLAYWRIGHT_PORT ?? "3100");
+if (!Number.isSafeInteger(e2ePort) || e2ePort < 1 || e2ePort > 65535) {
+  throw new Error("PLAYWRIGHT_PORT must be a valid TCP port.");
+}
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? `http://127.0.0.1:${e2ePort}`;
+
 export default defineConfig({
   testDir: "./tests/e2e",
   fullyParallel: false,
@@ -9,7 +24,7 @@ export default defineConfig({
   workers: 1,
   reporter: "list",
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000",
+    baseURL,
     trace: "on-first-retry",
   },
   projects: [
@@ -29,17 +44,18 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command: "npm run build && npm run start",
-    url: "http://localhost:3000/api/health",
-    reuseExistingServer: !process.env.CI,
+    command: `npm run build && npm run start -- -p ${e2ePort}`,
+    url: `${baseURL}/api/health`,
+    // Never reuse a developer's existing Next.js process: it may be attached
+    // to DATABASE_URL and would defeat the database-isolation guarantee.
+    reuseExistingServer: false,
     timeout: 180_000,
     env: {
+      DATABASE_URL: e2eDatabaseUrl,
+      NEXTAUTH_URL: baseURL,
       // `next start` always runs with NODE_ENV=production, and the fake
-      // payment provider now refuses to boot in production without this
-      // explicit opt-in (see lib/payments/index.ts). A local/CI e2e run
-      // against `next start` is exactly the deliberate,
-      // non-production-traffic case that flag exists for — this is
-      // never set for a real deployment.
+      // payment provider refuses to boot in production without this explicit
+      // opt-in. E2E uses an isolated database and no real customer traffic.
       ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true",
       // Keep rate limiting enabled in browser tests so the real Auth.js
       // callback path is covered. The IP ceilings are deliberately above
