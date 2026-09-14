@@ -1,169 +1,150 @@
 # ChariPay integration
 
-This document records the provider-specific facts used by PR #13. It is
-intentionally narrower than `docs/PAYMENTS.md`: generic payment/order rules stay
-there; ChariPay API details live here so they are not guessed from the fake
-provider.
+Provider-specific source of truth for PR #13. Generic order/payment invariants live in `docs/PAYMENTS.md`.
 
-Source of truth: ChariPay's published v1 API reference (`charipay.ma/*/api-docs`),
-which states that it is generated from the provider's OpenAPI contract. Do not
-change endpoint/field/signature behavior from memory; re-check the official
-contract first.
+The public reference is generated from ChariPay's OpenAPI contract. Re-check that contract before changing endpoint names, fields, signatures, status handling, or retry semantics.
 
 ## Environment and credentials
 
-- API base URL is the same in sandbox and production:
-  `https://api-psp.charipay.ma`.
-- ChariPay itself selects the provider environment from the API-key prefix:
-  sandbox uses `chari_sk_test_...`, production uses `chari_sk_live_...`.
-- OnlyLive additionally requires explicit `CHARIPAY_ENV=sandbox|live` as a
-  deployment safety assertion; it must agree with the key prefix.
+- API base URL: `https://api-psp.charipay.ma` in sandbox and production.
+- Test key prefix: `chari_sk_test_`; live: `chari_sk_live_`.
+- OnlyLive additionally requires `CHARIPAY_ENV=sandbox|live` and checks that it matches the key prefix.
 - Vercel Preview/Development and non-Vercel runtimes permit sandbox only.
-  Vercel Production requires live mode, `CHARIPAY_PROVIDER_VERIFIED=true`, and
-  a 16+ character `CRON_SECRET` for the automated reconciliation fallback.
-- `PAYMENT_PROVIDER=charipay` also requires `CHARIPAY_WEBHOOK_SECRET` and a
-  canonical `ONLYLIVE_PUBLIC_URL`. `instrumentation.ts` calls
-  `getPaymentProvider()` at startup, so unsafe configuration fails closed
-  before customer traffic is served.
-- Sandbox and production webhook endpoints/secrets are separate.
-- Never commit or log API keys or webhook signing secrets.
+- Vercel Production requires `CHARIPAY_ENV=live`, `CHARIPAY_PROVIDER_VERIFIED=true`, a canonical `ONLYLIVE_PUBLIC_URL`, webhook secret, and a 16+ char `CRON_SECRET`.
+- Never log API keys or webhook secrets.
+- Historical Payment rows are routed by their persisted `Payment.provider`; `PAYMENT_PROVIDER` selects only the provider for newly-created payments.
 
 ## Hosted checkout
 
-OnlyLive uses `POST /v1/payment-sessions`, never the direct-card endpoints.
-This keeps PAN/CVV outside OnlyLive's application and browser code.
+OnlyLive uses `POST /v1/payment-sessions`, never direct card endpoints. PAN/CVV therefore stay outside OnlyLive.
 
-The adapter sends:
+For each session the adapter sends MAD major units, stable OnlyLive Payment id as `externalId`, a stable `Idempotency-Key`, order id, buyer email, HTTPS callbacks, `singleUse:true`, `notifyOnFailure:true`, and reconciliation ids in metadata.
 
-- amount in MAD major units (OnlyLive stores integer centimes internally);
-- the OnlyLive Payment id as `externalId`;
-- the existing Payment idempotency key as `Idempotency-Key`;
-- the OnlyLive order id as the provider order reference;
-- buyer email;
-- HTTPS accept/decline and notification URLs;
-- the OnlyLive checkout expiration as `expiresAt`;
-- `singleUse: true` and `notifyOnFailure: true`;
-- opaque OnlyLive reconciliation ids in `metadata`.
+`Idempotency-Key` protects network retries and `externalId` protects business re-issue. Both must remain stable for one OnlyLive Payment.
 
-The response must contain `sessionId` and `checkoutUrl`; both are persisted on
-the Payment. Browser return is display/navigation only. It is never accepted as
-proof that money moved.
+ChariPay must return `sessionId` and an HTTPS `checkoutUrl`. A malformed successful response is treated as an unknown provider outcome, never as proof that no session exists.
 
-ChariPay defaults sessions to 72 hours if `expiresAt` is omitted. OnlyLive does
-not use that default: the provider session expires with the checkout hold, which
-reduces late-payment/unfulfillable-order risk. The existing late-payment
-reconciliation path remains defense in depth.
+### Expiry invariant
 
-All declared callback URLs must be public HTTPS on the default port. OnlyLive
-builds ChariPay return/notification URLs exclusively from `ONLYLIVE_PUBLIC_URL`
-— never from `request.url`, Host or Origin headers. Local sandbox testing
-therefore needs a deliberate public HTTPS preview/tunnel; invalid origins are
-rejected before sending the request.
+Provider checkout expires 60 seconds before the local Order/Reservation deadline. More importantly, an order-linked reservation is **never released only because the local clock passed its deadline**. Once checkout started, payment may be in flight; inventory remains reserved until provider state is explicitly reconciled.
 
-## Webhook verification and idempotency
+After local expiry:
 
-The provider signs the exact raw request body. Verification must happen before
-JSON parsing or business-state lookup.
+- a provider redirect is never blindly reused;
+- a new provider session is not started;
+- OnlyLive returns `CHECKOUT_RECONCILIATION_REQUIRED` when a provider session already exists;
+- pre-checkout holds (`orderId IS NULL`) still expire/release normally.
 
-- `X-CHARI-TIMESTAMP`: epoch milliseconds.
-- `X-CHARI-SIGNATURE`: lowercase hex HMAC-SHA256 of
-  `timestamp + "." + rawBody`.
-- Reject timestamps outside the documented ±5-minute window.
-- Compare digests with `timingSafeEqual`.
-- Deduplicate on `Chari-Event-Id`, never `Chari-Webhook-Id`; delivery ids change
-  across retries while the logical event id is stable.
-- During secret rotation ChariPay may also send
-  `X-CHARI-SIGNATURE-NEXT`; the receiver can accept either configured signing
-  secret/signature during the transition.
-- Delivery is at-least-once and may be out of order; duplicate processing must
-  therefore remain harmless.
+This is intentionally fail-safe. The exact response/status contract for retrieving an expired Payment Session must be captured in sandbox before OnlyLive automatically closes/reopens one of these stuck checkouts. Until then the system prefers temporarily-held inventory over selling stock that may already have been paid for.
 
-Only subscribe the production endpoint to event types OnlyLive handles. The
-current integration needs `payment.succeeded`, `payment.failed`,
-`refund.succeeded`, and `refund.failed`.
+Browser return is display/navigation only, never proof of payment. The customer order page refreshes boundedly while payment/reconciliation is non-terminal.
 
-Payment and refund events must carry an explicit MAD currency and a parseable
-provider amount before any financial mutation. Refund events additionally must
-match the stored Refund amount and resolved Payment, plus any external/provider
-identifiers supplied by ChariPay. Those refund facts are re-checked again under
-the Refund/Payment row locks inside the finalizer transaction, so a concurrent
-reconciliation update cannot invalidate a pre-check and then be overwritten. A
-valid signature by itself is never enough.
+## Webhook verification
 
-### Exact JSON payload gate
+- Signature: HMAC-SHA256 over `timestamp + "." + rawBody`.
+- `X-CHARI-TIMESTAMP` is epoch milliseconds; reject more than ±5 min skew.
+- Signature input must be **exactly 64 hexadecimal characters** before `Buffer.from(..., "hex")`; malformed odd-nibble strings are rejected.
+- Compare in constant time.
+- Deduplicate on `Chari-Event-Id`.
+- Delivery is at-least-once and may be out of order.
+- A correctly signed payload is still schema/integrity-validated before mutation.
 
-The public reference documents signing, headers, event names, metadata/external
-id reconciliation, and exposes the exact signed body through the delivery-log
-API. It does not expose a complete example body for every event in the public
-page text available to this development session.
+Payment events reconcile by OnlyLive `externalId` and, when supplied, provider `sessionId`. A missing optional session id does not force a mismatch.
 
-For that reason PR #13 is **not production-ready until a real sandbox delivery
-has been captured** (synthetic `payment.succeeded`, real success/failure, and
-refund success/failure) and the adapter's JSON fixture/mapping has been pinned
-to those exact signed bodies. Current parsing is deliberately fail-closed: a
-payment event without usable reconciliation/amount data cannot generate a
-ticket.
+Refund events must match stored refund amount, MAD currency, Payment and any provider/external identifiers supplied. Evidence is rechecked under DB locks in the finalizer transaction.
+
+A signed synthetic endpoint test (`Test:true`) is acknowledged with no financial mutation and is recorded in AuditLog.
+
+A signed provider refund unknown to OnlyLive (for example a portal/API refund created outside OnlyLive) is captured durably as `refund.provider_unknown` and acknowledged `202` instead of being retried forever. **Operational policy before go-live: do not initiate refunds in the ChariPay portal or another external client.** OnlyLive cannot yet represent those as first-class Refund rows because its model requires an OnlyLive admin initiator. Import/source-aware support is a future enhancement.
+
+## Webhook endpoint registration gate
+
+Register a dedicated HTTPS endpoint on port 443 with an explicit allowlist only:
+
+- `payment.succeeded`
+- `payment.failed`
+- `refund.succeeded`
+- `refund.failed`
+
+Pin the webhook `apiVersion` to the provider's published payload contract version (the public API reference is currently v1.0.0) and verify the exact accepted literal in sandbox before final provider verification. Never leave `enabledEvents` null/empty, because that subscribes to all current and future events.
+
+The registration secret is returned only once. Store it as a secret. Secret rotation behavior and `X-CHARI-SIGNATURE-NEXT` must be exercised in sandbox and fixtures pinned to observed deliveries.
 
 ## Refund lifecycle
 
-ChariPay refunds are asynchronous.
+Refunds are asynchronous. `Refund.id` is the stable `refundReference` and must never be replaced by randomness on retry.
 
-`POST /v1/refunds` takes the original payment `externalId`, a caller-owned
-`refundReference`, reason and optional partial `refundAmount`. A fresh request
-returns `202 Accepted`; final success/failure arrives by webhook. Replaying the
-same `refundReference` returns the existing refund instead of debiting twice.
+1. Under Payment/Order locks, reserve refundable balance by inserting `Refund(status=processing)`.
+2. Commit before external network I/O.
+3. Submit with the same stable reference.
+4. `processing + succeeded` both reserve the balance.
+5. Signed success finalizes Payment/Order/tickets/inventory idempotently.
+6. Signed/provider-reconciled failure marks only the Refund failed and makes that amount available again.
 
-OnlyLive therefore uses the Refund row id as the stable refund reference and
-runs refunds in two phases:
+Conservative response classification:
 
-1. Under Payment/Order locks, validate refundable balance and create one durable
-   Refund row in `processing`. Both `processing` and `succeeded` amounts reserve
-   refundable balance, so concurrent submissions cannot over-refund.
-2. Commit that row **before** external network I/O, then submit it to ChariPay.
-3. Do not change Payment/Order/ticket/inventory state while the provider refund
-   is merely pending.
-4. On signed `refund.succeeded`, finalize idempotently: update Refund,
-   Payment/Order status, cancel still-valid tickets and release sold inventory
-   only when the payment becomes fully refunded, then send confirmation email.
-5. On signed `refund.failed`, mark only that Refund failed and free its amount
-   for a later attempt.
+- network/timeout, 408, 429, 5xx => unknown / remain `processing`;
+- `409 IDEMPOTENCY_CONFLICT` => unknown / remain `processing` and reconcile the same reference;
+- malformed/empty/non-JSON/incomplete 2xx => unknown / remain `processing`;
+- only a clearly definitive provider rejection may transition the local Refund to `failed`.
 
-A provider 4xx response is treated as a definitive rejection; 408/429/5xx and
-network failures are treated conservatively as ambiguous. The same Refund stays
-`processing` and keeps its reference/amount reserved so a second random refund
-cannot accidentally return the money twice. The housekeeping sweep queries
-`GET /v1/refunds/{reference}`; `SUCCESS`/`FAILED` settle locally, `PENDING`
-remains reserved, and `404/not_found` replays the exact same Refund.id as
-`refundReference`, which ChariPay documents as idempotent. The repository's
-`vercel.json` invokes the authenticated housekeeping GET once daily as a
-conservative default; an external or differently configured scheduler may call
-the same endpoint more frequently without changing refund semantics.
+Provider HTTP calls have a bounded timeout. `Retry-After` and response correlation/request ids are captured for safe diagnostics/backoff without logging secrets.
 
-Refund webhook event claims keep `PaymentEvent.processedAt = null` until the
-refund finalizer succeeds. If the server crashes between claim and business
-update, provider retry re-enters the idempotent finalizer instead of silently
-losing a money event. A failed local refund is not later promoted to success
-from webhook ordering alone; contradictory terminal states require explicit
-provider reconciliation evidence. A failure never downgrades a succeeded refund.
+### Refund reconciliation
 
-## Required sandbox acceptance before merge/go-live
+Housekeeping uses a fair claimed reconciler:
 
-Before PR #13 can be considered provider-verified:
+- due rows are claimed with `FOR UPDATE SKIP LOCKED`;
+- claimed rows rotate via `updated_at`, preventing the oldest pending batch from starving newer refunds;
+- concurrent workers claim different rows;
+- provider `Retry-After` defers the row;
+- lookup `SUCCESS`/`FAILED` finalizes locally;
+- `PENDING` remains reserved;
+- `not_found` replays **the same** Refund id/reference.
 
-1. create a ChariPay sandbox account/key;
-2. expose a deliberate HTTPS preview/tunnel for the OnlyLive webhook;
-3. register an endpoint with an explicit event allowlist and save its signing
-   secret securely;
-4. send ChariPay's synthetic signed test event and compare the exact body with
-   the fixture/parser;
-5. complete one hosted checkout with the official sandbox card and 3-D Secure;
-6. exercise a failed payment with `notifyOnFailure` enabled;
-7. submit a full/partial refund and observe `refund.succeeded`/`failed`;
-8. replay one logical webhook and one refund reference to prove provider-side
-   idempotency against the database-side guarantees;
-9. inspect the provider delivery/reconciliation log and capture relevant
-   correlation ids without logging secrets/card data.
+The repository's Vercel cron currently runs housekeeping once daily, matching Hobby-plan constraints. Webhooks remain the primary mechanism. A commercial deployment should choose a scheduler cadence together with ChariPay's real rate-limit/quota; do not increase frequency without backoff/budgeting.
 
-Production additionally requires OnlyLive's ChariPay merchant/KYB approval and
-live credentials. Switching to production must not change code or endpoints;
-only authorized environment secrets/configuration change.
+A full refund in `processing` also blocks any **new** ticket scan for that order. Used tickets stay used, but once a full refund is durably committed a still-valid ticket cannot be admitted until the refund fails or resolves. Scanner/refund paths serialize through the Order lock.
+
+Failed async refunds are included in the admin attention metric, and the admin refundable balance subtracts both `processing` and `succeeded` refunds.
+
+## Payment reconciliation after lost webhooks — sandbox gate
+
+ChariPay explicitly recommends `GET /v1/transactions` after webhook retries are exhausted. OnlyLive does **not** yet auto-finalize a payment from that API because the public page available during implementation does not expose enough response-object detail to write a money-moving parser without guessing.
+
+Before implementing this fallback, capture the real sandbox response/fixture. Any automatic payment recovery must require all of:
+
+- transaction type exactly `PAYMENT`;
+- status exactly `SUCCESS`;
+- unambiguous match to the OnlyLive Payment externalId;
+- exact stored amount;
+- currency exactly MAD;
+- no multiple conflicting candidates.
+
+Anything else creates AuditLog/admin attention and issues no ticket. Until this gate is closed, checkout-linked expired stock stays reserved rather than being blindly resold.
+
+## Cash gate
+
+ChariPay supports cash payments in its product. The Payment Session request schema does not expose a per-session method selector in the public reference. Before production, verify in the merchant account/support that CASH is disabled for OnlyLive hosted checkout. A short ticket hold is not compatible with a customer travelling to an agency; do not invent a cash flow in this PR.
+
+## Required sandbox acceptance before provider verification
+
+Before setting `CHARIPAY_PROVIDER_VERIFIED=true`:
+
+1. create/use the sandbox API key with least-privilege runtime permissions;
+2. deploy a deliberate public HTTPS OnlyLive preview;
+3. register the webhook endpoint with explicit allowlist and pinned `apiVersion`;
+4. store the signing secret outside Git;
+5. send the real synthetic signed test event and retrieve the delivery body;
+6. complete real sandbox hosted checkout + 3-D Secure success;
+7. exercise a real payment failure;
+8. exercise full and partial refund success/failure;
+9. replay a webhook delivery and the same `refundReference`;
+10. compare per-session notification URL behavior with the registered endpoint and ensure duplicate paths are harmless or remove the redundant path;
+11. verify real rate-limit/`Retry-After` headers and correlation ids;
+12. confirm CASH is disabled or explicitly redesign the hold flow;
+13. capture `GET /v1/transactions` responses needed for payment-loss reconciliation;
+14. capture Payment Session lookup/cancel responses and exact status values needed to release an expired checkout safely;
+15. replace/pin test fixtures to the exact signed provider bodies observed.
+
+Production also requires ChariPay KYB/live enablement. No code path may enable live credentials outside Vercel Production.
