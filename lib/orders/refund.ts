@@ -347,6 +347,11 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
     data: { providerRefundId: result.providerRefundId },
   });
 
+  if (result.status === "failed") {
+    await markRefundFailed(prepared.refundId, result.providerRefundId);
+    throw new ApiError(502, "PROVIDER_REFUND_FAILED", "The payment provider rejected the refund");
+  }
+
   if (result.status === "succeeded") {
     const finalized = await finalizeRefundSuccess(prepared.refundId, result.providerRefundId);
     return {
@@ -363,4 +368,97 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
     paymentStatus: prepared.paymentStatus,
     orderStatus: prepared.orderStatus,
   };
+}
+
+export interface RefundReconciliationResult {
+  checked: number;
+  pending: number;
+  succeeded: number;
+  failed: number;
+  replayedMissing: number;
+  errors: number;
+}
+
+/**
+ * Provider-status fallback for lost/delayed refund webhooks. Processing
+ * refunds reserve refundable balance, so leaving them stuck forever is a
+ * money-flow outage. The sweep checks old-enough rows in a bounded batch.
+ *
+ * If the provider cannot find our stable refundReference, the original POST
+ * may have failed before ChariPay accepted it. Replaying the exact same POST
+ * with the same Refund.id is safe because refundReference is ChariPay's
+ * idempotency key: an accepted original is returned, a truly-missing one is
+ * created once.
+ */
+export async function reconcileProcessingRefunds(batchSize = 20): Promise<RefundReconciliationResult> {
+  const provider = getPaymentProvider();
+  const cutoff = new Date(Date.now() - 30_000);
+  const rows = await prisma.refund.findMany({
+    where: {
+      status: "processing",
+      updatedAt: { lte: cutoff },
+      payment: { provider: provider.name },
+    },
+    include: {
+      payment: {
+        select: { id: true, providerPaymentId: true, currency: true },
+      },
+    },
+    orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
+    take: Math.max(1, Math.min(batchSize, 100)),
+  });
+
+  const summary: RefundReconciliationResult = {
+    checked: 0,
+    pending: 0,
+    succeeded: 0,
+    failed: 0,
+    replayedMissing: 0,
+    errors: 0,
+  };
+
+  for (const refund of rows) {
+    summary.checked += 1;
+    try {
+      let status = await provider.getRefundStatus(refund.providerRefundId ?? refund.id);
+
+      if (status.status === "not_found") {
+        if (!refund.payment.providerPaymentId) {
+          throw new Error("Processing refund belongs to a payment without a provider reference");
+        }
+        summary.replayedMissing += 1;
+        const replay = await provider.refund({
+          paymentExternalId: refund.payment.id,
+          providerPaymentId: refund.payment.providerPaymentId,
+          amountCents: refund.amountCents,
+          currency: refund.payment.currency,
+          reason: refund.reason,
+          idempotencyKey: refund.id,
+        });
+        await prisma.refund.update({
+          where: { id: refund.id },
+          data: { providerRefundId: replay.providerRefundId },
+        });
+        status = { providerRefundId: replay.providerRefundId, status: replay.status };
+      }
+
+      if (status.status === "succeeded") {
+        await finalizeRefundSuccess(refund.id, status.providerRefundId);
+        summary.succeeded += 1;
+      } else if (status.status === "failed") {
+        await markRefundFailed(refund.id, status.providerRefundId);
+        summary.failed += 1;
+      } else {
+        summary.pending += 1;
+      }
+    } catch (error) {
+      summary.errors += 1;
+      console.error("Refund reconciliation failed", {
+        refundId: refund.id,
+        error: error instanceof Error ? error.message : "unknown error",
+      });
+    }
+  }
+
+  return summary;
 }
