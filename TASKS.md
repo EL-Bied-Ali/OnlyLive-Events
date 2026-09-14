@@ -26,9 +26,8 @@ memory alone.
 - Seed script: the real Tiakola (Casablanca, 05 Dec 2026) event with
   VVIP/VIP/Gradins categories and Early Bird/Phase 1 sales phases, plus an
   optional environment-gated `super_admin` AdminUser.
-- Test suite: 88 Vitest unit/integration tests + 10 Playwright e2e tests,
-  all passing (`npm test`, `npm run test:e2e`). See tests.json for the
-  full mandated-scenario checklist and what's covered vs. still pending.
+- Test suite: Vitest unit/integration tests + Playwright e2e tests, all
+  passing in CI. See `tests.json` for the mandated-scenario checklist.
 - Docs: this file, `docs/ARCHITECTURE.md`, `docs/SECURITY.md`,
   `docs/PAYMENTS.md`, `CLAUDE.md`.
 
@@ -96,202 +95,122 @@ dismissed without evidence) and fixed:
    `failed`/`cancelled` was treated as `already_handled`, leaving a
    captured payment stranded on a dead order forever. Added
    `reconcileContradictorySuccess` (`lib/orders/fulfillment.ts`): attempts
-   atomic re-fulfillment from current stock, landing on `paid` (new
-   `OrderStatus`) if possible or the new `reconciliation_required` status
-   (human-resolved, audit-logged) if not. `Payment.status` is set to
-   `paid` either way — money captured is never hidden. Documented as a
-   stopgap pending the real PSP's official event-lifecycle docs (see
-   docs/PAYMENTS.md's Reconciliation section) — this is explicitly not
-   assumed to be the final policy.
-2. **Concurrent provider initialization** — `startCheckout` prevented
-   duplicate database Orders but not duplicate *provider calls*:
-   concurrent callers could all see `redirectUrl: null` and all call
-   `provider.createPayment` at once. Added a durable claim
-   (`payments.provider_init_at`, guarded `UPDATE`) so only one caller
-   calls the provider; others poll briefly instead. A stale claim (crash/
-   timeout) can be reclaimed after a timeout window. The stable
-   `idempotencyKey` is preserved across claims/retries.
-3. **Expired retry after provider failure** — a retry could still start a
-   brand-new provider payment for a reservation that had since expired
-   and been swept, if the first provider call had failed. Added an
-   expiry check (direct `expires_at` comparison, not dependent on the
-   sweep) before allowing a *new* provider-initialization attempt; an
-   already-completed initialization's stored redirect is still returned
-   regardless of expiry.
-4. **Expired holds inflated the purchase-limit count** — the per-user/
-   event total counted `active` reservations that were expired in fact
-   (`expires_at` in the past) but not yet flipped by the sweep, wrongly
-   consuming a customer's allowance. The count now excludes them directly
-   in its `WHERE` clause, without depending on the sweep.
-5. **Webhook reclaim consistency** — reprocessing an interrupted
-   (`processedAt = null`) `payment_events` row didn't verify it still
-   matched the current request's resolved payment, event type, or prior
-   signature validity. Added a consistency check
-   (`isConsistentWithExistingClaim`); any mismatch is rejected
-   (`409 EVENT_COLLISION`) and audited rather than reprocessed, and the
-   original row's `rawPayload`/`signatureValid` are never overwritten.
+   atomic re-fulfillment from current stock, landing on `paid` if possible
+   or `reconciliation_required` if not. `Payment.status` is set to `paid`
+   either way — captured money is never hidden.
+2. **Concurrent provider initialization** — `startCheckout` now uses a
+   durable `payments.provider_init_at` claim so concurrent callers invoke
+   `provider.createPayment` only once. A stale claim can be reclaimed and
+   the stable idempotency key survives retries.
+3. **Expired retry after provider failure** — a retry cannot start a new
+   provider payment after the reservation expires, even if the sweep has
+   not run yet; an already-stored redirect remains reusable.
+4. **Expired holds inflated the purchase-limit count** — expired active
+   reservations are excluded directly from the purchase-cap query.
+5. **Webhook reclaim consistency** — interrupted webhook claims are
+   reprocessed only when payment, event type and prior signature state are
+   consistent; collisions are rejected and audited.
 6. **Accidental `Hello-html` doc links** — checked; none exist in this
    repository. Rejected as not applicable.
 
-New regression tests (all passing): reconciliation (failed→succeeded
-while fulfillable, after resale, cancelled→succeeded, audit records),
-concurrent-checkout asserting `provider.createPayment` is called exactly
-once, expired-retry-after-provider-failure (swept and lazy/unswept),
-expired-hold purchase-limit exclusion (same category and cross-category),
-and webhook reclaim collisions (invalid-signature upgrade attempt,
-payment-id mismatch, event-type mismatch).
-
 ## Completed (admin dashboard foundation — PR #2)
 
-- Protected, read-only `/admin` overview with confirmed revenue, ticket,
-  check-in and pending-payment metrics.
-- Event/category inventory and order/payment monitoring views, including
-  prominent reconciliation alerts.
-- Separate page/API authorization for admin/support roles; customer and
-  scanner accounts cannot enter the back office.
-- Admin authentication and access boundaries covered in Playwright; the
-  full browser suite now runs in CI against disposable PostgreSQL data.
+- Protected, read-only `/admin` overview with revenue, ticket, check-in and
+  pending-payment metrics plus reconciliation alerts.
+- Separate admin/support authorization; customer and scanner accounts
+  cannot enter the back office.
+- Admin authentication/access boundaries covered in Playwright.
 
 ## Completed (atomic QR scanner — PR #3)
 
-- Mobile-first authenticated `/scanner` interface with rear-camera QR
-  decoding and a manual-code fallback.
-- Atomic server-side check-in with explicit `VALID`, `ALREADY_USED`,
-  `INVALID`, `CANCELLED` and `WRONG_EVENT` decisions; simultaneous scans
-  cannot admit the same ticket twice.
-- Scanner-only authorization boundary, network-only service worker, no
-  insecure offline validation, and SHA-256 audit digests instead of raw
-  bearer tokens.
-- Six PostgreSQL integration tests plus three Playwright scanner/access
-  tests, including concurrent scans from two devices.
+- Authenticated mobile-first `/scanner` with camera QR decoding and manual
+  fallback.
+- Atomic `VALID` / `ALREADY_USED` / `INVALID` / `CANCELLED` /
+  `WRONG_EVENT` decisions; concurrent scanners cannot double-admit.
+- Scanner-only authorization, network-only service worker and SHA-256 scan
+  digests instead of raw QR bearer tokens.
 
-## Completed (admin catalogue management — current branch)
+## Completed (admin catalogue management)
 
-- Authenticated event creation/editing, venue creation, category capacity
-  management and sales-phase creation/editing in the back office.
-- Only `admin` and `super_admin` can mutate the catalogue; `support`
-  remains read-only and scanner/customer sessions remain excluded.
-- Morocco wall-clock inputs are converted with the IANA
-  `Africa/Casablanca` timezone (including seasonal offset changes), never
-  with a hardcoded UTC offset.
-- Catalogue writes and purchases coordinate through shared/exclusive
-  transaction-scoped advisory locks. Capacity/phase limits cannot be
-  reduced below committed quantities, active phase windows cannot overlap,
-  and direct cancellation is blocked while tickets, live holds or pending
-  payments exist.
-- Every successful mutation writes its audit record in the same database
-  transaction.
+- Authenticated event/venue/category/sales-phase management.
+- Only `admin`/`super_admin` mutate; `support` is read-only.
+- Morocco wall-clock inputs use IANA `Africa/Casablanca` conversion.
+- Catalogue edits and purchases coordinate through advisory locks; capacity
+  and phase limits cannot be reduced below committed quantities, active
+  windows cannot overlap, and unsafe event cancellation is blocked.
+- Successful mutations and their AuditLog rows commit atomically.
 
-## Completed (admin CSV export + audit-log views — current branch)
+## Completed (admin CSV export + audit-log views)
 
-- `/admin/audit`: paginated (cursor-based), entity-type-filterable view of
-  every `AuditLog` row, with the acting admin's display name resolved
-  best-effort (never blocking the page if a lookup misses).
-- `/api/admin/orders/export`: CSV export of orders, respecting the same
-  status filter as the orders page. Every cell is escaped against
-  spreadsheet formula injection (`=`, `+`, `-`, `@` prefixes) and RFC4180
-  quoting, with a UTF-8 BOM so Excel renders accented names correctly.
-  Bounded to the most recent 20,000 orders — no pagination UI yet.
-- Both are read-only: available to `admin`/`super_admin`/`support`, same
-  role boundary as the rest of the dashboard; `scanner`/customer sessions
-  are rejected.
+- Cursor-paginated/filterable `/admin/audit` with best-effort actor names.
+- `/api/admin/orders/export` protects against spreadsheet formula injection,
+  uses RFC4180 quoting and UTF-8 BOM, and respects order-status filtering.
+- Read-only access is shared by admin/super_admin/support; scanner/customer
+  sessions are rejected.
 
-## Completed (admin refund flow — current branch)
+## Completed (admin refund flow)
 
-- `lib/orders/refund.ts::initiateRefund`: full or partial, admin/
-  super_admin only (`support` stays read-only — no form rendered, and the
-  Server Action re-checks the role itself regardless).
-- Validates the requested amount against the payment's actual remaining
-  refundable balance (`amountCents` minus the sum of prior `succeeded`
-  refunds); a partial refund is only a legal transition from
-  `paid`/`partially_refunded` — `paid_but_unfulfillable`/
-  `reconciliation_required` orders (no fulfilled tickets to partially
-  retain) accept only a full refund.
-- On a full refund, every still-`valid` ticket is cancelled and its
-  category's `sold_quantity` released for resale; an already-`used`
-  ticket is left untouched and never resold.
-- The Payment/Order row lock is held for the whole operation (provider
-  call included), so concurrent refund attempts on the same payment
-  serialize and their total can never exceed the paid amount. A provider
-  failure is recorded (`Refund.status = 'failed'`, audited) without
-  blocking a later retry — found and fixed during this session's own
-  review: an earlier draft `throw`n mid-transaction on provider failure,
-  which rolled back that very bookkeeping.
-- `/admin/orders/[orderId]`: new order detail page (payments, refund
-  history, tickets with status) linked from the orders list.
+- Full/partial refunds through `PaymentProvider.refund`, restricted to
+  admin/super_admin and validated against remaining refundable balance.
+- Full refunds cancel still-valid tickets and release their sold stock;
+  used tickets are never resold.
+- Payment/Order locking serializes concurrent refund attempts.
+- Provider failures are recorded/audited without blocking a later retry.
+- `/admin/orders/[orderId]` exposes payment/refund/ticket history.
 
-## Completed (transactional email — current branch)
+## Completed (transactional email)
 
-- `lib/email/provider.ts` + `lib/email/fakeProvider.ts`
-  (`ConsoleEmailProvider`): the same swappable-interface treatment as
-  payments, since no real email provider has been chosen either —
-  `ConsoleEmailProvider` logs the message and returns a fake id, no real
-  delivery.
-- `lib/email/notifications.ts`: `sendOrderConfirmationEmail` (order +
-  payment confirmation + ticket delivery combined into one message, since
-  all three become true at the same instant in this system),
-  `sendPaymentFailedEmail`, `sendRefundConfirmationEmail`.
-- Idempotency via a new `EmailLog` model, `UNIQUE(type, entity_type,
-  entity_id)`, claimed with the same `INSERT ... ON CONFLICT DO NOTHING
-  RETURNING id` idiom as `PaymentEvent` — a retriggering caller is a safe
-  no-op, never a duplicate send.
-- Triggered after the relevant transaction commits (payment webhook route;
-  `lib/orders/refund.ts::initiateRefund`), never inside it. A send
-  failure is logged and swallowed, never allowed to roll back or block
-  the payment/refund it's reporting on.
+- Swappable email-provider interface with a console-only sandbox provider.
+- Idempotent order-confirmation, payment-failure and refund-confirmation
+  triggers using `EmailLog` uniqueness.
+- Notifications run after the business transaction commits; email failure
+  never rolls back money/ticket state.
 
 ## Completed (auth rate limiting — PR #8)
 
-- `lib/rateLimit.ts`: an atomic Postgres-backed fixed-window counter shared
-  by every serverless instance. Rejected counters cap at `limit + 1` and
-  responses expose `Retry-After`/rate-limit reset metadata.
-- Authentication uses two independent HMAC-pseudonymized buckets: a
-  generous IP ceiling to avoid easy lockout of shared NATs, plus a tighter
-  normalized-account/email ceiling that stops distributed guessing. The
-  account bucket records failed credentials only; successful logins do not
-  consume a user's failed-attempt budget.
-- No raw IP or email is persisted in `rate_limit_buckets`; client-IP
-  resolution prefers Vercel's platform header, validates IPv4/IPv6,
-  canonicalizes IPv6, and collapses malformed input to `unknown`.
-- Production startup fails if the HMAC secret is missing/weak or if rate
-  limiting is disabled without the explicit isolated-test opt-in.
-- The existing authenticated housekeeping route prunes buckets older than
-  48 hours, preventing unbounded storage and indefinite IP-derived data
-  retention.
-- Limits remain conservative defaults pending real traffic. Platform-edge
-  WAF rules must be staged in log mode and tuned before production; the DB
-  limiter is defense in depth, not a DDoS shield.
+- Atomic Postgres fixed-window limiter shared across serverless instances.
+- Independent HMAC-pseudonymized per-IP and per-account/email buckets;
+  successful login does not consume the failed-attempt account budget.
+- Vercel IP preference, IP validation/canonicalization, conservative
+  unknown bucket and 48-hour retention pruning.
+- Production fails closed on missing/weak limiter secret or an unsafe
+  disable flag.
 
 ## Completed (CSP + admin/scanner CSRF hardening — PR #9)
 
-- Global browser security headers and CSP are configured in
-  `next.config.ts`, including `object-src 'none'`, `base-uri 'self'`,
-  `form-action 'self'`, `frame-ancestors 'none'`, `nosniff`, referrer and
-  Permissions-Policy controls. The current policy deliberately remains
-  compatible with Next.js static rendering instead of forcing a nonce on
-  every page.
-- `lib/auth/adminCsrf.ts` derives a session-bound HMAC synchronizer token
-  from the opaque admin session token. The raw httpOnly session token never
-  reaches client JavaScript.
-- `/api/admin/login` rejects cross-site/origin-mismatched requests before
-  credential lookup; logout and scanner mutations require both a matching
-  source origin and the session-bound token.
-- Sensitive catalogue/refund Server Actions also require the session-bound
-  token as a hidden form field, in addition to Next.js's built-in
-  Origin/Host validation and the action's own role check. The admin layout
-  provides this automatically to every `AdminMutationForm` so future forms
-  using that shared component inherit the protection.
-- Origin comparison covers scheme + host + port and supports Vercel's
-  documented `x-forwarded-host`/`x-forwarded-proto` shape; a matching unit
-  test protects that deployment assumption. A real preview/custom-domain
-  smoke test remains a pre-production deployment check.
-- Independent review specifically checked token construction,
-  timing-safe comparison, role/session boundaries, CSP/scanner
-  compatibility and the historical Next.js Server Action CSRF advisory.
-  The project uses Next.js 16.3.5, above that advisory's 16.1.7 fix.
-- CI verifies the complete stack: typecheck, lint, migrations,
-  unit/integration tests, isolated-Postgres Playwright flows and production
-  build all pass.
+- Global CSP/browser security headers with a documented static-rendering
+  compatibility trade-off rather than nonce-forcing every page dynamic.
+- Session-bound HMAC synchronizer token for custom admin/scanner mutations;
+  raw httpOnly session tokens never reach client JavaScript.
+- Admin login applies source-origin checks before credential work; logout
+  and scanner mutations require source-origin + session token.
+- Catalogue/refund Server Actions require the same session-bound token in
+  addition to Next.js Origin/Host validation and server-side role checks.
+- Vercel forwarded host/protocol behavior has unit regression coverage;
+  real preview/custom-domain smoke testing remains a pre-production task.
+
+## Completed (isolated Playwright database — PR #10)
+
+- Playwright now requires a dedicated `E2E_DATABASE_URL`; both direct
+  Prisma imports in specs and the spawned Next.js server are pinned to it.
+- `npm run test:e2e` resets/migrates/seeds only that E2E database before
+  the browser suite. The destructive guard accepts PostgreSQL only,
+  requires an explicit `e2e` name segment, requires localhost/loopback,
+  rejects query-string/fragment ambiguity, and refuses the configured
+  dev/Vitest databases.
+- The same safety gate runs from `playwright.config.ts`, so direct
+  `npx playwright test` cannot silently bypass the database validation.
+  Playwright config reloads preserve the original source database solely
+  for collision checking while the runtime stays pinned to E2E.
+- Browser tests always start their own server on `http://localhost:3100`
+  (or the explicitly configured test port), never reuse a developer's
+  existing Next.js process and cannot target an arbitrary external base URL.
+- CI now uses three distinct logical databases on its disposable Postgres
+  service: app/build, Vitest and Playwright. The PostgreSQL healthcheck also
+  targets `onlylive_ci` explicitly rather than logging false missing-DB
+  errors.
+- Verified on the final code path: typecheck, lint, migrations, all Vitest
+  tests, all 17 Playwright tests and the production build pass.
 
 ## In progress
 
@@ -300,46 +219,35 @@ payment-id mismatch, event-type mismatch).
 ## Next
 
 1. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
-   from official docs (never speculatively) — and, at that point,
-   re-derive the reconciliation policy in
-   `lib/orders/fulfillment.ts::reconcileContradictorySuccess` from that
-   provider's actual documented event lifecycle rather than this
-   session's conservative stopgap, and revisit whether `initiateRefund`
-   still safely holds a row lock across the real (network) provider call.
-2. Select a real email provider (Resend/Postmark/SES/...) and implement
-   its adapter from official docs; add a background retry for a send
-   that failed (currently logged and dropped — no retry mechanism yet).
-3. Move local Playwright e2e tests off the dev database onto a dedicated
-   ephemeral one. CI already runs them against an isolated ephemeral
-   PostgreSQL service.
-4. Decide production managed-Postgres provider and write the backup
-   strategy doc mentioned in CLAUDE.md's Observability section.
-5. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
-   needs OnlyLive's accountant/lawyer and the eventual PSP's
-   requirements; do not draft speculative legal text.
-6. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
-   `lib/inventory.ts`) per-event-configurable if OnlyLive needs
-   different caps for different shows.
-7. Paginate the orders CSV export (currently capped at the most recent
-   20,000 rows with no way to reach older ones).
-8. Add an automatic (rather than admin-noticed) trigger for
-   `paid_but_unfulfillable`/`reconciliation_required` orders — the
-   refund action to resolve them exists, but nothing surfaces them beyond
-   the dashboard's attention metrics.
-9. Stage Vercel WAF rate-limit rules in log mode before production, review
-   real traffic, then tune/enforce them without replacing the application
-   account-level limiter.
-10. Before production rollout, smoke-test admin login/logout, catalogue
-    mutation and scanner validation on the actual Vercel preview/custom
-    domain so forwarded-host/protocol behavior is verified end to end.
+   from official docs (never speculatively). Re-derive contradictory-event
+   reconciliation from that provider's real lifecycle and revisit holding a
+   database row lock across the real network refund call.
+2. Select a real email provider (Resend/Postmark/SES/...) and implement its
+   adapter from official docs; add background retry for failed sends.
+3. Decide the production managed-Postgres provider and document/test the
+   backup/restore strategy required by `CLAUDE.md`.
+4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
+   requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
+5. Make `MAX_TICKETS_PER_USER_PER_EVENT` per-event-configurable if OnlyLive
+   needs different caps for different shows.
+6. Paginate the orders CSV export beyond its current most-recent-20,000 cap.
+7. Add an automatic trigger/alert path for
+   `paid_but_unfulfillable`/`reconciliation_required` orders rather than
+   relying only on dashboard attention metrics.
+8. Stage Vercel WAF rate-limit rules in log mode before production, observe
+   real traffic, then tune/enforce without replacing account-level limiting.
+9. Before production rollout, smoke-test admin login/logout, catalogue
+   mutation and scanner validation on the real Vercel preview/custom domain.
 
 ## Blocked
 
 - Real PSP integration is blocked on OnlyLive selecting a provider.
-- Legal document drafting is blocked on legal/accountant review.
+- Real email delivery is blocked on OnlyLive selecting a provider.
+- Legal document drafting is blocked on legal/accountant review and the
+  eventual PSP's requirements.
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
-Offline scanning, real payment provider, real email provider, background
-worker infrastructure beyond the sweep endpoint, database backup strategy
-documentation.
+- Offline scanning / multi-device offline reconciliation.
+- General background-worker infrastructure beyond the current sweep endpoint
+  and the targeted retry/alert jobs explicitly added to `Next` above.
