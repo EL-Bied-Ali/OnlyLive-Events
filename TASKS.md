@@ -182,41 +182,58 @@ payment-id mismatch, event-type mismatch).
 - Every successful mutation writes its audit record in the same database
   transaction.
 
+## Completed (admin CSV export + audit-log views — current branch)
+
+- `/admin/audit`: paginated (cursor-based), entity-type-filterable view of
+  every `AuditLog` row, with the acting admin's display name resolved
+  best-effort (never blocking the page if a lookup misses).
+- `/api/admin/orders/export`: CSV export of orders, respecting the same
+  status filter as the orders page. Every cell is escaped against
+  spreadsheet formula injection (`=`, `+`, `-`, `@` prefixes) and RFC4180
+  quoting, with a UTF-8 BOM so Excel renders accented names correctly.
+  Bounded to the most recent 20,000 orders — no pagination UI yet.
+- Both are read-only: available to `admin`/`super_admin`/`support`, same
+  role boundary as the rest of the dashboard; `scanner`/customer sessions
+  are rejected.
+
 ## In progress
 
 - None.
 
 ## Next
 
-1. Extend the admin dashboard with refunds, CSV export and audit-log views.
-   Event/category/phase creation and editing now exist.
+1. Refund flow (schema exists, no UI/logic yet) and an automated
+   resolution path for `paid_but_unfulfillable`/`reconciliation_required`
+   orders — currently both require a human to notice and act. This was
+   the remaining piece of the original "admin dashboard: refunds, CSV
+   export, audit-log views" item; CSV export and audit-log views are
+   now done.
 2. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
    from official docs (never speculatively) — and, at that point,
    re-derive the reconciliation policy in
    `lib/orders/fulfillment.ts::reconcileContradictorySuccess` from that
    provider's actual documented event lifecycle rather than this
    session's conservative stopgap.
-3. Refund flow (schema exists, no UI/logic yet) and an automated
-   resolution path for `paid_but_unfulfillable`/`reconciliation_required`
-   orders — currently both require a human to notice and act.
-4. Transactional email (order confirmation, ticket delivery, payment
+3. Transactional email (order confirmation, ticket delivery, payment
    failure, refund confirmation) — must be idempotent, no duplicate
    tickets from a retried email job.
-5. Rate limiting on `/api/customers/register`, customer login, and
+4. Rate limiting on `/api/customers/register`, customer login, and
    `/api/admin/login` (see docs/SECURITY.md — currently a documented gap).
-6. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
+5. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
    admin routes.
-7. Move local Playwright e2e tests off the dev database onto a dedicated
+6. Move local Playwright e2e tests off the dev database onto a dedicated
    ephemeral one. CI already runs them against an isolated ephemeral
    PostgreSQL service.
-8. Decide production managed-Postgres provider and write the backup
+7. Decide production managed-Postgres provider and write the backup
    strategy doc mentioned in CLAUDE.md's Observability section.
-9. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
+8. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
     needs OnlyLive's accountant/lawyer and the eventual PSP's
     requirements; do not draft speculative legal text.
-10. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
+9. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
     `lib/inventory.ts`) per-event-configurable if OnlyLive needs
     different caps for different shows.
+10. Paginate the orders CSV export (currently capped at the most recent
+    20,000 rows with no way to reach older ones).
 
 ## Blocked
 
@@ -225,6 +242,6 @@ payment-id mismatch, event-type mismatch).
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
-Refund operations, CSV and audit views, offline scanning, real payment provider, email delivery,
+Refund operations, offline scanning, real payment provider, email delivery,
 background worker infrastructure beyond the sweep endpoint, rate
 limiting, CSP headers, database backup strategy documentation.

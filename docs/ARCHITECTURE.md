@@ -163,6 +163,24 @@ TASKS.md, tests.json
    or pending-payment order exists. The dedicated cancellation/refund flow
    must be implemented before those cases can be resolved safely.
 
+## Request/data flow: admin reporting (audit log + CSV export)
+
+1. `/admin/audit` and `GET /api/admin/orders/export` are both read-only
+   and open to `admin`/`super_admin`/`support` — the same boundary as the
+   rest of the dashboard; `scanner`/customer sessions are rejected.
+2. The audit log is paginated with an `id`-based cursor (`lib/admin/audit.ts`)
+   rather than an offset, since `audit_logs` is append-only and can grow
+   without bound. `actorId` isn't a declared foreign key (it can point at
+   an `AdminUser`, a customer `User`, or be `null` for system actions), so
+   the admin's display name is resolved best-effort for display only and
+   never blocks the page if the lookup misses.
+3. The CSV export (`lib/admin/csv.ts`) escapes every cell against
+   spreadsheet formula injection (a cell opened by Excel/Sheets starting
+   with `=`, `+`, `-`, or `@` can execute as a formula) and RFC4180
+   quoting, and prefixes the file with a UTF-8 BOM so Excel on Windows
+   renders accented names correctly. It is bounded to the most recent
+   20,000 orders — there is no pagination UI for the export yet.
+
 ## Deployment
 
 Target: Vercel or an equivalent Node.js serverless/edge-capable platform.
@@ -201,9 +219,9 @@ historical rather than future.
 
 ## Known scope limitations (deferred, tracked in TASKS.md)
 
-- **Remaining admin operations** — event/category/phase creation and
-  editing exist. Refund execution, CSV export and audit-log views remain
-  deferred.
+- **Remaining admin operations** — event/category/phase creation/editing,
+  CSV order export, and the audit-log view all exist. Refund execution
+  remains deferred.
 - **Offline scanning** — deliberately unsupported. The scanner PWA blocks
   validation without a live server connection because safe offline
   multi-device reconciliation is not implemented.

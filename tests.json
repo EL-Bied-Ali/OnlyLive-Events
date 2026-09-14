@@ -538,5 +538,61 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/e2e/admin-catalog.spec.ts"
+  },
+  {
+    "id": "csv-export-formula-injection-guard",
+    "scenario": "CSV export cells starting with =, +, -, or @ are neutralized so spreadsheet apps never execute them as formulas",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/admin/csv.test.ts"
+  },
+  {
+    "id": "csv-export-quoting",
+    "scenario": "CSV export cells containing commas, quotes, or newlines are correctly quoted and escaped",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/admin/csv.test.ts"
+  },
+  {
+    "id": "audit-log-actor-name-resolution",
+    "scenario": "Audit log entries authored by an admin resolve to that admin's display name; system entries with no actor never crash resolution",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-reporting.test.ts"
+  },
+  {
+    "id": "audit-log-entity-filter",
+    "scenario": "Filtering the audit log by entity type returns only matching entries",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-reporting.test.ts"
+  },
+  {
+    "id": "audit-log-pagination",
+    "scenario": "Cursor-based audit log pagination visits every row exactly once, across pages",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-reporting.test.ts"
+  },
+  {
+    "id": "orders-csv-export-status-filter",
+    "scenario": "The orders CSV export includes the fields needed for reconciliation and respects a status filter",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-reporting.test.ts"
+  },
+  {
+    "id": "admin-reporting-role-access",
+    "scenario": "Admin and support accounts can view the audit log and export orders as CSV; a scanner account is forbidden from both",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/admin-reporting.spec.ts"
   }
 ]
