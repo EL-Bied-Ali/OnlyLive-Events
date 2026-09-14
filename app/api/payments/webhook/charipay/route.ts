@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getPaymentProvider } from "@/lib/payments";
@@ -11,7 +12,6 @@ export const runtime = "nodejs";
 
 type WebhookResult =
   | { kind: "duplicate" }
-  | { kind: "integrity_mismatch"; code: string }
   | { kind: "event_collision" }
   | { kind: "processed"; outcome: string; orderId?: string; refundId?: string; paymentEventId?: string; providerRefundId?: string };
 
@@ -36,7 +36,7 @@ function consistentClaim(
 async function auditIntegrityMismatch(
   action: string,
   paymentId: string,
-  metadata: Record<string, unknown>,
+  metadata: Prisma.InputJsonObject,
 ): Promise<void> {
   await prisma.auditLog.create({
     data: {
@@ -198,7 +198,6 @@ export async function POST(request: NextRequest) {
     });
 
     if (result.kind === "duplicate") return NextResponse.json({ ok: true, duplicate: true });
-    if (result.kind === "integrity_mismatch") return NextResponse.json({ error: result.code }, { status: 409 });
     if (result.kind === "event_collision") return NextResponse.json({ error: "EVENT_COLLISION" }, { status: 409 });
 
     if (result.outcome === "refund.succeeded" && result.refundId && result.paymentEventId) {
