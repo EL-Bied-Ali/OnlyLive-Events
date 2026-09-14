@@ -8,7 +8,7 @@ implemented" is an explicit gap, not an oversight — tracked in TASKS.md.
 |---|---|---|
 | XSS | Mitigated | React auto-escapes rendered content and no `dangerouslySetInnerHTML` exists. `next.config.ts` now sends a global CSP plus `nosniff`, referrer and Permissions-Policy headers. The CSP denies unneeded external origins/features (`object-src 'none'`, `base-uri 'self'`, `frame-ancestors 'none'`, `form-action 'self'`). It deliberately retains `unsafe-inline` for scripts/styles so Next.js can keep static rendering with the current Turbopack setup; this is defense in depth, not a nonce-based strict-CSP claim. |
 | CSV/formula injection | Mitigated | `lib/admin/csv.ts` prefixes any cell starting with `=`, `+`, `-`, or `@` before it reaches Excel/Sheets, which would otherwise execute it as a formula; several exported fields (customer name, event title) ultimately trace back to user-supplied input. |
-| CSRF | Partially mitigated | Auth.js's own endpoints (`/api/auth/*`) have built-in CSRF protection. Admin catalogue/refund forms use Next.js Server Actions, which enforce same-origin `Origin`/`Host` checks, and every action still re-authenticates server-side. Custom cookie-authenticated admin/scanner Route Handlers now require a session-bound HMAC synchronizer token in `X-CSRF-Token` plus exact Origin/Referer validation; `/api/admin/login` has no session yet, so it uses strict Origin/Referer and Fetch Metadata checks before credential processing. The admin session cookie remains `httpOnly`/`sameSite=lax`; only the derived CSRF token crosses the server/client boundary. Customer custom POST routes still rely on Auth.js/SameSite plus their request shape rather than this admin token, so the checklist remains "Partially mitigated" overall rather than overstating broader coverage. Webhooks use provider authentication, not browser CSRF tokens. |
+| CSRF | Partially mitigated | Auth.js's own endpoints (`/api/auth/*`) have built-in CSRF protection. Custom cookie-authenticated admin/scanner Route Handlers require a session-bound HMAC synchronizer token in `X-CSRF-Token` plus exact Origin/Referer validation. Sensitive catalogue/refund Server Actions require the same session-bound token through a hidden form field in addition to Next.js's built-in Origin/Host validation, and every action still re-authenticates/re-authorizes server-side. `/api/admin/login` has no session yet, so it uses strict Origin/Referer and Fetch Metadata checks before credential processing. The admin session cookie remains `httpOnly`/`sameSite=lax`; only the derived CSRF token crosses the server/client boundary. Customer custom POST routes still rely on Auth.js/SameSite plus their request shape rather than this admin token, so the checklist remains "Partially mitigated" overall. Webhooks use provider authentication, not browser CSRF tokens. |
 | SQL injection | Mitigated | Prisma parameterizes all queries. Every raw-SQL call site (`lib/inventory.ts`, `lib/admin/catalog.ts`, `lib/orders/*`, `lib/scanner.ts`, the webhook route) uses `$queryRaw`/`$executeRaw` tagged templates exclusively — never string concatenation. |
 | Broken access control / IDOR | Mitigated | Every sensitive route/action calls `requireCustomer()`/`requireAdminRole()` explicitly (never inferred from hidden UI). Catalogue and refund Server Actions allow only admin/super-admin; support is read-only (the order detail page renders no refund form for a support session, and the action itself re-checks the role server-side regardless). The audit-log view and orders CSV export allow admin/super-admin/support (read-only, same boundary as the rest of the dashboard) and reject scanner/customer sessions. Admin pages reject scanner accounts; scanner pages/API independently accept only scanner/admin/super-admin and reject customer/support sessions. Order/ticket ownership mismatches return **404**, not 403, so a non-owner can't even confirm the resource exists. |
 | Mass assignment | Mitigated | Every write route destructures exactly the zod-validated fields (`lib/validation/*.ts`) into the Prisma `data` object — request bodies are never spread directly into `create`/`update`. |
@@ -40,25 +40,31 @@ trade-off must be made deliberately and tested across the full app. The CSP
 must also be revisited when the real PSP is selected if its hosted checkout
 needs an external form target/frame, and when remote event imagery is added.
 
-`lib/auth/adminCsrf.ts` implements the custom admin/scanner protection. The
-CSRF token is an HMAC of the opaque admin session token using
+`lib/auth/adminCsrf.ts` implements the admin/scanner protection. The CSRF
+token is an HMAC of the opaque admin session token using
 `ADMIN_SESSION_SECRET` plus a domain-separation context. It is therefore
 bound to one session, contains no session secret itself, requires no extra
 server-side state, and is compared with `crypto.timingSafeEqual`. The raw
 session token remains only in the `httpOnly` cookie. The browser gets the
-derived token from a server-rendered authenticated page and sends it in
-`X-CSRF-Token` for custom mutations such as logout and ticket scan.
+derived token from an authenticated server-rendered page. Route Handlers
+send it in `X-CSRF-Token`; the shared admin form injects the same derived
+token as a hidden `__csrf` field for catalogue and refund Server Actions,
+which re-read the current session cookie and verify the submitted token
+before state changes. This Server Action token is intentional defense in
+depth on top of Next.js's own Origin-vs-Host validation.
 
-The same guard also requires an exact source origin (scheme, host and port),
-using `Origin` and falling back to `Referer`, and rejects
+The Route Handler guard also requires an exact source origin (scheme, host
+and port), using `Origin` and falling back to `Referer`, and rejects
 `Sec-Fetch-Site: cross-site`. Reverse-proxy deployments reconstruct the
-public target origin from `X-Forwarded-Proto`/`X-Forwarded-Host`. The login
+public target origin from `X-Forwarded-Proto`/`X-Forwarded-Host`. Vercel's
+request-header documentation defines the forwarded host as identical to
+`Host` and the forwarded protocol as the request protocol; regression tests
+cover that shape and a generic reverse-proxy public-origin shape. The login
 endpoint cannot have a session-bound token before authentication, so it
 uses this source-origin guard before rate limiting or credential lookup and
-returns a derived token only after successful session creation. Next.js
-Server Actions are not redundantly wrapped: they already apply their own
-Origin-vs-Host CSRF check, while application authorization is still required
-inside every action.
+returns a derived token only after successful session creation. A real
+Vercel preview/custom-domain smoke test of login, logout and scanner
+mutations remains required before production rollout.
 
 ## Never logged
 
