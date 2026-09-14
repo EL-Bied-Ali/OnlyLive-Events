@@ -8,16 +8,6 @@ export const CHECKOUT_EXTENSION_MS = 10 * 60 * 1000;
 /** Server-side cap on a single hold-creation request. */
 export const MAX_QUANTITY_PER_HOLD = 10;
 
-/**
- * Defensible default cap on total tickets (across every category and
- * every separate hold) one customer can accumulate for one event. Exists
- * specifically so a purchase limit can't be bypassed by splitting one
- * large order into several smaller holds. OnlyLive may want this
- * per-event-configurable later; a single global constant is the
- * documented starting policy for this session.
- */
-export const MAX_TICKETS_PER_USER_PER_EVENT = 10;
-
 type Tx = Prisma.TransactionClient | PrismaClient;
 
 interface InventorySnapshot {
@@ -81,9 +71,8 @@ export interface CreateHoldResult {
  *
  * Eligibility enforced here: event.status === 'on_sale', event sales
  * window, category.isActive, phase.isActive + phase window, the phase's
- * optional quantity limit, and a per-user/event purchase limit (see
- * MAX_TICKETS_PER_USER_PER_EVENT) that can't be bypassed by splitting one
- * purchase into several separate holds.
+ * optional quantity limit, and the event's per-user purchase limit that
+ * can't be bypassed by splitting one purchase into several separate holds.
  *
  * Concurrency: the category-level Inventory row lock (acquired in
  * releaseExpiredAndLock) serializes everything scoped to one category,
@@ -111,8 +100,8 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
 
     // Shared catalogue lock: other purchases can proceed concurrently,
     // but event/category/phase edits take the matching exclusive lock and
-    // therefore cannot change eligibility between this validation and the
-    // inventory mutation.
+    // therefore cannot change eligibility or the event purchase limit
+    // between this validation and the inventory mutation.
     await tx.$executeRaw`
       SELECT pg_advisory_xact_lock_shared(hashtext('onlylive_catalogue'), hashtext(${initialCategory.eventId}))
     `;
@@ -169,11 +158,11 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
         AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= now()))
     `;
     const currentUserTotal = Number(userTotals[0]?.total ?? 0);
-    if (currentUserTotal + input.quantity > MAX_TICKETS_PER_USER_PER_EVENT) {
+    if (currentUserTotal + input.quantity > event.maxTicketsPerUser) {
       throw new ApiError(
         409,
         "PURCHASE_LIMIT_EXCEEDED",
-        `You can reserve at most ${MAX_TICKETS_PER_USER_PER_EVENT} tickets for this event`,
+        `You can reserve at most ${event.maxTicketsPerUser} tickets for this event`,
       );
     }
 
