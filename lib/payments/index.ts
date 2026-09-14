@@ -74,22 +74,29 @@ function assertChariPayConfig(): void {
   getOnlyLivePublicUrl();
 }
 
-export function getPaymentProvider(): PaymentProvider {
-  const provider = process.env.PAYMENT_PROVIDER ?? "fake";
-
-  if (provider === "fake" && !isFakePaymentsAllowed()) {
-    throw new Error(
-      'PAYMENT_PROVIDER=fake cannot be used in production. Configure a real PaymentProvider, or set ALLOW_FAKE_PAYMENTS_IN_PRODUCTION=true only for a deliberate non-production-traffic deployment — never for real customer traffic.',
-    );
-  }
-
+/**
+ * Resolve the adapter that owns an already-persisted Payment. Post-creation
+ * operations must use this instead of the current PAYMENT_PROVIDER default so
+ * provider migrations never route historical money operations to the wrong PSP.
+ */
+export function getPaymentProviderByName(provider: string): PaymentProvider {
   switch (provider) {
     case "fake":
+      if (!isFakePaymentsAllowed()) {
+        throw new Error(
+          'Historical fake payments cannot be operated in production unless ALLOW_FAKE_PAYMENTS_IN_PRODUCTION=true is deliberately enabled for non-customer traffic.',
+        );
+      }
       return new FakeProvider();
     case "charipay":
       assertChariPayConfig();
       return new ChariPayProvider();
     default:
-      throw new Error(`Unknown PAYMENT_PROVIDER: ${provider}. Supported values: "fake", "charipay".`);
+      throw new Error(`Unsupported persisted payment provider: ${provider}`);
   }
+}
+
+/** Choose the default provider only when creating a new Payment. */
+export function getPaymentProvider(): PaymentProvider {
+  return getPaymentProviderByName(process.env.PAYMENT_PROVIDER ?? "fake");
 }
