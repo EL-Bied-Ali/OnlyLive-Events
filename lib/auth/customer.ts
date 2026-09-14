@@ -8,12 +8,12 @@ import { prisma } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
 import { loginSchema } from "@/lib/validation/auth";
 import { ApiError } from "@/lib/http/errors";
-import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
+import { buildRateLimitKey, consumeRateLimit, getClientIp } from "@/lib/rateLimit";
 
-// A customer's own repeated mistyped-password attempts are more common
-// than admin login, so this allowance is looser than the admin/register
-// limits — still enough to stop automated credential stuffing.
-const CUSTOMER_LOGIN_RATE_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
+// Per-account limiting stops distributed guessing; the higher IP ceiling
+// avoids a few mistakes blocking many customers behind the same NAT.
+const CUSTOMER_LOGIN_IP_RATE_LIMIT = { limit: 100, windowMs: 15 * 60 * 1000 };
+const CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT = { limit: 10, windowMs: 15 * 60 * 1000 };
 
 export const authOptions: AuthOptions = {
   // The adapter is kept registered for when an OAuth provider is added
@@ -40,8 +40,11 @@ export const authOptions: AuthOptions = {
       },
       async authorize(credentials, req) {
         const ip = getClientIp(req?.headers);
-        const withinLimit = await checkRateLimit(`login:${ip}`, CUSTOMER_LOGIN_RATE_LIMIT);
-        if (!withinLimit) {
+        const ipLimit = await consumeRateLimit(
+          buildRateLimitKey("customer_login_ip", ip),
+          CUSTOMER_LOGIN_IP_RATE_LIMIT,
+        );
+        if (!ipLimit.allowed) {
           // Thrown from authorize(), next-auth surfaces the message
           // verbatim as the `error` field the client-side signIn() call
           // resolves with (see app/(customer)/login/page.tsx).
@@ -51,6 +54,17 @@ export const authOptions: AuthOptions = {
         const parsed = loginSchema.safeParse(credentials);
         if (!parsed.success) {
           return null;
+        }
+
+        // The account-level key stops distributed credential stuffing while
+        // the more generous IP limit avoids locking out a shared household,
+        // office, venue Wi-Fi, or carrier NAT after a handful of attempts.
+        const accountLimit = await consumeRateLimit(
+          buildRateLimitKey("customer_login_account", parsed.data.email),
+          CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT,
+        );
+        if (!accountLimit.allowed) {
+          throw new Error("RATE_LIMITED");
         }
 
         const user = await prisma.user.findUnique({

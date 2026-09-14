@@ -242,26 +242,23 @@ payment-id mismatch, event-type mismatch).
 
 ## Completed (auth rate limiting — current branch, pending review)
 
-- `lib/rateLimit.ts::checkRateLimit`: a Postgres-backed fixed-window
-  counter (no Redis/external cache in this app), atomic via the same
-  `INSERT ... ON CONFLICT DO UPDATE ... RETURNING` idiom as
-  `PaymentEvent`/`EmailLog`.
-- Applied per client IP to `/api/customers/register` (5/15min),
-  `/api/admin/login` (5/15min), and the customer login `authorize()`
-  callback (10/15min) — checked before any credential or
-  account-existence check, so a rate-limited request never leaks
-  anything about the account.
-- `RATE_LIMITING_DISABLED=true` bypasses it entirely; set only for the
-  Playwright `webServer` (see playwright.config.ts) — that suite performs
-  many distinct logins/registrations that all originate from one local
-  machine with no reverse proxy in front of it, so the server would
-  otherwise see one shared "unknown" IP and trip these limits well before
-  covering the intended scenarios. Never set for a real deployment.
-- New `rate_limit_buckets` table; no cleanup of past-window rows yet (see
-  Next). Migration verified against dev/test and a fresh database.
-- Known limitation: per-IP only, not per-account — a distributed attack
-  spread across many IPs against one account isn't caught. Not addressed
-  in this PR; flagged for the reviewer.
+- `lib/rateLimit.ts`: an atomic Postgres-backed fixed-window counter shared
+  by every serverless instance. Rejected counters cap at `limit + 1` and
+  responses expose `Retry-After`/rate-limit reset metadata.
+- Authentication uses two independent HMAC-pseudonymized buckets: a
+  generous IP ceiling to avoid easy lockout of shared NATs, plus a tighter
+  normalized-account/email ceiling that still stops distributed guessing.
+  No raw IP or email is persisted in `rate_limit_buckets`.
+- Client-IP resolution prefers Vercel's platform header, validates IPv4/
+  IPv6, canonicalizes IPv6, and collapses malformed input to `unknown`.
+- Production startup fails if the HMAC secret is missing/weak or if rate
+  limiting is disabled without the explicit isolated-test opt-in.
+- The existing authenticated housekeeping route prunes buckets older than
+  48 hours, preventing unbounded storage and indefinite IP-derived data
+  retention.
+- Limits remain conservative defaults pending real traffic. Platform-edge
+  WAF rules must be staged in log mode and tuned before production; the DB
+  limiter is defense in depth, not a DDoS shield.
 
 ## In progress
 
@@ -298,10 +295,9 @@ payment-id mismatch, event-type mismatch).
     `paid_but_unfulfillable`/`reconciliation_required` orders — the
     refund action to resolve them now exists, but nothing surfaces them
     beyond the dashboard's attention metrics.
-10. Per-account rate limiting (in addition to per-IP) — see the auth
-    rate limiting entry above.
-11. Periodic cleanup of old `rate_limit_buckets` rows — the table
-    currently grows unbounded.
+10. Stage Vercel WAF rate-limit rules in log mode before production, review
+    real traffic, then tune/enforce them without replacing the application
+    account-level limiter.
 
 ## Blocked
 

@@ -5,7 +5,7 @@ import { adminLoginSchema } from "@/lib/validation/admin";
 import { createAdminSession, ADMIN_SESSION_COOKIE } from "@/lib/auth/admin";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 import { writeAuditLog } from "@/lib/audit";
-import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
+import { buildRateLimitKey, consumeRateLimit, getClientIp, rateLimitHeaders } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
@@ -16,20 +16,37 @@ const INVALID_CREDENTIALS = new ApiError(401, "INVALID_CREDENTIALS", "Invalid em
 
 // Admin accounts are high-value targets (full back-office access) and few
 // in number — a tighter allowance than customer-facing endpoints.
-const ADMIN_LOGIN_RATE_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
+const ADMIN_LOGIN_IP_RATE_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
+const ADMIN_LOGIN_ACCOUNT_RATE_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
 
 export async function POST(request: NextRequest) {
   try {
     const ip = getClientIp(request.headers);
-    const withinLimit = await checkRateLimit(`admin_login:${ip}`, ADMIN_LOGIN_RATE_LIMIT);
-    if (!withinLimit) {
-      throw new ApiError(429, "RATE_LIMITED", "Too many login attempts. Please try again later.");
+    const ipLimit = await consumeRateLimit(buildRateLimitKey("admin_login_ip", ip), ADMIN_LOGIN_IP_RATE_LIMIT);
+    if (!ipLimit.allowed) {
+      return NextResponse.json(
+        { error: "RATE_LIMITED", message: "Too many login attempts. Please try again later." },
+        { status: 429, headers: rateLimitHeaders(ipLimit) },
+      );
     }
 
     const body = await request.json();
     const parsed = adminLoginSchema.safeParse(body);
     if (!parsed.success) {
       throw new ApiError(400, "INVALID_INPUT", parsed.error.message);
+    }
+
+    // The account key is HMACed before persistence, so this protects one
+    // high-value account across many source IPs without storing its email.
+    const accountLimit = await consumeRateLimit(
+      buildRateLimitKey("admin_login_account", parsed.data.email),
+      ADMIN_LOGIN_ACCOUNT_RATE_LIMIT,
+    );
+    if (!accountLimit.allowed) {
+      return NextResponse.json(
+        { error: "RATE_LIMITED", message: "Too many login attempts. Please try again later." },
+        { status: 429, headers: rateLimitHeaders(accountLimit) },
+      );
     }
 
     const admin = await prisma.adminUser.findUnique({ where: { email: parsed.data.email } });

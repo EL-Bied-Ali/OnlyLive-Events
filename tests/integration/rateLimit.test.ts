@@ -1,6 +1,14 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
-import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
+import { prisma } from "@/lib/db";
+import {
+  buildRateLimitKey,
+  checkRateLimit,
+  consumeRateLimit,
+  getClientIp,
+  pruneRateLimitBuckets,
+  rateLimitHeaders,
+} from "@/lib/rateLimit";
 
 describe("checkRateLimit", () => {
   it("allows exactly `limit` calls within a window and rejects the next", async () => {
@@ -44,6 +52,39 @@ describe("checkRateLimit", () => {
     const results = await Promise.all(Array.from({ length: 12 }, () => checkRateLimit(key, options)));
     expect(results.filter(Boolean)).toHaveLength(5);
   });
+
+  it("caps a rejected bucket and returns actionable reset headers", async () => {
+    const key = `test-${crypto.randomUUID()}`;
+    const first = await consumeRateLimit(key, { limit: 1, windowMs: 60_000 });
+    const rejected = await consumeRateLimit(key, { limit: 1, windowMs: 60_000 });
+    await consumeRateLimit(key, { limit: 1, windowMs: 60_000 });
+
+    expect(first).toMatchObject({ allowed: true, remaining: 0, retryAfterSeconds: 0 });
+    expect(rejected.allowed).toBe(false);
+    expect(rejected.retryAfterSeconds).toBeGreaterThan(0);
+    expect(rateLimitHeaders(rejected)["Retry-After"]).toBe(String(rejected.retryAfterSeconds));
+
+    const bucket = await prisma.rateLimitBucket.findFirstOrThrow({ where: { key } });
+    expect(bucket.count).toBe(2);
+  });
+
+  it("prunes expired buckets while retaining recent ones", async () => {
+    const oldKey = `old-${crypto.randomUUID()}`;
+    const freshKey = `fresh-${crypto.randomUUID()}`;
+    const oldWindow = new Date(Date.now() - 3 * 24 * 60 * 60 * 1_000);
+    const freshWindow = new Date();
+    await prisma.rateLimitBucket.createMany({
+      data: [
+        { key: oldKey, windowStart: oldWindow, count: 1 },
+        { key: freshKey, windowStart: freshWindow, count: 1 },
+      ],
+    });
+
+    const result = await pruneRateLimitBuckets();
+    expect(result.deleted).toBeGreaterThanOrEqual(1);
+    expect(await prisma.rateLimitBucket.findFirst({ where: { key: oldKey } })).toBeNull();
+    expect(await prisma.rateLimitBucket.findFirst({ where: { key: freshKey } })).not.toBeNull();
+  });
 });
 
 describe("getClientIp", () => {
@@ -51,6 +92,21 @@ describe("getClientIp", () => {
     expect(getClientIp({ get: (name) => (name === "x-forwarded-for" ? "203.0.113.7, 10.0.0.1" : null) })).toBe(
       "203.0.113.7",
     );
+  });
+
+  it("prefers Vercel's platform-owned forwarding header", () => {
+    expect(
+      getClientIp({
+        "x-vercel-forwarded-for": "203.0.113.10",
+        "x-forwarded-for": "198.51.100.4",
+      }),
+    ).toBe("203.0.113.10");
+  });
+
+  it("rejects malformed attacker-selected values and canonicalizes IPv6", () => {
+    expect(getClientIp({ "x-forwarded-for": "not-an-ip" })).toBe("unknown");
+    expect(getClientIp({ "x-forwarded-for": "fe80::1%eth0" })).toBe("unknown");
+    expect(getClientIp({ "x-forwarded-for": "2001:0db8:0000:0000:0000:0000:0000:0001" })).toBe("2001:db8::1");
   });
 
   it("works with a plain headers object (next-auth's authorize() req shape)", () => {
@@ -61,5 +117,16 @@ describe("getClientIp", () => {
     expect(getClientIp({ get: () => null })).toBe("unknown");
     expect(getClientIp(undefined)).toBe("unknown");
     expect(getClientIp({})).toBe("unknown");
+  });
+});
+
+describe("buildRateLimitKey", () => {
+  it("is stable and never persists the raw identity", () => {
+    const identity = "customer@example.com";
+    const first = buildRateLimitKey("customer_login_account", identity);
+    const second = buildRateLimitKey("customer_login_account", identity);
+    expect(first).toBe(second);
+    expect(first).not.toContain(identity);
+    expect(first).toMatch(/^customer_login_account:[A-Za-z0-9_-]{43}$/);
   });
 });

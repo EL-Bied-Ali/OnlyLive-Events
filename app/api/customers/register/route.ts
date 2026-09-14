@@ -4,27 +4,44 @@ import { hashPassword } from "@/lib/auth/password";
 import { registerSchema } from "@/lib/validation/auth";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 import { writeAuditLog } from "@/lib/audit";
-import { checkRateLimit, getClientIp } from "@/lib/rateLimit";
+import { buildRateLimitKey, consumeRateLimit, getClientIp, rateLimitHeaders } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
 // Mass account creation is the abuse case here (bot signups, email
 // enumeration via repeated attempts), not brute force — a generous but
 // finite per-IP allowance.
-const REGISTER_RATE_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
+const REGISTER_IP_RATE_LIMIT = { limit: 30, windowMs: 15 * 60 * 1000 };
+const REGISTER_EMAIL_RATE_LIMIT = { limit: 5, windowMs: 15 * 60 * 1000 };
 
 export async function POST(request: NextRequest) {
   try {
     const ip = getClientIp(request.headers);
-    const withinLimit = await checkRateLimit(`register:${ip}`, REGISTER_RATE_LIMIT);
-    if (!withinLimit) {
-      throw new ApiError(429, "RATE_LIMITED", "Too many registration attempts. Please try again later.");
+    const ipLimit = await consumeRateLimit(buildRateLimitKey("register_ip", ip), REGISTER_IP_RATE_LIMIT);
+    if (!ipLimit.allowed) {
+      return NextResponse.json(
+        { error: "RATE_LIMITED", message: "Too many registration attempts. Please try again later." },
+        { status: 429, headers: rateLimitHeaders(ipLimit) },
+      );
     }
 
     const body = await request.json();
     const parsed = registerSchema.safeParse(body);
     if (!parsed.success) {
       throw new ApiError(400, "INVALID_INPUT", parsed.error.message);
+    }
+
+    // Limits enumeration/repeated signup attempts for one address even when
+    // they are distributed over several IPs. The email is HMACed in the key.
+    const emailLimit = await consumeRateLimit(
+      buildRateLimitKey("register_email", parsed.data.email),
+      REGISTER_EMAIL_RATE_LIMIT,
+    );
+    if (!emailLimit.allowed) {
+      return NextResponse.json(
+        { error: "RATE_LIMITED", message: "Too many registration attempts. Please try again later." },
+        { status: 429, headers: rateLimitHeaders(emailLimit) },
+      );
     }
 
     // Whitelist exactly the validated fields — never spread the raw body

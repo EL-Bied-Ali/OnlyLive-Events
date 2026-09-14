@@ -6,6 +6,7 @@ import { hashPassword } from "@/lib/auth/password";
 import { POST as registerPost } from "@/app/api/customers/register/route";
 import { POST as adminLoginPost } from "@/app/api/admin/login/route";
 import { authOptions } from "@/lib/auth/customer";
+import { GET as authGet, POST as authPost } from "@/app/api/auth/[...nextauth]/route";
 
 function withForwardedFor(ip: string, body: unknown, url: string) {
   return new NextRequest(url, {
@@ -15,29 +16,34 @@ function withForwardedFor(ip: string, body: unknown, url: string) {
   });
 }
 
+function uniqueIp(): string {
+  const hex = crypto.randomUUID().replaceAll("-", "");
+  return `2001:db8:${hex.slice(0, 4)}:${hex.slice(4, 8)}:${hex.slice(8, 12)}:${hex.slice(12, 16)}:${hex.slice(16, 20)}:${hex.slice(20, 24)}`;
+}
+
 describe("registration rate limiting", () => {
-  it("allows 5 registration attempts per IP within the window, then rejects the 6th with 429", async () => {
-    const ip = crypto.randomUUID();
+  it("limits repeated registration attempts for one email even across different IPs", async () => {
+    const email = `ratelimit-register-${crypto.randomUUID()}@test.onlylive.ma`;
 
     for (let i = 0; i < 5; i += 1) {
       const response = await registerPost(
         withForwardedFor(
-          ip,
+          uniqueIp(),
           {
-            email: `ratelimit-register-${crypto.randomUUID()}@test.onlylive.ma`,
+            email,
             password: "RateLimitTestPassword123!",
             name: "Rate Limit Test",
           },
           "http://localhost/api/customers/register",
         ),
       );
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(i === 0 ? 201 : 409);
     }
 
     const sixth = await registerPost(
       withForwardedFor(
-        ip,
-        { email: `ratelimit-register-${crypto.randomUUID()}@test.onlylive.ma`, password: "RateLimitTestPassword123!", name: "X" },
+        uniqueIp(),
+        { email, password: "RateLimitTestPassword123!", name: "X" },
         "http://localhost/api/customers/register",
       ),
     );
@@ -46,22 +52,21 @@ describe("registration rate limiting", () => {
     expect(body.error).toBe("RATE_LIMITED");
   });
 
-  it("a different IP is never affected by another IP's exhausted limit", async () => {
-    const exhaustedIp = crypto.randomUUID();
+  it("a different email is not affected by another email's exhausted account limit", async () => {
+    const exhaustedEmail = `ratelimit-exhausted-${crypto.randomUUID()}@test.onlylive.ma`;
     for (let i = 0; i < 5; i += 1) {
       await registerPost(
         withForwardedFor(
-          exhaustedIp,
-          { email: `ratelimit-other-${crypto.randomUUID()}@test.onlylive.ma`, password: "RateLimitTestPassword123!", name: "X" },
+          uniqueIp(),
+          { email: exhaustedEmail, password: "RateLimitTestPassword123!", name: "X" },
           "http://localhost/api/customers/register",
         ),
       );
     }
 
-    const freshIp = crypto.randomUUID();
     const response = await registerPost(
       withForwardedFor(
-        freshIp,
+        uniqueIp(),
         { email: `ratelimit-fresh-${crypto.randomUUID()}@test.onlylive.ma`, password: "RateLimitTestPassword123!", name: "X" },
         "http://localhost/api/customers/register",
       ),
@@ -71,7 +76,7 @@ describe("registration rate limiting", () => {
 });
 
 describe("admin login rate limiting", () => {
-  it("rejects with 429 (not the credentials check) once the per-IP limit is exceeded — checked before leaking anything about the account", async () => {
+  it("rejects one account across changing IPs before checking the credentials", async () => {
     const passwordHash = await hashPassword("AdminRateLimitTest123!");
     const admin = await prisma.adminUser.create({
       data: {
@@ -81,11 +86,9 @@ describe("admin login rate limiting", () => {
         role: "admin",
       },
     });
-    const ip = crypto.randomUUID();
-
     for (let i = 0; i < 5; i += 1) {
       const response = await adminLoginPost(
-        withForwardedFor(ip, { email: admin.email, password: "wrong-password" }, "http://localhost/api/admin/login"),
+        withForwardedFor(uniqueIp(), { email: admin.email, password: "wrong-password" }, "http://localhost/api/admin/login"),
       );
       expect(response.status).toBe(401);
     }
@@ -93,9 +96,11 @@ describe("admin login rate limiting", () => {
     const sixth = await adminLoginPost(
       // Even the CORRECT password is rejected once the limit is hit —
       // the rate-limit check runs before the credential check.
-      withForwardedFor(ip, { email: admin.email, password: "AdminRateLimitTest123!" }, "http://localhost/api/admin/login"),
+      withForwardedFor(uniqueIp(), { email: admin.email, password: "AdminRateLimitTest123!" }, "http://localhost/api/admin/login"),
     );
     expect(sixth.status).toBe(429);
+    expect(Number(sixth.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(sixth.headers.get("x-ratelimit-remaining")).toBe("0");
     const body = await sixth.json();
     expect(body.error).toBe("RATE_LIMITED");
   });
@@ -111,7 +116,6 @@ describe("customer login (authorize) rate limiting", () => {
         name: "Rate Limit Customer",
       },
     });
-    const ip = crypto.randomUUID();
     // next-auth v4's CredentialsProvider() factory returns a stub
     // `authorize: () => null` at the top level and stashes the real
     // config (including our actual authorize function) under `.options`
@@ -126,15 +130,58 @@ describe("customer login (authorize) rate limiting", () => {
       };
     };
     const authorize = rawProvider.options.authorize;
-    const req = { headers: { "x-forwarded-for": ip } };
-
     for (let i = 0; i < 10; i += 1) {
+      const req = { headers: { "x-forwarded-for": uniqueIp() } };
       const result = await authorize({ email: user.email, password: "wrong-password" }, req);
       expect(result).toBeNull();
     }
 
     await expect(async () => {
+      const req = { headers: { "x-forwarded-for": uniqueIp() } };
       await authorize({ email: user.email, password: "CustomerRateLimitTest123!" }, req);
     }).rejects.toThrow("RATE_LIMITED");
+  });
+
+  it("surfaces RATE_LIMITED through the real Auth.js HTTP callback", async () => {
+    const passwordHash = await hashPassword("CustomerHttpRateLimit123!");
+    const user = await prisma.user.create({
+      data: {
+        email: `ratelimit-http-${crypto.randomUUID()}@test.onlylive.ma`,
+        passwordHash,
+        name: "HTTP Rate Limit Customer",
+      },
+    });
+
+    const csrfResponse = await authGet(new NextRequest("http://localhost/api/auth/csrf"));
+    const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
+    const cookieHeader = (csrfResponse.headers as Headers & { getSetCookie(): string[] })
+      .getSetCookie()
+      .map((cookie) => cookie.split(";", 1)[0])
+      .join("; ");
+
+    let lastResponse: Response | undefined;
+    for (let i = 0; i < 11; i += 1) {
+      lastResponse = await authPost(
+        new NextRequest("http://localhost/api/auth/callback/credentials", {
+          method: "POST",
+          headers: {
+            "content-type": "application/x-www-form-urlencoded",
+            cookie: cookieHeader,
+            "x-forwarded-for": uniqueIp(),
+          },
+          body: new URLSearchParams({
+            csrfToken,
+            email: user.email,
+            password: "wrong-password",
+            callbackUrl: "http://localhost/",
+            json: "true",
+          }),
+        }),
+      );
+    }
+
+    expect(lastResponse?.status).toBe(401);
+    const body = (await lastResponse!.json()) as { url: string };
+    expect(new URL(body.url).searchParams.get("error")).toBe("RATE_LIMITED");
   });
 });

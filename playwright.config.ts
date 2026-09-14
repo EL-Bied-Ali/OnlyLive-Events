@@ -46,6 +46,8 @@ export default defineConfig({
       // of it, so the server sees them all as one "unknown" IP — see
       // lib/rateLimit.ts. Never set this for a real deployment.
       RATE_LIMITING_DISABLED: "true",
+      ALLOW_RATE_LIMITING_DISABLED_IN_PRODUCTION: "true",
+      RATE_LIMIT_KEY_SECRET: "e2e-only-secret-not-for-real-use-4444444444444444",
     },
   },
 });

@@ -765,7 +765,7 @@
   },
   {
     "id": "register-rate-limited",
-    "scenario": "Customer registration is rate limited per IP (5/15min); a different IP is never affected by another IP's exhausted limit",
+    "scenario": "Repeated registration attempts for one normalized email are limited even when the source IP changes, while another email remains independent",
     "category": "access-control",
     "implemented": true,
     "status": "pass",
@@ -773,7 +773,7 @@
   },
   {
     "id": "admin-login-rate-limited",
-    "scenario": "Admin login is rate limited per IP (5/15min), checked before the credential check — even a correct password is rejected with 429 once the limit is hit",
+    "scenario": "Admin login is limited per account across changing IPs before credential verification; rejection includes Retry-After/reset metadata",
     "category": "access-control",
     "implemented": true,
     "status": "pass",
@@ -781,10 +781,58 @@
   },
   {
     "id": "customer-login-rate-limited",
-    "scenario": "Customer login (Auth.js authorize()) is rate limited per IP (10/15min); exceeding it throws RATE_LIMITED instead of evaluating credentials",
+    "scenario": "Customer login is limited per account across changing IPs; exceeding it throws RATE_LIMITED instead of evaluating credentials",
     "category": "access-control",
     "implemented": true,
     "status": "pass",
+    "testFile": "tests/integration/authRateLimiting.test.ts"
+  },
+  {
+    "id": "rate-limit-identities-hmac-pseudonymized",
+    "scenario": "Rate-limit keys are deterministic but never contain the raw IP address or account email",
+    "category": "privacy",
+    "implemented": true,
+    "status": "pending",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-ip-validation-canonicalization",
+    "scenario": "Platform-owned Vercel IP is preferred; malformed values collapse to unknown and equivalent IPv6 forms canonicalize to one identity",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pending",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-counter-cap-response-metadata",
+    "scenario": "Rejected buckets cap at limit + 1 and return Retry-After plus reset/remaining metadata",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pending",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "rate-limit-production-config-guard",
+    "scenario": "Production refuses a missing/weak HMAC secret and refuses disabled rate limiting without the explicit isolated-test opt-in",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pending",
+    "testFile": "tests/unit/rateLimitConfig.test.ts"
+  },
+  {
+    "id": "rate-limit-retention-pruning",
+    "scenario": "The authenticated housekeeping path can remove expired rate-limit buckets while retaining recent buckets",
+    "category": "privacy",
+    "implemented": true,
+    "status": "pending",
+    "testFile": "tests/integration/rateLimit.test.ts"
+  },
+  {
+    "id": "customer-login-authjs-http-rate-limited",
+    "scenario": "The real Auth.js credentials callback surfaces RATE_LIMITED after the account allowance is exhausted",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pending",
     "testFile": "tests/integration/authRateLimiting.test.ts"
   }
 ]

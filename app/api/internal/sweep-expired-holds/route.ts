@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sweepExpiredHolds } from "@/lib/inventory";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
+import { pruneRateLimitBuckets } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
@@ -18,8 +19,8 @@ export async function POST(request: NextRequest) {
       throw new ApiError(401, "UNAUTHENTICATED", "Invalid internal secret");
     }
 
-    const result = await sweepExpiredHolds();
-    return NextResponse.json(result);
+    const [holds, rateLimits] = await Promise.all([sweepExpiredHolds(), pruneRateLimitBuckets()]);
+    return NextResponse.json({ ...holds, rateLimitBucketsDeleted: rateLimits.deleted });
   } catch (error) {
     return apiErrorResponse(error);
   }

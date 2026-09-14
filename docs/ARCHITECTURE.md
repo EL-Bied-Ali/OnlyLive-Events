@@ -227,22 +227,28 @@ TASKS.md, tests.json
 
 ## Rate limiting
 
-`lib/rateLimit.ts::checkRateLimit` is a fixed-window counter backed by
-Postgres (no Redis/external cache exists in this app), using the same
-`INSERT ... ON CONFLICT DO UPDATE ... RETURNING` idiom as
-`PaymentEvent`/`EmailLog` so the increment is atomic under concurrent
-requests. Applied per client IP (`x-forwarded-for`) to registration
-(5/15min), admin login (5/15min), and customer login (10/15min) — checked
-before any credential or account-existence check runs, so a rate-limited
-request never leaks anything about the account. `RATE_LIMITING_DISABLED`
-bypasses it entirely and is set only for the Playwright `webServer` (see
-playwright.config.ts): that suite performs many distinct logins/
-registrations that all originate from one local machine with no reverse
-proxy in front of it, so the server would otherwise see one shared
-"unknown" IP and trip these limits well before covering the intended
-scenarios. Never set it for a real deployment. Rate-limit buckets for past
-windows are never cleaned up — the table grows unbounded over time (see
-TASKS.md).
+`lib/rateLimit.ts::consumeRateLimit` is a fixed-window counter backed by
+Postgres (no Redis/external cache exists in this app). Its atomic upsert is
+shared by concurrent requests and serverless instances. Every auth flow
+uses both a generous per-IP ceiling and a tighter per-account/email ceiling:
+the former reduces bulk abuse without letting a few mistakes block a whole
+shared NAT, while the latter stops distributed guessing against one account.
+Identifiers are HMAC-pseudonymized with `RATE_LIMIT_KEY_SECRET`; raw IPs and
+emails are never stored in `rate_limit_buckets`.
+
+IP resolution prefers `x-vercel-forwarded-for`, falls back to
+`x-forwarded-for`, accepts only valid IPv4/IPv6, and canonicalizes IPv6.
+Malformed/missing values share a conservative `unknown` bucket instead of
+creating attacker-selected keys. Production startup rejects a missing/weak
+HMAC key and rejects `RATE_LIMITING_DISABLED=true` unless the explicit
+isolated-test opt-in is also set. Rejections include `Retry-After` and reset
+metadata where the route controls the HTTP response (Auth.js Credentials
+still owns the customer-login HTTP response).
+
+The authenticated expired-hold housekeeping endpoint also deletes buckets
+older than 48 hours. This limiter protects application authentication work;
+it is not a DDoS shield. Vercel WAF rate limiting remains a deployment task
+to stage in log mode, observe, and tune against real traffic before enforcing.
 
 ## Deployment
 
@@ -257,11 +263,13 @@ See `.env.example` for the full list and generation instructions
 (`DATABASE_URL`, `TEST_DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`,
 `ADMIN_SESSION_SECRET`, `PAYMENT_PROVIDER`,
 `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION`, `FAKE_PSP_WEBHOOK_SECRET`,
-`INTERNAL_API_SECRET`, and the seed-only `ADMIN_SEED_EMAIL`/
+`INTERNAL_API_SECRET`, `RATE_LIMIT_KEY_SECRET`, the test-only
+`RATE_LIMITING_DISABLED`/`ALLOW_RATE_LIMITING_DISABLED_IN_PRODUCTION`,
+and the seed-only `ADMIN_SEED_EMAIL`/
 `ADMIN_SEED_PASSWORD`). `instrumentation.ts` validates
-`PAYMENT_PROVIDER`/`ALLOW_FAKE_PAYMENTS_IN_PRODUCTION` once at server
-boot, so a misconfigured production deployment fails to start rather than
-failing on the first webhook — see docs/PAYMENTS.md.
+payment-provider and rate-limit safety once at server boot, so a
+misconfigured production deployment fails to start rather than failing on
+the first customer request.
 
 ### Morocco timezone data depends on the Node runtime's bundled tzdata
 
@@ -294,9 +302,10 @@ historical rather than future.
   sandbox provider (logs the message, no real delivery) — no real
   provider (Resend/Postmark/SES/...) is integrated, and a failed send has
   no background retry yet.
-- **Rate limiting** — implemented per-IP on registration, admin login,
-  and customer login (`lib/rateLimit.ts`); per-account limiting across
-  many IPs is not. **CSP headers** — not yet implemented; see
+- **Rate limiting** — implemented in the application per IP and per
+  account/email on registration, admin login, and customer login
+  (`lib/rateLimit.ts`). Production WAF rules and final thresholds still
+  require observed traffic and a staged rollout. **CSP headers** — not yet implemented; see
   docs/SECURITY.md for the full checklist status.
 - **`paid_but_unfulfillable`/`reconciliation_required` orders** are
   surfaced in the admin dashboard's attention metrics and can be resolved

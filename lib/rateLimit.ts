@@ -1,4 +1,6 @@
 import "server-only";
+import crypto from "node:crypto";
+import { isIP } from "node:net";
 import { prisma } from "@/lib/db";
 
 export interface RateLimitOptions {
@@ -6,64 +8,181 @@ export interface RateLimitOptions {
   windowMs: number;
 }
 
-/**
- * Fixed-window rate limiter backed by Postgres — the only durable shared
- * store this app has (no Redis/external cache), and correctness across
- * concurrent requests and multiple serverless instances needs a shared
- * store; an in-process counter would not be shared across separate
- * Vercel function invocations. Uses the same
- * INSERT ... ON CONFLICT DO UPDATE ... RETURNING idiom already used for
- * payment_events/email_logs idempotency, so the increment is atomic even
- * under concurrent requests racing on the same key.
- *
- * `key` is caller-chosen and should already include both the action and
- * the identity being limited, e.g. "register:203.0.113.7" — this module
- * has no opinion on what's being limited or by what.
- *
- * Returns true if the caller is within the limit for the current window
- * (the action should proceed), false if the limit has been exceeded (the
- * action should be rejected). Buckets for past windows are never cleaned
- * up here — the table grows unbounded over time; see TASKS.md.
- */
-export async function checkRateLimit(key: string, options: RateLimitOptions): Promise<boolean> {
-  if (process.env.RATE_LIMITING_DISABLED === "true") {
-    // Only ever set for the Playwright e2e webServer (see
-    // playwright.config.ts) — a real browser test suite legitimately
-    // performs many distinct logins/registrations that all originate
-    // from one local machine with no reverse proxy in front of it, so
-    // they'd otherwise collapse into a single "unknown" IP bucket and
-    // trip these limits. Never set this for a real deployment.
-    return true;
+export interface RateLimitResult {
+  allowed: boolean;
+  limit: number;
+  remaining: number;
+  resetAt: Date;
+  retryAfterSeconds: number;
+}
+
+const DEVELOPMENT_KEY_SECRET = "onlylive-rate-limit-development-key-never-use-in-production";
+export const RATE_LIMIT_RETENTION_MS = 48 * 60 * 60 * 1000;
+
+function keySecret(): string {
+  const configured = process.env.RATE_LIMIT_KEY_SECRET;
+  if (configured) return configured;
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("RATE_LIMIT_KEY_SECRET is required in production");
   }
-
-  const windowStart = new Date(Math.floor(Date.now() / options.windowMs) * options.windowMs);
-
-  const rows = await prisma.$queryRaw<{ count: number }[]>`
-    INSERT INTO rate_limit_buckets (key, window_start, count)
-    VALUES (${key}, ${windowStart}, 1)
-    ON CONFLICT (key, window_start) DO UPDATE SET count = rate_limit_buckets.count + 1
-    RETURNING count
-  `;
-  const count = rows[0]?.count ?? 1;
-  return count <= options.limit;
+  return DEVELOPMENT_KEY_SECRET;
 }
 
 /**
- * Best-effort client IP extraction from the de-facto standard proxy
- * header. Vercel (the deployment target) and most reverse proxies set
- * this; it can be spoofed by a direct client if nothing in front of the
- * app strips/overwrites it, but that's true of any header-based IP
- * detection and is an accepted limitation, not unique to rate limiting.
+ * Fail fast when a production deployment accidentally disables the only
+ * application-level credential-abuse protection or would persist unhashed
+ * identities because its HMAC key is missing. Playwright's production-mode
+ * webServer must opt in explicitly; real customer deployments must not.
  */
-export function getClientIp(headers: { get(name: string): string | null } | Record<string, unknown> | undefined): string {
+export function assertRateLimitingConfig(): void {
+  if (process.env.NODE_ENV !== "production") return;
+
+  if (
+    process.env.RATE_LIMITING_DISABLED === "true" &&
+    process.env.ALLOW_RATE_LIMITING_DISABLED_IN_PRODUCTION !== "true"
+  ) {
+    throw new Error(
+      "RATE_LIMITING_DISABLED=true is forbidden in production unless ALLOW_RATE_LIMITING_DISABLED_IN_PRODUCTION=true is explicitly set for an isolated non-customer test deployment",
+    );
+  }
+
+  const secret = process.env.RATE_LIMIT_KEY_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error("RATE_LIMIT_KEY_SECRET must be set to at least 32 characters in production");
+  }
+}
+
+/** Persist only a deterministic HMAC, never a raw IP address or email. */
+export function buildRateLimitKey(scope: string, identity: string): string {
+  if (!/^[a-z0-9_:-]{1,64}$/i.test(scope)) {
+    throw new Error("Invalid rate-limit scope");
+  }
+  return `${scope}:${crypto.createHmac("sha256", keySecret()).update(identity).digest("base64url")}`;
+}
+
+function validateOptions(options: RateLimitOptions): void {
+  if (!Number.isSafeInteger(options.limit) || options.limit < 1) {
+    throw new Error("Rate-limit limit must be a positive integer");
+  }
+  if (!Number.isSafeInteger(options.windowMs) || options.windowMs < 1) {
+    throw new Error("Rate-limit windowMs must be a positive integer");
+  }
+}
+
+/**
+ * Fixed-window limiter backed by Postgres. The atomic upsert works across
+ * serverless instances. The counter is capped at limit + 1 so rejected
+ * traffic cannot overflow the integer or create ever-growing values.
+ */
+export async function consumeRateLimit(key: string, options: RateLimitOptions): Promise<RateLimitResult> {
+  validateOptions(options);
+  // Keep the startup validation in instrumentation.ts for fail-fast
+  // deployments, but enforce it here too in case this helper is ever used
+  // outside the normal Next.js boot path (tests, scripts, or another worker).
+  assertRateLimitingConfig();
+  const now = Date.now();
+  const windowStartMs = Math.floor(now / options.windowMs) * options.windowMs;
+  const resetAt = new Date(windowStartMs + options.windowMs);
+
+  if (process.env.RATE_LIMITING_DISABLED === "true") {
+    return { allowed: true, limit: options.limit, remaining: options.limit, resetAt, retryAfterSeconds: 0 };
+  }
+
+  const windowStart = new Date(windowStartMs);
+  const cappedCount = options.limit + 1;
+  const rows = await prisma.$queryRaw<{ count: number }[]>`
+    INSERT INTO rate_limit_buckets (key, window_start, count)
+    VALUES (${key}, ${windowStart}, 1)
+    ON CONFLICT (key, window_start) DO UPDATE
+      SET count = LEAST(rate_limit_buckets.count + 1, ${cappedCount})
+    RETURNING count
+  `;
+  const count = rows[0]?.count ?? 1;
+  const allowed = count <= options.limit;
+
+  return {
+    allowed,
+    limit: options.limit,
+    remaining: Math.max(0, options.limit - count),
+    resetAt,
+    retryAfterSeconds: allowed ? 0 : Math.max(1, Math.ceil((resetAt.getTime() - now) / 1000)),
+  };
+}
+
+/** Compatibility helper for callers/tests that only need allow/deny. */
+export async function checkRateLimit(key: string, options: RateLimitOptions): Promise<boolean> {
+  return (await consumeRateLimit(key, options)).allowed;
+}
+
+export function rateLimitHeaders(result: RateLimitResult): Record<string, string> {
+  return {
+    "Retry-After": String(result.retryAfterSeconds),
+    "X-RateLimit-Limit": String(result.limit),
+    "X-RateLimit-Remaining": String(result.remaining),
+    "X-RateLimit-Reset": String(Math.ceil(result.resetAt.getTime() / 1000)),
+  };
+}
+
+function readHeader(
+  headers: { get(name: string): string | null } | Record<string, unknown>,
+  name: string,
+): string | string[] | undefined {
+  if (typeof (headers as { get?: unknown }).get === "function") {
+    return (headers as { get(name: string): string | null }).get(name) ?? undefined;
+  }
+  const entry = Object.entries(headers as Record<string, unknown>).find(([key]) => key.toLowerCase() === name);
+  const value = entry?.[1];
+  return typeof value === "string" || (Array.isArray(value) && value.every((part) => typeof part === "string"))
+    ? (value as string | string[])
+    : undefined;
+}
+
+function normalizeIp(raw: string): string | null {
+  const candidate = raw.split(",")[0]!.trim();
+  const version = isIP(candidate);
+  if (version === 4) return candidate;
+  if (version !== 6) return null;
+
+  // URL's IPv6 host parser canonicalizes equivalent textual forms, stopping
+  // one address from obtaining multiple buckets by changing zero padding.
+  // Zone identifiers are not valid forwarding-header client identities and
+  // Node's URL parser rejects them even though net.isIP accepts them.
+  if (candidate.includes("%")) return null;
+  try {
+    const hostname = new URL(`http://[${candidate}]/`).hostname;
+    return hostname.slice(1, -1).toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve only syntactically valid IPs. Vercel's platform-owned header is
+ * preferred because x-forwarded-for can be replaced by an external proxy.
+ * Invalid/missing values collapse into one conservative "unknown" bucket
+ * instead of becoming attacker-selected database keys.
+ */
+export function getClientIp(
+  headers: { get(name: string): string | null } | Record<string, unknown> | undefined,
+): string {
   if (!headers) return "unknown";
-  const raw =
-    typeof (headers as { get?: unknown }).get === "function"
-      ? (headers as { get(name: string): string | null }).get("x-forwarded-for")
-      : ((headers as Record<string, unknown>)["x-forwarded-for"] as string | string[] | undefined);
-  const value = Array.isArray(raw) ? raw[0] : raw;
-  if (!value) return "unknown";
-  // x-forwarded-for is a comma-separated list; the first entry is the
-  // original client.
-  return value.split(",")[0]!.trim() || "unknown";
+  for (const name of ["x-vercel-forwarded-for", "x-forwarded-for"]) {
+    const raw = readHeader(headers, name);
+    const value = Array.isArray(raw) ? raw[0] : raw;
+    if (!value) continue;
+    const normalized = normalizeIp(value);
+    if (normalized) return normalized;
+  }
+  return "unknown";
+}
+
+/** Delete expired buckets; intended for the authenticated housekeeping job. */
+export async function pruneRateLimitBuckets(retentionMs = RATE_LIMIT_RETENTION_MS): Promise<{ deleted: number }> {
+  if (!Number.isSafeInteger(retentionMs) || retentionMs < 1) {
+    throw new Error("Rate-limit retentionMs must be a positive integer");
+  }
+  const result = await prisma.rateLimitBucket.deleteMany({
+    where: { windowStart: { lt: new Date(Date.now() - retentionMs) } },
+  });
+  return { deleted: result.count };
 }
