@@ -16,7 +16,7 @@ type PaymentOutcome =
 
 type ClaimedRefundEvent =
   | { kind: "duplicate" }
-  | { kind: "claimed"; paymentEventId: string; refundId: string; providerRefundId?: string };
+  | { kind: "claimed"; paymentEventId: string; refundId: string; providerRefundId: string };
 
 function headersObject(request: NextRequest): Record<string, string> {
   const headers: Record<string, string> = {};
@@ -158,7 +158,10 @@ async function claimRefundEvent(event: ParsedWebhookEvent): Promise<ClaimedRefun
     kind: "claimed",
     paymentEventId: claim.paymentEventId,
     refundId: refund.id,
-    providerRefundId: event.providerPaymentId,
+    // refundReference is our stable Refund.id and is explicitly accepted by
+    // ChariPay's refund lookup endpoint. Do not guess that an operationId or
+    // checkout session id in a refund event is the provider's refund id.
+    providerRefundId: refund.providerRefundId ?? refund.id,
   };
 }
 
