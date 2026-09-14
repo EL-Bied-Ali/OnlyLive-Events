@@ -15,6 +15,8 @@ export interface CreatePaymentInput {
   returnUrl: string;
   /** Provider callback endpoint. Required by the ChariPay adapter. */
   webhookUrl?: string;
+  /** Provider session should not remain payable after OnlyLive's checkout hold. */
+  expiresAt?: Date;
 }
 
 export interface CreatePaymentResult {
