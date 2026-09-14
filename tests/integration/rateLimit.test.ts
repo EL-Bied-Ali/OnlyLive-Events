@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import {
   buildRateLimitKey,
@@ -24,14 +24,19 @@ describe("checkRateLimit", () => {
 
   it("resets once a new window starts", async () => {
     const key = `test-${crypto.randomUUID()}`;
-    const options = { limit: 1, windowMs: 50 };
+    const options = { limit: 1, windowMs: 60_000 };
+    const firstWindow = Math.floor(Date.now() / options.windowMs) * options.windowMs + 1;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(firstWindow);
 
-    expect(await checkRateLimit(key, options)).toBe(true);
-    expect(await checkRateLimit(key, options)).toBe(false);
+    try {
+      expect(await checkRateLimit(key, options)).toBe(true);
+      expect(await checkRateLimit(key, options)).toBe(false);
 
-    await new Promise((resolve) => setTimeout(resolve, 80));
-
-    expect(await checkRateLimit(key, options)).toBe(true);
+      clock.mockReturnValue(firstWindow + options.windowMs);
+      expect(await checkRateLimit(key, options)).toBe(true);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("different keys never share a bucket", async () => {
