@@ -127,7 +127,7 @@ export const eventMutationSchema = z
     doorsOpenAt: optionalLocalDateTimeSchema,
     salesOpenAt: localDateTimeSchema,
     salesCloseAt: localDateTimeSchema,
-    maxTicketsPerUser: integer(1, MAX_CONFIGURABLE_TICKETS_PER_USER).default(DEFAULT_MAX_TICKETS_PER_USER),
+    maxTicketsPerUser: integer(1, MAX_CONFIGURABLE_TICKETS_PER_USER),
     status: z.enum(["draft", "published", "on_sale", "sold_out", "closed", "cancelled"]),
     coverImageUrl: z.preprocess(
       (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),
