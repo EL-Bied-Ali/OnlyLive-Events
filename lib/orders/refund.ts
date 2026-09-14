@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import { getPaymentProvider } from "@/lib/payments";
+import { getPaymentProviderByName } from "@/lib/payments";
 import { ProviderRequestError } from "@/lib/payments/provider";
 import { ApiError } from "@/lib/http/errors";
 import { canTransition, type OrderStatus } from "@/lib/orders/stateMachine";
@@ -25,6 +25,7 @@ interface PreparedRefund {
   paymentId: string;
   paymentExternalId: string;
   providerPaymentId: string;
+  provider: string;
   amountCents: number;
   currency: string;
   reason: string;
@@ -58,7 +59,7 @@ function assertRefundProviderEvidence(
   }
 }
 
-async function prepareRefund(input: InitiateRefundInput, expectedProvider: string): Promise<PreparedRefund> {
+async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<
       { id: string; order_id: string; provider: string; provider_payment_id: string | null; amount_cents: number; currency: string; status: string }[]
@@ -68,9 +69,6 @@ async function prepareRefund(input: InitiateRefundInput, expectedProvider: strin
     `;
     const payment = paymentRows[0];
     if (!payment) throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
-    if (payment.provider !== expectedProvider) {
-      throw new ApiError(409, "PAYMENT_PROVIDER_MISMATCH", "Payment belongs to a different payment provider");
-    }
     if (payment.status !== "paid" && payment.status !== "partially_refunded") {
       throw new ApiError(409, "PAYMENT_NOT_REFUNDABLE", `Cannot refund a payment with status "${payment.status}"`);
     }
@@ -124,7 +122,7 @@ async function prepareRefund(input: InitiateRefundInput, expectedProvider: strin
         action: "refund.requested",
         entityType: "refund",
         entityId: refund.id,
-        metadata: { paymentId: payment.id, orderId: order.id, amountCents: input.amountCents },
+        metadata: { paymentId: payment.id, orderId: order.id, amountCents: input.amountCents, provider: payment.provider },
       },
     });
 
@@ -133,6 +131,7 @@ async function prepareRefund(input: InitiateRefundInput, expectedProvider: strin
       paymentId: payment.id,
       paymentExternalId: payment.id,
       providerPaymentId: payment.provider_payment_id,
+      provider: payment.provider,
       amountCents: input.amountCents,
       currency: payment.currency,
       reason: input.reason,
@@ -290,7 +289,7 @@ export async function finalizeRefundFailure(
 }
 
 async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateRefundResult> {
-  const provider = getPaymentProvider();
+  const provider = getPaymentProviderByName(prepared.provider);
   let result;
   try {
     result = await provider.refund({
@@ -304,7 +303,15 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
   } catch (error) {
     console.error(
       "provider.refund submission failed",
-      error instanceof ProviderRequestError ? { name: error.name, status: error.status, outcomeUnknown: error.outcomeUnknown } : { name: "unknown" },
+      error instanceof ProviderRequestError
+        ? {
+            name: error.name,
+            status: error.status,
+            outcomeUnknown: error.outcomeUnknown,
+            retryAfterMs: error.retryAfterMs,
+            correlationId: error.correlationId,
+          }
+        : { name: "unknown" },
     );
 
     const definitiveRejection =
@@ -325,6 +332,8 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
         metadata: {
           provider: provider.name,
           providerStatus: error instanceof ProviderRequestError ? error.status : null,
+          retryAfterMs: error instanceof ProviderRequestError ? error.retryAfterMs ?? null : null,
+          correlationId: error instanceof ProviderRequestError ? error.correlationId ?? null : null,
         },
       },
     });
@@ -354,7 +363,7 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
       action: "refund.submitted",
       entityType: "refund",
       entityId: prepared.refundId,
-      metadata: { providerRefundId: result.providerRefundId },
+      metadata: { providerRefundId: result.providerRefundId, provider: prepared.provider },
     },
   });
   return { refundId: prepared.refundId, state: "processing" };
@@ -364,8 +373,7 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
     throw new ApiError(400, "INVALID_AMOUNT", "Refund amount must be a positive number of cents");
   }
-  const provider = getPaymentProvider();
-  return submitPreparedRefund(await prepareRefund(input, provider.name));
+  return submitPreparedRefund(await prepareRefund(input));
 }
 
 const REFUND_RECONCILIATION_MIN_AGE_MS = 30_000;
@@ -383,13 +391,11 @@ export async function reconcileProcessingRefunds(batchSize = 20): Promise<{
   pending: number;
   errors: number;
 }> {
-  const provider = getPaymentProvider();
   const cutoff = new Date(Date.now() - REFUND_RECONCILIATION_MIN_AGE_MS);
   const refunds = await prisma.refund.findMany({
     where: {
       status: "processing",
       createdAt: { lte: cutoff },
-      payment: { provider: provider.name },
     },
     include: { payment: true },
     orderBy: { createdAt: "asc" },
@@ -399,6 +405,23 @@ export async function reconcileProcessingRefunds(batchSize = 20): Promise<{
   const stats = { checked: 0, succeeded: 0, failed: 0, replayed: 0, pending: 0, errors: 0 };
   for (const refund of refunds) {
     stats.checked += 1;
+    let provider;
+    try {
+      provider = getPaymentProviderByName(refund.payment.provider);
+    } catch (error) {
+      stats.errors += 1;
+      await prisma.auditLog.create({
+        data: {
+          actorType: "system",
+          action: "refund.reconciliation_error",
+          entityType: "refund",
+          entityId: refund.id,
+          metadata: { reason: "unsupported_persisted_provider", provider: refund.payment.provider },
+        },
+      });
+      continue;
+    }
+
     if (!refund.payment.providerPaymentId) {
       stats.errors += 1;
       await prisma.auditLog.create({
@@ -407,7 +430,7 @@ export async function reconcileProcessingRefunds(batchSize = 20): Promise<{
           action: "refund.reconciliation_error",
           entityType: "refund",
           entityId: refund.id,
-          metadata: { reason: "missing_provider_payment_id" },
+          metadata: { reason: "missing_provider_payment_id", provider: provider.name },
         },
       });
       continue;
@@ -471,6 +494,8 @@ export async function reconcileProcessingRefunds(batchSize = 20): Promise<{
           metadata: {
             provider: provider.name,
             providerStatus: error instanceof ProviderRequestError ? error.status : null,
+            retryAfterMs: error instanceof ProviderRequestError ? error.retryAfterMs ?? null : null,
+            correlationId: error instanceof ProviderRequestError ? error.correlationId ?? null : null,
           },
         },
       });
