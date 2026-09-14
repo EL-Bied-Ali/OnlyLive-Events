@@ -34,6 +34,8 @@ function timingSafeEqualHex(a: string, b: string): boolean {
 interface FakeWebhookPayload {
   eventId: string;
   providerPaymentId: string;
+  paymentExternalId?: string;
+  refundExternalId?: string;
   type: PaymentWebhookEventType;
   amountCents: number;
   currency: string;
@@ -41,12 +43,9 @@ interface FakeWebhookPayload {
 
 /**
  * Simulates a hosted-checkout PSP for local dev/testing without inventing
- * a real API. `createPayment` never makes an external call — it points at
- * the app's own /pay/fake/[paymentId] page, whose "simulate" buttons POST
- * a genuinely HMAC-signed payload to the real webhook route, so the actual
- * verification path (signature check -> idempotent PaymentEvent insert ->
- * order-row-locked transition -> ticket generation) is exercised
- * end-to-end and gets reused unchanged once a real PSP is chosen.
+ * a real API. The fake refund remains immediately successful so the existing
+ * local browser flow stays fast; the provider interface can also represent
+ * ChariPay's asynchronous refund lifecycle.
  */
 export class FakeProvider implements PaymentProvider {
   readonly name = "fake";
@@ -81,6 +80,8 @@ export class FakeProvider implements PaymentProvider {
     return {
       externalEventId: payload.eventId,
       providerPaymentId: payload.providerPaymentId,
+      paymentExternalId: payload.paymentExternalId,
+      refundExternalId: payload.refundExternalId,
       type: payload.type,
       amountCents: payload.amountCents,
       currency: payload.currency,
@@ -90,6 +91,9 @@ export class FakeProvider implements PaymentProvider {
   }
 
   async refund(_input: RefundInput): Promise<RefundResult> {
-    return { providerRefundId: `fake_refund_${crypto.randomUUID()}` };
+    return {
+      providerRefundId: `fake_refund_${crypto.randomUUID()}`,
+      state: "succeeded",
+    };
   }
 }
