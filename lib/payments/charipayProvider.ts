@@ -213,7 +213,10 @@ export class ChariPayProvider implements PaymentProvider {
     } catch {
       return {
         externalEventId: eventId,
+        providerPaymentId: "",
         type: eventType,
+        amountCents: 0,
+        currency: "MAD",
         signatureValid: false,
         payloadValid: false,
         raw: input.rawBody,
@@ -229,21 +232,18 @@ export class ChariPayProvider implements PaymentProvider {
         ? metadata.onlylivePaymentId
         : undefined;
     const refundExternalId = typeof payload.refundReference === "string" ? payload.refundReference : undefined;
-    const amountCents = eventType.startsWith("refund.")
+    const normalizedAmount = eventType.startsWith("refund.")
       ? madToCents(payload.refundAmount)
       : madToCents(payload.amount);
-    const currency = typeof payload.currency === "string" ? payload.currency : undefined;
-    const providerPaymentId = typeof payload.sessionId === "string" ? payload.sessionId : undefined;
+    const currency = typeof payload.currency === "string" ? payload.currency : "MAD";
+    const providerPaymentId = typeof payload.sessionId === "string" ? payload.sessionId : "";
     const providerRefundId = typeof payload.refundId === "string" ? payload.refundId : undefined;
 
-    // Exact ChariPay webhook bodies remain sandbox-gated. Until a real signed
-    // delivery is captured, accept only the narrow provisional shape that can
-    // prove the immutable facts OnlyLive needs. Missing amount/reference data
-    // is fail-closed rather than defaulted to zero or fabricated.
     const payloadValid = Boolean(
       eventId
       && supported.has(eventTypeRaw as PaymentWebhookEventType)
-      && amountCents !== undefined
+      && normalizedAmount !== undefined
+      && currency === "MAD"
       && (eventType.startsWith("refund.") ? refundExternalId : paymentExternalId || providerPaymentId),
     );
 
@@ -254,7 +254,7 @@ export class ChariPayProvider implements PaymentProvider {
       paymentExternalId,
       refundExternalId,
       type: eventType,
-      amountCents,
+      amountCents: normalizedAmount ?? 0,
       currency,
       signatureValid,
       payloadValid,
