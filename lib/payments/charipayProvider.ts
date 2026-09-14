@@ -53,8 +53,9 @@ function safeHexEqual(actual: string, expected: string): boolean {
 
 function verifySignature(rawBody: string, headers: Record<string, string>): boolean {
   const timestampRaw = headers["x-chari-timestamp"];
-  const signature = headers["x-chari-signature"];
-  if (!timestampRaw || !signature) return false;
+  const signatures = [headers["x-chari-signature"], headers["x-chari-signature-next"]]
+    .filter((value): value is string => Boolean(value));
+  if (!timestampRaw || signatures.length === 0) return false;
 
   const timestamp = Number(timestampRaw);
   if (!Number.isFinite(timestamp) || Math.abs(Date.now() - timestamp) > WEBHOOK_MAX_SKEW_MS) return false;
@@ -65,10 +66,10 @@ function verifySignature(rawBody: string, headers: Record<string, string>): bool
     .filter((value): value is string => Boolean(value));
   if (secrets.length === 0) throw new Error("CHARIPAY_WEBHOOK_SECRET is not set");
 
-  return secrets.some((secret) => {
+  return signatures.some((signature) => secrets.some((secret) => {
     const expected = crypto.createHmac("sha256", secret).update(signed).digest("hex");
     return safeHexEqual(signature, expected);
-  });
+  }));
 }
 
 interface ChariPayPaymentSessionResponse {
@@ -114,11 +115,6 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
   return body;
 }
 
-/**
- * ChariPay adapter pinned to the provider's published v1 contract:
- * hosted payment sessions, API-key authentication, HMAC/timestamp webhooks,
- * and asynchronous refunds. No card data ever enters OnlyLive.
- */
 export class ChariPayProvider implements PaymentProvider {
   readonly name = "charipay";
 
