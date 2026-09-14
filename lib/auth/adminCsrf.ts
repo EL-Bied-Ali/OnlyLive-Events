@@ -6,6 +6,7 @@ import { ADMIN_SESSION_COOKIE } from "@/lib/auth/admin";
 import { ApiError } from "@/lib/http/errors";
 
 export const ADMIN_CSRF_HEADER = "x-csrf-token";
+export const ADMIN_CSRF_FORM_FIELD = "__csrf";
 
 const CSRF_CONTEXT = "onlylive-admin-csrf-v1\0";
 
@@ -37,6 +38,22 @@ function constantTimeEqual(left: string, right: string): boolean {
   return leftBytes.length === rightBytes.length && crypto.timingSafeEqual(leftBytes, rightBytes);
 }
 
+/**
+ * Pure token verifier shared by Route Handlers and Server Actions. Keeping
+ * this independent from request/cookie access makes the cryptographic check
+ * directly unit-testable and avoids subtly diverging implementations.
+ */
+export function assertAdminCsrfToken(sessionToken: string | undefined, supplied: string | null | undefined): void {
+  if (!sessionToken || !supplied) {
+    throw new ApiError(403, "CSRF_REJECTED", "CSRF token is required");
+  }
+
+  const expected = createAdminCsrfToken(sessionToken);
+  if (!constantTimeEqual(expected, supplied)) {
+    throw new ApiError(403, "CSRF_REJECTED", "Invalid CSRF token");
+  }
+}
+
 function requestSourceOrigin(request: NextRequest): string | null {
   const origin = request.headers.get("origin");
   if (origin && origin !== "null") return origin;
@@ -51,6 +68,10 @@ function requestSourceOrigin(request: NextRequest): string | null {
 }
 
 function targetOrigin(request: NextRequest): string {
+  // Vercel documents x-forwarded-host as identical to Host and
+  // x-forwarded-proto as the forwarded protocol. Prefer those values when
+  // present so the comparison uses the public origin seen by the browser,
+  // while still working in direct/local Next.js requests.
   const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
   const host = forwardedHost || request.headers.get("host") || request.nextUrl.host;
   const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
@@ -96,25 +117,27 @@ export function assertSameOriginMutation(request: NextRequest): void {
   }
 }
 
-/**
- * Protect custom cookie-authenticated admin/scanner Route Handlers. Server
- * Actions are intentionally not wrapped here: Next.js already performs its
- * own Origin-vs-Host CSRF validation for Server Actions, while every action
- * still re-checks authorization in application code.
- */
+/** Protect custom cookie-authenticated admin/scanner Route Handlers. */
 export function assertAdminCsrf(request: NextRequest): void {
   assertSameOriginMutation(request);
+  assertAdminCsrfToken(
+    request.cookies.get(ADMIN_SESSION_COOKIE)?.value,
+    request.headers.get(ADMIN_CSRF_HEADER),
+  );
+}
 
-  const sessionToken = request.cookies.get(ADMIN_SESSION_COOKIE)?.value;
-  const supplied = request.headers.get(ADMIN_CSRF_HEADER);
-  if (!sessionToken || !supplied) {
-    throw new ApiError(403, "CSRF_REJECTED", "CSRF token is required");
-  }
-
-  const expected = createAdminCsrfToken(sessionToken);
-  if (!constantTimeEqual(expected, supplied)) {
-    throw new ApiError(403, "CSRF_REJECTED", "Invalid CSRF token");
-  }
+/**
+ * Defense in depth for sensitive Server Actions. Next.js performs its own
+ * Origin-vs-Host CSRF validation, but the money/catalogue actions also
+ * require the same session-bound synchronizer token as custom admin routes.
+ */
+export async function assertAdminServerActionCsrf(formData: FormData): Promise<void> {
+  const cookieStore = await cookies();
+  const supplied = formData.get(ADMIN_CSRF_FORM_FIELD);
+  assertAdminCsrfToken(
+    cookieStore.get(ADMIN_SESSION_COOKIE)?.value,
+    typeof supplied === "string" ? supplied : undefined,
+  );
 }
 
 /**
