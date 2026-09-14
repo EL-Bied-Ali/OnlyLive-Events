@@ -36,11 +36,14 @@ describe("ChariPayProvider", () => {
     vi.useRealTimers();
   });
 
-  it("creates a hosted checkout session with MAD major units, stable externalId and idempotency", async () => {
+  it("creates a hosted checkout session with MAD major units, stable ids, HTTPS callbacks and OnlyLive expiry", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-14T18:00:00Z"));
+    const checkoutExpiry = new Date("2026-09-14T18:10:00Z");
     const fetchMock = vi.fn().mockResolvedValue(response({
       sessionId: "ps_test_123",
       checkoutUrl: "https://pay.chari.ma/checkout/ps_test_123",
-      expiresAt: "2026-09-15T00:00:00Z",
+      expiresAt: checkoutExpiry.toISOString(),
     }, 201));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -54,6 +57,7 @@ describe("ChariPayProvider", () => {
       customerEmail: "buyer@example.com",
       returnUrl: "https://onlylive.ma/orders/order-456",
       webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
+      expiresAt: checkoutExpiry,
     });
 
     expect(result).toEqual({
@@ -71,7 +75,10 @@ describe("ChariPayProvider", () => {
     expect(JSON.parse(String(init.body))).toEqual({
       amount: 250.01,
       orderId: "order-456",
+      singleUse: true,
       externalId: "payment-123",
+      expiresAt: checkoutExpiry.toISOString(),
+      notifyOnFailure: true,
       config: {
         customer: { email: "buyer@example.com" },
         urls: {
@@ -95,7 +102,41 @@ describe("ChariPayProvider", () => {
       customerEmail: "buyer@example.com",
       returnUrl: "https://onlylive.ma/orders/order",
       webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
+      expiresAt: new Date(Date.now() + 60_000),
     })).rejects.toThrow("only supports MAD");
+  });
+
+  it("refuses non-HTTPS callbacks before calling ChariPay", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(new ChariPayProvider().createPayment({
+      paymentId: "payment",
+      orderId: "order",
+      amountCents: 1000,
+      currency: "MAD",
+      idempotencyKey: "idem",
+      customerEmail: "buyer@example.com",
+      returnUrl: "http://localhost:3000/orders/order",
+      webhookUrl: "http://localhost:3000/api/payments/webhook/charipay",
+      expiresAt: new Date(Date.now() + 60_000),
+    })).rejects.toThrow("must use HTTPS");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a missing or expired checkout deadline", async () => {
+    const provider = new ChariPayProvider();
+    const base = {
+      paymentId: "payment",
+      orderId: "order",
+      amountCents: 1000,
+      currency: "MAD",
+      idempotencyKey: "idem",
+      customerEmail: "buyer@example.com",
+      returnUrl: "https://onlylive.ma/orders/order",
+      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
+    };
+    await expect(provider.createPayment(base)).rejects.toThrow("future checkout expiry");
+    await expect(provider.createPayment({ ...base, expiresAt: new Date(Date.now() - 1) })).rejects.toThrow("future checkout expiry");
   });
 
   it("verifies the documented timestamp.rawBody HMAC and extracts stable reconciliation references", async () => {
