@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { Prisma } from "@prisma/client";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getPaymentProvider } from "@/lib/payments";
+import { getPaymentProviderByName } from "@/lib/payments";
 import { confirmOrderPayment, failOrderPayment } from "@/lib/orders/fulfillment";
 import {
   finalizeRefundFailure,
@@ -37,6 +37,12 @@ function consistentClaim(
     && canonicalJson(existing.rawPayload) === canonicalJson(event.raw);
 }
 
+function isSyntheticTestPayload(raw: unknown): boolean {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return false;
+  const object = raw as Record<string, unknown>;
+  return object.Test === true || object.test === true;
+}
+
 async function auditIntegrityMismatch(
   action: string,
   paymentId: string,
@@ -55,20 +61,34 @@ async function auditIntegrityMismatch(
 
 export async function POST(request: NextRequest) {
   try {
-    if ((process.env.PAYMENT_PROVIDER ?? "fake") !== "charipay") {
-      return NextResponse.json({ error: "NOT_FOUND" }, { status: 404 });
-    }
-
+    // This provider-specific endpoint must keep accepting historical ChariPay
+    // events even if PAYMENT_PROVIDER later changes for newly-created payments.
+    const provider = getPaymentProviderByName("charipay");
     const rawBody = await request.text();
     const headers: Record<string, string> = {};
     request.headers.forEach((value, key) => { headers[key.toLowerCase()] = value; });
 
-    const provider = getPaymentProvider();
     const event = await provider.parseWebhook({ rawBody, headers });
     if (!event.signatureValid) {
       return NextResponse.json({ error: "INVALID_SIGNATURE" }, { status: 401 });
     }
-    if (!event.payloadValid || event.amountCents === undefined) {
+
+    // ChariPay's dashboard can send a signed synthetic delivery that is not
+    // associated with a real OnlyLive Payment. Acknowledge it without mutation.
+    if (isSyntheticTestPayload(event.raw)) {
+      await prisma.auditLog.create({
+        data: {
+          actorType: "system",
+          action: "charipay.webhook_test_received",
+          entityType: "PaymentProvider",
+          entityId: "charipay",
+          metadata: { externalEventId: event.externalEventId || null },
+        },
+      });
+      return NextResponse.json({ ok: true, test: true });
+    }
+
+    if (!event.payloadValid) {
       return NextResponse.json({ error: "INVALID_PROVIDER_PAYLOAD" }, { status: 400 });
     }
 
@@ -81,7 +101,27 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "REFUND_REFERENCE_MISSING" }, { status: 400 });
       }
       refund = await prisma.refund.findUnique({ where: { id: event.refundExternalId } });
-      if (!refund) return NextResponse.json({ error: "REFUND_NOT_FOUND" }, { status: 404 });
+      if (!refund) {
+        // A refund initiated directly in the provider portal/API is authentic
+        // but has no local Refund row. Persist the anomaly before acknowledging
+        // so ChariPay does not retry the same non-actionable event forever.
+        await prisma.auditLog.create({
+          data: {
+            actorType: "system",
+            action: "refund.provider_unknown",
+            entityType: "Refund",
+            entityId: event.refundExternalId,
+            metadata: {
+              provider: provider.name,
+              externalEventId: event.externalEventId,
+              providerRefundId: event.providerRefundId ?? null,
+              amountCents: event.amountCents,
+              currency: event.currency,
+            },
+          },
+        });
+        return NextResponse.json({ ok: true, reconciliationRequired: true }, { status: 202 });
+      }
       payment = await prisma.payment.findUnique({ where: { id: refund.paymentId } });
       if (!payment || payment.provider !== provider.name) {
         return NextResponse.json({ error: "PAYMENT_NOT_FOUND" }, { status: 404 });
@@ -90,7 +130,7 @@ export async function POST(request: NextRequest) {
       const mismatch =
         event.amountCents !== refund.amountCents
         || payment.currency !== "MAD"
-        || (event.currency !== undefined && event.currency !== payment.currency)
+        || event.currency !== payment.currency
         || (event.paymentExternalId !== undefined && event.paymentExternalId !== payment.id)
         || (event.providerPaymentId !== "" && payment.providerPaymentId !== event.providerPaymentId)
         || (event.providerRefundId !== undefined
@@ -103,7 +143,7 @@ export async function POST(request: NextRequest) {
           expectedAmountCents: refund.amountCents,
           receivedAmountCents: event.amountCents,
           expectedCurrency: payment.currency,
-          receivedCurrency: event.currency ?? null,
+          receivedCurrency: event.currency,
         });
         return NextResponse.json({ error: "REFUND_INTEGRITY_MISMATCH" }, { status: 409 });
       }
@@ -121,7 +161,7 @@ export async function POST(request: NextRequest) {
       const mismatch =
         event.amountCents !== payment.amountCents
         || payment.currency !== "MAD"
-        || (event.currency !== undefined && event.currency !== payment.currency)
+        || event.currency !== payment.currency
         || (event.paymentExternalId !== undefined && event.paymentExternalId !== payment.id)
         || (event.providerPaymentId !== "" && payment.providerPaymentId !== event.providerPaymentId);
       if (mismatch) {
@@ -129,7 +169,7 @@ export async function POST(request: NextRequest) {
           expectedAmountCents: payment.amountCents,
           expectedCurrency: payment.currency,
           receivedAmountCents: event.amountCents,
-          receivedCurrency: event.currency ?? null,
+          receivedCurrency: event.currency,
           externalEventId: event.externalEventId,
         });
         return NextResponse.json({ error: "AMOUNT_MISMATCH" }, { status: 409 });
