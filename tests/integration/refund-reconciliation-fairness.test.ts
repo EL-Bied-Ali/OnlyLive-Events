@@ -41,13 +41,13 @@ async function createAdmin() {
   });
 }
 
-async function createProcessingRefund(ageMs: number) {
+const processingRefundIds = new Set<string>();
+
+async function createProcessingRefund(queueOffsetMs: number) {
   const fixture = await createOrderAwaitingPayment({ quantity: 1, priceCents: 5_000 });
 
-  // Fixtures are created for the fake provider. Confirm the order through that
-  // provider first, then switch the persisted payment to ChariPay so the test
-  // exercises only the async-refund reconciler rather than the webhook router.
-  vi.stubEnv("PAYMENT_PROVIDER", "fake");
+  // The route itself is pinned to the fake provider, so the global default
+  // intentionally remains ChariPay while this fake Payment is confirmed.
   const paid = await fakeWebhookPost(fakeWebhookRequest({
     eventId: crypto.randomUUID(),
     providerPaymentId: fixture.payment.providerPaymentId,
@@ -56,7 +56,6 @@ async function createProcessingRefund(ageMs: number) {
     currency: fixture.payment.currency,
   }));
   expect(paid.status).toBe(200);
-  vi.stubEnv("PAYMENT_PROVIDER", "charipay");
 
   await prisma.payment.update({
     where: { id: fixture.payment.id },
@@ -70,16 +69,23 @@ async function createProcessingRefund(ageMs: number) {
     reason: "Fairness test",
     actorId: admin.id,
   });
-  const aged = new Date(Date.now() - ageMs);
+  const queuePosition = new Date(Date.UTC(2000, 0, 1) + queueOffsetMs);
   await prisma.$executeRaw`
-    UPDATE refunds SET created_at = ${aged}, updated_at = ${aged}
+    UPDATE refunds SET created_at = ${queuePosition}, updated_at = ${queuePosition}
     WHERE id = ${initiated.refundId}
   `;
+  processingRefundIds.add(initiated.refundId);
   return initiated.refundId;
 }
 
 describe("fair refund reconciliation", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    if (processingRefundIds.size > 0) {
+      await prisma.refund.deleteMany({
+        where: { id: { in: [...processingRefundIds] }, status: "processing" },
+      });
+      processingRefundIds.clear();
+    }
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -92,16 +98,16 @@ describe("fair refund reconciliation", () => {
       status: "pending",
     });
 
-    const oldest = await createProcessingRefund(120_000);
-    const second = await createProcessingRefund(110_000);
-    const later = await createProcessingRefund(100_000);
+    const oldest = await createProcessingRefund(0);
+    const second = await createProcessingRefund(1_000);
+    const later = await createProcessingRefund(2_000);
 
     const firstRun = await reconcileProcessingRefundsFair(2);
     expect(firstRun).toMatchObject({ checked: 2, pending: 2, errors: 0 });
     const firstReferences = statusSpy.mock.calls.slice(0, 2).map(([reference]) => reference);
     expect(new Set(firstReferences)).toEqual(new Set([oldest, second]));
 
-    const secondRun = await reconcileProcessingRefundsFair(2);
+    const secondRun = await reconcileProcessingRefundsFair(1);
     expect(secondRun).toMatchObject({ checked: 1, pending: 1, errors: 0 });
     expect(statusSpy.mock.calls[2]?.[0]).toBe(later);
   });
@@ -114,8 +120,8 @@ describe("fair refund reconciliation", () => {
       status: "pending",
     });
 
-    const first = await createProcessingRefund(120_000);
-    const second = await createProcessingRefund(110_000);
+    const first = await createProcessingRefund(0);
+    const second = await createProcessingRefund(1_000);
 
     const results = await Promise.all([
       reconcileProcessingRefundsFair(1),

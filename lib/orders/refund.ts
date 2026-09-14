@@ -408,7 +408,7 @@ export async function reconcileProcessingRefunds(batchSize = 20): Promise<{
     let provider;
     try {
       provider = getPaymentProviderByName(refund.payment.provider);
-    } catch (error) {
+    } catch {
       stats.errors += 1;
       await prisma.auditLog.create({
         data: {

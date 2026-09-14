@@ -62,11 +62,22 @@ function enableChariPay() {
 }
 
 async function ageRefund(refundId: string) {
-  await prisma.refund.update({ where: { id: refundId }, data: { createdAt: new Date(Date.now() - 60_000) } });
+  await prisma.refund.update({
+    where: { id: refundId },
+    data: { createdAt: new Date("2000-01-01T00:00:00.000Z") },
+  });
 }
 
+const processingRefundIds = new Set<string>();
+
 describe("ChariPay asynchronous refund reconciliation", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    if (processingRefundIds.size > 0) {
+      await prisma.refund.deleteMany({
+        where: { id: { in: [...processingRefundIds] }, status: "processing" },
+      });
+      processingRefundIds.clear();
+    }
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
   });
@@ -76,11 +87,13 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     const admin = await createAdmin();
     enableChariPay();
     vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({ providerRefundId: "rf_reconcile_success", state: "processing" });
-    vi.spyOn(ChariPayProvider.prototype, "getRefundStatus").mockResolvedValue({ providerRefundId: "rf_reconcile_success", status: "succeeded" });
+    const statusSpy = vi.spyOn(ChariPayProvider.prototype, "getRefundStatus").mockResolvedValue({ providerRefundId: "rf_reconcile_success", status: "succeeded" });
     const initiated = await initiateRefund({ paymentId: fixture.payment.id, amountCents: fixture.payment.amountCents, reason: "Webhook loss fallback", actorId: admin.id });
     await ageRefund(initiated.refundId);
-    const summary = await reconcileProcessingRefunds();
+    const summary = await reconcileProcessingRefunds(1);
     expect(summary).toMatchObject({ checked: 1, succeeded: 1, errors: 0 });
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledWith("rf_reconcile_success");
     await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "succeeded" });
     await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "refunded" });
   });
@@ -90,11 +103,13 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     const admin = await createAdmin();
     enableChariPay();
     vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({ providerRefundId: "rf_reconcile_failed", state: "processing" });
-    vi.spyOn(ChariPayProvider.prototype, "getRefundStatus").mockResolvedValue({ providerRefundId: "rf_reconcile_failed", status: "failed" });
+    const statusSpy = vi.spyOn(ChariPayProvider.prototype, "getRefundStatus").mockResolvedValue({ providerRefundId: "rf_reconcile_failed", status: "failed" });
     const initiated = await initiateRefund({ paymentId: fixture.payment.id, amountCents: fixture.payment.amountCents, reason: "Failed refund", actorId: admin.id });
     await ageRefund(initiated.refundId);
-    const summary = await reconcileProcessingRefunds();
+    const summary = await reconcileProcessingRefunds(1);
     expect(summary).toMatchObject({ checked: 1, failed: 1, errors: 0 });
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledWith("rf_reconcile_failed");
     await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "failed" });
     await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "paid" });
   });
@@ -108,8 +123,9 @@ describe("ChariPay asynchronous refund reconciliation", () => {
       .mockResolvedValueOnce({ providerRefundId: "rf_after_replay", state: "processing" });
     const statusSpy = vi.spyOn(ChariPayProvider.prototype, "getRefundStatus").mockResolvedValue({ providerRefundId: null, status: "not_found" });
     const initiated = await initiateRefund({ paymentId: fixture.payment.id, amountCents: fixture.payment.amountCents, reason: "Ambiguous first submission", actorId: admin.id });
+    processingRefundIds.add(initiated.refundId);
     await ageRefund(initiated.refundId);
-    const summary = await reconcileProcessingRefunds();
+    const summary = await reconcileProcessingRefunds(1);
     expect(summary).toMatchObject({ checked: 1, replayed: 1, pending: 1, errors: 0 });
     expect(statusSpy).toHaveBeenCalledWith(initiated.refundId);
     expect(refundSpy).toHaveBeenCalledTimes(2);
@@ -126,6 +142,7 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     await expect(initiateRefund({ paymentId: fixture.payment.id, amountCents: 7_000, reason: "Ambiguous network outcome", actorId: admin.id }))
       .rejects.toMatchObject({ code: "PROVIDER_REFUND_STATUS_UNKNOWN", status: 502 });
     const processing = await prisma.refund.findFirstOrThrow({ where: { paymentId: fixture.payment.id } });
+    processingRefundIds.add(processing.id);
     expect(processing.status).toBe("processing");
     await expect(initiateRefund({ paymentId: fixture.payment.id, amountCents: 4_000, reason: "Must remain reserved", actorId: admin.id }))
       .rejects.toMatchObject({ code: "REFUND_EXCEEDS_REMAINING", status: 409 });
@@ -136,13 +153,14 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     const admin = await createAdmin();
     enableChariPay();
     const refundSpy = vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({ providerRefundId: "rf_pending", state: "processing" });
-    vi.spyOn(ChariPayProvider.prototype, "getRefundStatus").mockResolvedValue({ providerRefundId: "rf_pending", status: "pending" });
+    const statusSpy = vi.spyOn(ChariPayProvider.prototype, "getRefundStatus").mockResolvedValue({ providerRefundId: "rf_pending", status: "pending" });
     const initiated = await initiateRefund({ paymentId: fixture.payment.id, amountCents: fixture.payment.amountCents, reason: "Still pending", actorId: admin.id });
+    processingRefundIds.add(initiated.refundId);
     await ageRefund(initiated.refundId);
-    const summary = await reconcileProcessingRefunds();
-    expect(summary.pending).toBeGreaterThanOrEqual(1);
-    expect(summary.replayed).toBe(0);
-    expect(summary.errors).toBe(0);
+    const summary = await reconcileProcessingRefunds(1);
+    expect(summary).toMatchObject({ checked: 1, pending: 1, replayed: 0, errors: 0 });
+    expect(statusSpy).toHaveBeenCalledTimes(1);
+    expect(statusSpy).toHaveBeenCalledWith("rf_pending");
     expect(refundSpy).toHaveBeenCalledTimes(1);
     await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "processing", providerRefundId: "rf_pending" });
   });

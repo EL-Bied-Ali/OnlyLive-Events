@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getPaymentProvider, isFakePaymentsAllowed } from "@/lib/payments";
+import { getPaymentProviderByName, isFakePaymentsAllowed } from "@/lib/payments";
 import { confirmOrderPayment, failOrderPayment } from "@/lib/orders/fulfillment";
 import { sendOrderConfirmationEmail, sendPaymentFailedEmail } from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
@@ -89,7 +89,7 @@ export async function POST(request: NextRequest) {
       headers[key.toLowerCase()] = value;
     });
 
-    const provider = getPaymentProvider();
+    const provider = getPaymentProviderByName("fake");
     const event = await provider.parseWebhook({ rawBody, headers });
 
     const payment = await prisma.payment.findUnique({
