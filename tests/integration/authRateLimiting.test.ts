@@ -6,6 +6,7 @@ import { hashPassword } from "@/lib/auth/password";
 import { POST as registerPost } from "@/app/api/customers/register/route";
 import { POST as adminLoginPost } from "@/app/api/admin/login/route";
 import { authOptions } from "@/lib/auth/customer";
+import { buildRateLimitKey } from "@/lib/rateLimit";
 
 function withForwardedFor(ip: string, body: unknown, url: string) {
   return new NextRequest(url, {
@@ -93,8 +94,8 @@ describe("admin login rate limiting", () => {
     }
 
     const sixth = await adminLoginPost(
-      // Even the CORRECT password is rejected once the limit is hit —
-      // the rate-limit check runs before the credential check.
+      // Even the CORRECT password is rejected once the failed-attempt limit
+      // is already exhausted — the pre-check avoids another password hash.
       withForwardedFor(uniqueIp(), { email: admin.email, password: "AdminRateLimitTest123!" }, "http://localhost/api/admin/login"),
     );
     expect(sixth.status).toBe(429);
@@ -103,18 +104,30 @@ describe("admin login rate limiting", () => {
     const body = await sixth.json();
     expect(body.error).toBe("RATE_LIMITED");
   });
+
+  it("does not consume the account failed-attempt budget on a successful login", async () => {
+    const password = "AdminSuccessfulLogin123!";
+    const admin = await prisma.adminUser.create({
+      data: {
+        email: `ratelimit-admin-success-${crypto.randomUUID()}@test.onlylive.ma`,
+        passwordHash: await hashPassword(password),
+        name: "Successful Admin",
+        role: "admin",
+      },
+    });
+
+    const response = await adminLoginPost(
+      withForwardedFor(uniqueIp(), { email: admin.email, password }, "http://localhost/api/admin/login"),
+    );
+    expect(response.status).toBe(200);
+
+    const accountKey = buildRateLimitKey("admin_login_account", admin.email);
+    expect(await prisma.rateLimitBucket.findFirst({ where: { key: accountKey } })).toBeNull();
+  });
 });
 
 describe("customer login (authorize) rate limiting", () => {
-  it("returns null for wrong credentials up to the limit, then throws RATE_LIMITED", async () => {
-    const passwordHash = await hashPassword("CustomerRateLimitTest123!");
-    const user = await prisma.user.create({
-      data: {
-        email: `ratelimit-customer-${crypto.randomUUID()}@test.onlylive.ma`,
-        passwordHash,
-        name: "Rate Limit Customer",
-      },
-    });
+  function customerAuthorize() {
     // next-auth v4's CredentialsProvider() factory returns a stub
     // `authorize: () => null` at the top level and stashes the real
     // config (including our actual authorize function) under `.options`
@@ -128,7 +141,19 @@ describe("customer login (authorize) rate limiting", () => {
         ) => Promise<unknown>;
       };
     };
-    const authorize = rawProvider.options.authorize;
+    return rawProvider.options.authorize;
+  }
+
+  it("returns null for wrong credentials up to the limit, then throws RATE_LIMITED", async () => {
+    const passwordHash = await hashPassword("CustomerRateLimitTest123!");
+    const user = await prisma.user.create({
+      data: {
+        email: `ratelimit-customer-${crypto.randomUUID()}@test.onlylive.ma`,
+        passwordHash,
+        name: "Rate Limit Customer",
+      },
+    });
+    const authorize = customerAuthorize();
     for (let i = 0; i < 10; i += 1) {
       const req = { headers: { "x-forwarded-for": uniqueIp() } };
       const result = await authorize({ email: user.email, password: "wrong-password" }, req);
@@ -139,5 +164,26 @@ describe("customer login (authorize) rate limiting", () => {
       const req = { headers: { "x-forwarded-for": uniqueIp() } };
       await authorize({ email: user.email, password: "CustomerRateLimitTest123!" }, req);
     }).rejects.toThrow("RATE_LIMITED");
+  });
+
+  it("does not consume the account failed-attempt budget on successful credentials", async () => {
+    const password = "CustomerSuccessfulLogin123!";
+    const user = await prisma.user.create({
+      data: {
+        email: `ratelimit-customer-success-${crypto.randomUUID()}@test.onlylive.ma`,
+        passwordHash: await hashPassword(password),
+        name: "Successful Customer",
+      },
+    });
+    const authorize = customerAuthorize();
+
+    const result = await authorize(
+      { email: user.email, password },
+      { headers: { "x-forwarded-for": uniqueIp() } },
+    );
+    expect(result).toMatchObject({ id: user.id, email: user.email });
+
+    const accountKey = buildRateLimitKey("customer_login_account", user.email);
+    expect(await prisma.rateLimitBucket.findFirst({ where: { key: accountKey } })).toBeNull();
   });
 });
