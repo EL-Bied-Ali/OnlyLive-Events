@@ -89,6 +89,10 @@ async function recordAttention(
   });
   if (existing) return;
 
+  const safeMetadata = Object.fromEntries(
+    Object.entries(metadata).filter(([, value]) => value !== undefined),
+  ) as Record<string, string | number | boolean | null>;
+
   await prisma.auditLog.create({
     data: {
       actorType: "system",
@@ -100,7 +104,7 @@ async function recordAttention(
         provider: candidate.provider,
         providerPaymentIdPresent: Boolean(candidate.provider_payment_id),
         reason,
-        ...metadata,
+        ...safeMetadata,
       },
     },
   });
