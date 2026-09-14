@@ -2,12 +2,25 @@ import "dotenv/config";
 import { defineConfig, devices } from "@playwright/test";
 import { assertSafeE2eDatabase } from "./scripts/e2eDatabaseSafety";
 
+const SOURCE_DATABASE_ENV = "ONLYLIVE_PLAYWRIGHT_SOURCE_DATABASE_URL";
+
+// Playwright can re-evaluate this config in child processes. On the first
+// evaluation DATABASE_URL is the developer/CI app database; after we pin the
+// runner below, child processes inherit the E2E value. Preserve the original
+// source URL once so every re-evaluation still compares E2E against the real
+// non-E2E database instead of mistaking our own pinning for an unsafe setup.
+const sourceDatabaseUrl = process.env[SOURCE_DATABASE_ENV] ?? process.env.DATABASE_URL;
+
 const safeDatabase = assertSafeE2eDatabase({
   e2eDatabaseUrl: process.env.E2E_DATABASE_URL,
-  developmentDatabaseUrl: process.env.DATABASE_URL,
+  developmentDatabaseUrl: sourceDatabaseUrl,
   testDatabaseUrl: process.env.TEST_DATABASE_URL,
 });
 const e2eDatabaseUrl = safeDatabase.canonicalUrl;
+
+if (sourceDatabaseUrl && !process.env[SOURCE_DATABASE_ENV]) {
+  process.env[SOURCE_DATABASE_ENV] = sourceDatabaseUrl;
+}
 
 // Test files import Prisma directly, so the Playwright runner itself — not
 // just the spawned Next.js server — must be pinned to the isolated e2e DB.
