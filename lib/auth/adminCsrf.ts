@@ -3,10 +3,10 @@ import crypto from "node:crypto";
 import { cookies } from "next/headers";
 import type { NextRequest } from "next/server";
 import { ADMIN_SESSION_COOKIE } from "@/lib/auth/admin";
+import { ADMIN_CSRF_FORM_FIELD, ADMIN_CSRF_HEADER } from "@/lib/auth/adminCsrfShared";
 import { ApiError } from "@/lib/http/errors";
 
-export const ADMIN_CSRF_HEADER = "x-csrf-token";
-export const ADMIN_CSRF_FORM_FIELD = "__csrf";
+export { ADMIN_CSRF_FORM_FIELD, ADMIN_CSRF_HEADER } from "@/lib/auth/adminCsrfShared";
 
 const CSRF_CONTEXT = "onlylive-admin-csrf-v1\0";
 
