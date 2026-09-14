@@ -1,13 +1,14 @@
 import crypto from "node:crypto";
-import type {
-  CreatePaymentInput,
-  CreatePaymentResult,
-  ParsedWebhookEvent,
-  ParseWebhookInput,
-  PaymentProvider,
-  PaymentWebhookEventType,
-  RefundInput,
-  RefundResult,
+import {
+  ProviderRequestError,
+  type CreatePaymentInput,
+  type CreatePaymentResult,
+  type ParsedWebhookEvent,
+  type ParseWebhookInput,
+  type PaymentProvider,
+  type PaymentWebhookEventType,
+  type RefundInput,
+  type RefundResult,
 } from "@/lib/payments/provider";
 
 const CHARIPAY_API_BASE_URL = "https://api-psp.charipay.ma";
@@ -102,7 +103,11 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
     try {
       body = JSON.parse(text) as Record<string, unknown>;
     } catch {
-      throw new Error(`ChariPay returned non-JSON response (${response.status})`);
+      throw new ProviderRequestError(
+        `ChariPay returned non-JSON response (${response.status})`,
+        response.status >= 500,
+        response.status,
+      );
     }
   }
   if (!response.ok) {
@@ -110,7 +115,11 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
     const code = typeof error?.code === "string" ? error.code : `HTTP_${response.status}`;
     const message = typeof error?.message === "string" ? error.message : "ChariPay request failed";
     const correlationId = typeof body.correlationId === "string" ? ` correlationId=${body.correlationId}` : "";
-    throw new Error(`ChariPay ${code}: ${message}${correlationId}`);
+    throw new ProviderRequestError(
+      `ChariPay ${code}: ${message}${correlationId}`,
+      response.status >= 500,
+      response.status,
+    );
   }
   return body;
 }
