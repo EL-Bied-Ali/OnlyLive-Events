@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { createHold, sweepExpiredHolds } from "@/lib/inventory";
 import { startCheckout } from "@/lib/orders/checkout";
 import { FakeProvider } from "@/lib/payments/fakeProvider";
+import { ProviderRequestError } from "@/lib/payments/provider";
 import { createTestCategory, createTestUser } from "../helpers/fixtures";
 
 const BASE_URL = "http://localhost:3000";
@@ -67,6 +68,28 @@ describe("checkout idempotency — one reservation produces at most one order", 
     const paymentsAfterRetry = await prisma.payment.findMany({ where: { orderId: orders[0]!.id } });
     expect(paymentsAfterRetry).toHaveLength(1);
     expect(paymentsAfterRetry[0]!.redirectUrl).toBeTruthy();
+  });
+
+  it("releases inventory after a definitive provider rejection that created no payable session", async () => {
+    const { user, category, reservationId } = await createActiveHold();
+    const before = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: category.id } });
+    vi.spyOn(FakeProvider.prototype, "createPayment").mockRejectedValueOnce(
+      new ProviderRequestError("invalid provider request", false, 400),
+    );
+
+    await expect(startCheckout(reservationId, user.id, BASE_URL)).rejects.toMatchObject({
+      status: 502,
+      code: "PROVIDER_UNAVAILABLE",
+    });
+
+    const reservation = await prisma.reservation.findUniqueOrThrow({ where: { id: reservationId } });
+    const order = await prisma.order.findFirstOrThrow({ where: { userId: user.id } });
+    const payment = await prisma.payment.findFirstOrThrow({ where: { orderId: order.id } });
+    const after = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: category.id } });
+    expect(reservation.status).toBe("cancelled");
+    expect(order.status).toBe("failed");
+    expect(payment.status).toBe("failed");
+    expect(after.reservedQuantity).toBe(before.reservedQuantity - 1);
   });
 
   it("does not auto-release an order-linked hold after a provider-init failure, but refuses a new checkout once its local deadline passed", async () => {

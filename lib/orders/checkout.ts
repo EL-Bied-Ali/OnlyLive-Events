@@ -4,6 +4,7 @@ import { CHECKOUT_EXTENSION_MS } from "@/lib/inventory";
 import { getOnlyLivePublicUrl, getPaymentProvider, getPaymentProviderByName } from "@/lib/payments";
 import { ProviderRequestError } from "@/lib/payments/provider";
 import { ApiError } from "@/lib/http/errors";
+import { failOrderPayment } from "@/lib/orders/fulfillment";
 import type { Order, Payment } from "@prisma/client";
 
 function generateOrderNumber(): string {
@@ -230,6 +231,19 @@ async function claimAndInitializeProvider(
         where: { id: payment.id, providerPaymentId: null },
         data: { providerInitAt: null },
       });
+      if (error instanceof ProviderRequestError && !error.outcomeUnknown) {
+        await prisma.$transaction(async (tx) => {
+          const paymentRows = await tx.$queryRaw<{ status: string; provider_payment_id: string | null }[]>`
+            SELECT status, provider_payment_id FROM payments WHERE id = ${payment.id} FOR UPDATE
+          `;
+          const currentPayment = paymentRows[0];
+          if (!currentPayment || currentPayment.provider_payment_id || (currentPayment.status !== "pending" && currentPayment.status !== "awaiting_payment")) return;
+          const outcome = await failOrderPayment(order.id, "failed", tx);
+          if (outcome === "failed") {
+            await tx.payment.update({ where: { id: payment.id }, data: { status: "failed", providerInitAt: null } });
+          }
+        });
+      }
       if (error instanceof ApiError) throw error;
       throw new ApiError(
         502,
