@@ -79,6 +79,27 @@ describe("pre-authentication same-origin guard", () => {
     expect(() => assertSameOriginMutation(request)).not.toThrow();
   });
 
+  it("compares the full origin, including scheme", () => {
+    const request = new NextRequest("https://tickets.onlylive.test/api/admin/login", {
+      method: "POST",
+      headers: { origin: "http://tickets.onlylive.test" },
+    });
+    expect(() => assertSameOriginMutation(request)).toThrow("Cross-origin request rejected");
+  });
+
+  it("honors the reverse proxy host and protocol when reconstructing the public origin", () => {
+    const request = new NextRequest("http://internal:3000/api/admin/login", {
+      method: "POST",
+      headers: {
+        host: "internal:3000",
+        "x-forwarded-host": "tickets.onlylive.test",
+        "x-forwarded-proto": "https",
+        origin: "https://tickets.onlylive.test",
+      },
+    });
+    expect(() => assertSameOriginMutation(request)).not.toThrow();
+  });
+
   it("rejects cross-site Fetch Metadata and requests with no source origin", () => {
     const crossSite = new NextRequest("https://tickets.onlylive.test/api/admin/login", {
       method: "POST",
