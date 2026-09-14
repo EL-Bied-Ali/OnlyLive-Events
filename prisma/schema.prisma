@@ -150,20 +150,21 @@ enum EventStatus {
 }
 
 model Event {
-  id            String      @id @default(uuid())
-  slug          String      @unique
-  title         String
-  description   String      @db.Text
-  venueId       String      @map("venue_id")
-  startsAt      DateTime    @map("starts_at")
-  doorsOpenAt   DateTime?   @map("doors_open_at")
-  salesOpenAt   DateTime    @map("sales_open_at")
-  salesCloseAt  DateTime    @map("sales_close_at")
-  status        EventStatus @default(draft)
-  coverImageUrl String?     @map("cover_image_url")
-  createdById   String?     @map("created_by")
-  createdAt     DateTime    @default(now()) @map("created_at")
-  updatedAt     DateTime    @updatedAt @map("updated_at")
+  id                String      @id @default(uuid())
+  slug              String      @unique
+  title             String
+  description       String      @db.Text
+  venueId           String      @map("venue_id")
+  startsAt          DateTime    @map("starts_at")
+  doorsOpenAt       DateTime?   @map("doors_open_at")
+  salesOpenAt       DateTime    @map("sales_open_at")
+  salesCloseAt      DateTime    @map("sales_close_at")
+  maxTicketsPerUser Int         @default(10) @map("max_tickets_per_user")
+  status            EventStatus @default(draft)
+  coverImageUrl     String?     @map("cover_image_url")
+  createdById       String?     @map("created_by")
+  createdAt         DateTime    @default(now()) @map("created_at")
+  updatedAt         DateTime    @updatedAt @map("updated_at")
 
   venue           Venue            @relation(fields: [venueId], references: [id])
   createdBy       AdminUser?       @relation("EventCreatedBy", fields: [createdById], references: [id])
@@ -522,13 +523,13 @@ enum EmailType {
 /// (provider, external_event_id), so the same order/refund can never
 /// receive the same email twice.
 model EmailLog {
-  id               String    @id @default(uuid())
-  type             EmailType
-  entityType       String    @map("entity_type")
-  entityId         String    @map("entity_id")
-  recipientEmail   String    @map("recipient_email")
-  providerMessageId String?  @map("provider_message_id")
-  createdAt        DateTime  @default(now()) @map("created_at")
+  id                String    @id @default(uuid())
+  type              EmailType
+  entityType        String    @map("entity_type")
+  entityId          String    @map("entity_id")
+  recipientEmail    String    @map("recipient_email")
+  providerMessageId String?   @map("provider_message_id")
+  createdAt         DateTime  @default(now()) @map("created_at")
 
   @@unique([type, entityType, entityId])
   @@map("email_logs")
