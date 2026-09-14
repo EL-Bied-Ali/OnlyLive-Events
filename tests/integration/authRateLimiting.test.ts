@@ -9,9 +9,14 @@ import { authOptions } from "@/lib/auth/customer";
 import { buildRateLimitKey } from "@/lib/rateLimit";
 
 function withForwardedFor(ip: string, body: unknown, url: string) {
+  const parsedUrl = new URL(url);
   return new NextRequest(url, {
     method: "POST",
-    headers: { "content-type": "application/json", "x-forwarded-for": ip },
+    headers: {
+      "content-type": "application/json",
+      "x-forwarded-for": ip,
+      origin: parsedUrl.origin,
+    },
     body: JSON.stringify(body),
   });
 }
