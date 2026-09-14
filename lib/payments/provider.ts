@@ -83,6 +83,20 @@ export interface RefundStatusResult {
 }
 
 /**
+ * Result of an explicit attempt to make an expired checkout session
+ * non-payable before releasing its inventory. `non_payable` is the only
+ * state that authorizes local cancellation/release. `unknown` is fail-closed:
+ * the hold remains reserved until a signed webhook or human reconciliation
+ * establishes what happened to the money.
+ */
+export interface ClosePaymentSessionResult {
+  state: "non_payable" | "unknown";
+  providerStatus?: string;
+  correlationId?: string;
+  retryAfterMs?: number;
+}
+
+/**
  * Providers can explicitly reject a request (safe to retry later with a new
  * business attempt) or leave the caller uncertain whether it was accepted
  * (network drop / retryable HTTP response after receipt). Money-moving code
@@ -112,4 +126,10 @@ export interface PaymentProvider {
   refund(input: RefundInput): Promise<RefundResult>;
   /** Query an already-submitted refund by its stable provider/reference id. */
   getRefundStatus(refundReference: string): Promise<RefundStatusResult>;
+  /**
+   * Make a hosted checkout session non-payable after OnlyLive's local checkout
+   * deadline. Implementations must never return `non_payable` for a session
+   * whose financial outcome is merely unknown or already consumed.
+   */
+  closePaymentSession(providerPaymentId: string, requestId: string): Promise<ClosePaymentSessionResult>;
 }
