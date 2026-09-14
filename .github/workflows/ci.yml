@@ -25,11 +25,13 @@ jobs:
           --health-retries 10
 
     env:
-      # Two logical databases (dev-equivalent + test) on the same service
-      # container, matching the dev-environment split documented in
-      # docs/ARCHITECTURE.md (tests must never run against non-test data).
+      # Three logical databases on the same disposable Postgres service:
+      # app/build, Vitest, and Playwright. No test runner shares state with
+      # another one and browser tests exercise the same isolation guard used
+      # by local development.
       DATABASE_URL: postgresql://onlylive:onlylive@localhost:5432/onlylive_ci
       TEST_DATABASE_URL: postgresql://onlylive:onlylive@localhost:5432/onlylive_ci_test
+      E2E_DATABASE_URL: postgresql://onlylive:onlylive@localhost:5432/onlylive_ci_e2e
       NEXTAUTH_SECRET: ci-only-secret-not-for-real-use-0000000000000000
       NEXTAUTH_URL: http://localhost:3000
       ADMIN_SESSION_SECRET: ci-only-secret-not-for-real-use-1111111111111111
@@ -62,20 +64,18 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Create CI test database
+      - name: Create isolated test databases
         run: |
           PGPASSWORD=onlylive psql -h localhost -U onlylive -d onlylive_ci -c "CREATE DATABASE onlylive_ci_test;"
+          PGPASSWORD=onlylive psql -h localhost -U onlylive -d onlylive_ci -c "CREATE DATABASE onlylive_ci_e2e;"
 
-      - name: Apply migrations (dev + test databases)
+      - name: Apply migrations (app + Vitest databases)
         run: |
           npx prisma migrate deploy
           DATABASE_URL="$TEST_DATABASE_URL" npx prisma migrate deploy
 
       - name: Unit + integration tests
         run: npm test
-
-      - name: Seed browser-test data
-        run: npm run seed
 
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
