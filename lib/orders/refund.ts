@@ -12,9 +12,12 @@ export interface InitiateRefundInput {
   actorId: string;
 }
 
-export type InitiateRefundResult =
-  | { refundId: string; state: "processing" }
-  | { refundId: string; state: "succeeded"; paymentStatus: "refunded" | "partially_refunded"; orderStatus: OrderStatus };
+export interface InitiateRefundResult {
+  refundId: string;
+  state: "processing" | "succeeded";
+  paymentStatus?: "refunded" | "partially_refunded";
+  orderStatus?: OrderStatus;
+}
 
 interface PreparedRefund {
   refundId: string;
@@ -25,12 +28,6 @@ interface PreparedRefund {
   reason: string;
 }
 
-/**
- * Phase 1: reserve refundable balance and create one durable Refund row.
- * `processing` refunds count against the remaining balance, so two admins
- * cannot concurrently submit refunds whose sum exceeds the original payment.
- * No network I/O happens while Payment/Order row locks are held.
- */
 async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<
@@ -54,6 +51,9 @@ async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund
     const order = orderRows[0];
     if (!order) throw new ApiError(404, "ORDER_NOT_FOUND", "Order not found for this payment");
 
+    // A submitted-but-not-yet-settled provider refund reserves its amount.
+    // This is required for asynchronous PSPs: otherwise two concurrent 202
+    // responses could together exceed the original captured payment.
     const committedRefunds = await tx.refund.aggregate({
       where: { paymentId: payment.id, status: { in: ["processing", "succeeded"] } },
       _sum: { amountCents: true },
@@ -117,7 +117,11 @@ export async function finalizeRefundSuccess(
   refundId: string,
   providerRefundId?: string | null,
 ): Promise<{ state: "succeeded"; paymentStatus: "refunded" | "partially_refunded"; orderStatus: OrderStatus; changed: boolean }> {
-  const outcome = await prisma.$transaction(async (tx) => {
+  const outcome = await prisma.$transaction(async (tx): Promise<{
+    changed: boolean;
+    paymentStatus: "refunded" | "partially_refunded";
+    orderStatus: OrderStatus;
+  }> => {
     const refundRows = await tx.$queryRaw<
       { id: string; payment_id: string; amount_cents: number; status: string; provider_refund_id: string | null }[]
     >`
@@ -155,7 +159,7 @@ export async function finalizeRefundSuccess(
       throw new ApiError(409, "REFUND_INTEGRITY_ERROR", "Confirmed refunds exceed the original payment amount");
     }
     const fullyRefunded = totalSucceeded === payment.amount_cents;
-    const paymentStatus = fullyRefunded ? "refunded" : "partially_refunded";
+    const paymentStatus: "refunded" | "partially_refunded" = fullyRefunded ? "refunded" : "partially_refunded";
     const orderStatus: OrderStatus = fullyRefunded ? "refunded" : "partially_refunded";
     if (!canTransition(order.status, orderStatus) && order.status !== orderStatus) {
       throw new ApiError(409, "REFUND_STATE_CONFLICT", `Cannot apply confirmed refund to order status "${order.status}"`);
@@ -213,7 +217,6 @@ export async function finalizeRefundSuccess(
   return { state: "succeeded", ...outcome };
 }
 
-/** A failed webhook frees the amount for a future refund attempt. */
 export async function finalizeRefundFailure(refundId: string, providerRefundId?: string | null): Promise<{ changed: boolean }> {
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<{ id: string; status: string; provider_refund_id: string | null }[]>`
@@ -241,13 +244,9 @@ export async function finalizeRefundFailure(refundId: string, providerRefundId?:
 }
 
 /**
- * Admin initiation is now two-phase. The durable Refund row is committed
- * before external I/O. ChariPay's 202 leaves it `processing` until a signed
- * webhook settles it; FakeProvider can still settle immediately in tests.
- *
- * Any provider-call exception is treated as ambiguous: the Refund remains
- * processing instead of being replaced by a new reference, preventing an
- * HTTP timeout after provider acceptance from causing a duplicate refund.
+ * Admin initiation is two-phase. The durable Refund row is committed before
+ * external I/O. ChariPay's 202 leaves it `processing` until a signed webhook
+ * settles it; FakeProvider can still settle immediately in tests.
  */
 export async function initiateRefund(input: InitiateRefundInput): Promise<InitiateRefundResult> {
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
@@ -267,7 +266,19 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
       idempotencyKey: prepared.refundId,
     });
   } catch (error) {
-    console.error("provider.refund submission outcome unknown", error);
+    console.error("provider.refund submission failed", error);
+
+    // The local fake provider has no network ambiguity: a thrown call means
+    // no external refund could have been accepted, so preserving the old
+    // failed+retryable semantics is safe for tests/local development.
+    if (provider.name === "fake") {
+      await finalizeRefundFailure(prepared.refundId);
+      throw new ApiError(502, "PROVIDER_REFUND_FAILED", "The payment provider rejected the refund");
+    }
+
+    // For a real PSP a timeout/5xx may happen after acceptance. Keep the same
+    // refund reference reserved instead of creating another one and risking
+    // a double refund. A webhook/reconciliation lookup can settle it later.
     await prisma.auditLog.create({
       data: {
         actorType: "system",
