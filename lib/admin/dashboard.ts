@@ -72,6 +72,34 @@ export async function getAdminOrders(status?: OrderStatus) {
   });
 }
 
+const EXPORT_ROW_LIMIT = 20_000;
+
+/**
+ * Same shape as getAdminOrders but without the 100-row display cap, for
+ * CSV export. Still bounded — an unbounded query on an append-only table
+ * is its own operational risk — so a very large result is silently
+ * truncated to the most recent EXPORT_ROW_LIMIT orders rather than ever
+ * failing the request; there is no pagination UI for this yet.
+ */
+export async function getOrdersForExport(status?: OrderStatus) {
+  return prisma.order.findMany({
+    where: status ? { status } : undefined,
+    take: EXPORT_ROW_LIMIT,
+    orderBy: { createdAt: "desc" },
+    include: {
+      user: { select: { name: true, email: true, phone: true } },
+      event: { select: { title: true } },
+      items: {
+        include: { ticketCategory: { select: { name: true } } },
+      },
+      payments: {
+        orderBy: { createdAt: "desc" },
+        select: { provider: true },
+      },
+    },
+  });
+}
+
 export function isOrderStatus(value: string | undefined): value is OrderStatus {
   return [
     "pending_payment",

@@ -35,7 +35,12 @@ export default async function AdminOrdersPage({ searchParams }: { searchParams: 
     <main className="admin-page">
       <header className="admin-page-header">
         <div><p className="admin-eyebrow">Clients et paiements</p><h1>Commandes</h1></div>
-        <span className="admin-count">{orders.length} résultat(s)</span>
+        <div className="admin-header-actions">
+          <span className="admin-count">{orders.length} résultat(s)</span>
+          <a className="admin-secondary-link" href={status ? `/api/admin/orders/export?status=${status}` : "/api/admin/orders/export"}>
+            Exporter en CSV
+          </a>
+        </div>
       </header>
 
       <nav className="admin-filters" aria-label="Filtrer les commandes">
