@@ -5,18 +5,20 @@ import type { OrderStatus } from "@prisma/client";
 const ATTENTION_STATUSES: OrderStatus[] = ["paid_but_unfulfillable", "reconciliation_required"];
 
 export async function getAdminMetrics() {
+  const now = new Date();
   const [paidPayments, ticketsSold, checkIns, awaitingPayment, attentionOrders] = await Promise.all([
     prisma.payment.aggregate({ where: { status: "paid" }, _sum: { amountCents: true } }),
     prisma.ticket.count(),
     prisma.ticket.count({ where: { status: "used" } }),
     prisma.order.count({ where: { status: "pending_payment" } }),
-    // Async provider failures must remain visible even after the initiating
-    // admin leaves the page. One order is counted once even if it has both a
-    // reconciliation status and one or more failed refund attempts.
+    // Async provider failures and expired-but-unresolved hosted checkouts must
+    // remain visible even after the initiating admin/customer leaves the page.
+    // One order is counted once even if several attention conditions apply.
     prisma.order.count({
       where: {
         OR: [
           { status: { in: ATTENTION_STATUSES } },
+          { status: "pending_payment", expiresAt: { lt: now } },
           { payments: { some: { refunds: { some: { status: "failed" } } } } },
         ],
       },
