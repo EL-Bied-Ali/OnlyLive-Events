@@ -8,7 +8,7 @@ import { prisma } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
 import { loginSchema } from "@/lib/validation/auth";
 import { ApiError } from "@/lib/http/errors";
-import { buildRateLimitKey, consumeRateLimit, getClientIp } from "@/lib/rateLimit";
+import { buildRateLimitKey, consumeRateLimit, getClientIp, inspectRateLimit } from "@/lib/rateLimit";
 
 // Per-account limiting stops distributed guessing; the higher IP ceiling
 // avoids a few mistakes blocking many customers behind the same NAT.
@@ -56,14 +56,9 @@ export const authOptions: AuthOptions = {
           return null;
         }
 
-        // The account-level key stops distributed credential stuffing while
-        // the more generous IP limit avoids locking out a shared household,
-        // office, venue Wi-Fi, or carrier NAT after a handful of attempts.
-        const accountLimit = await consumeRateLimit(
-          buildRateLimitKey("customer_login_account", parsed.data.email),
-          CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT,
-        );
-        if (!accountLimit.allowed) {
+        const accountKey = buildRateLimitKey("customer_login_account", parsed.data.email);
+        const accountState = await inspectRateLimit(accountKey, CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT);
+        if (!accountState.allowed) {
           throw new Error("RATE_LIMITED");
         }
 
@@ -71,14 +66,20 @@ export const authOptions: AuthOptions = {
           where: { email: parsed.data.email },
         });
         if (!user) {
+          const failedAttempt = await consumeRateLimit(accountKey, CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT);
+          if (!failedAttempt.allowed) throw new Error("RATE_LIMITED");
           return null;
         }
 
         const validPassword = await verifyPassword(user.passwordHash, parsed.data.password);
         if (!validPassword) {
+          const failedAttempt = await consumeRateLimit(accountKey, CUSTOMER_LOGIN_ACCOUNT_RATE_LIMIT);
+          if (!failedAttempt.allowed) throw new Error("RATE_LIMITED");
           return null;
         }
 
+        // Successful credentials deliberately do not consume the account-level
+        // failed-attempt budget. The per-IP limiter still counts every request.
         return { id: user.id, email: user.email, name: user.name };
       },
     }),
