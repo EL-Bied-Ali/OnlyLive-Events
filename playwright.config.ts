@@ -34,10 +34,9 @@ if (!Number.isSafeInteger(e2ePort) || e2ePort < 1 || e2ePort > 65535) {
 }
 // Browser tests always target the isolated server started below. Supporting
 // an arbitrary external base URL here would make it possible to prepare one
-// DB while accidentally testing a different deployment/database. Keep the
-// loopback host as `localhost`: production-mode auth cookies are Secure, and
-// localhost is the browser-standard secure-context exception used by the
-// existing e2e suite.
+// DB while accidentally testing a different deployment/database. Use one
+// canonical loopback origin (`localhost`) consistently across Playwright,
+// NextAuth and explicit Origin headers so same-origin/CSRF checks cannot drift.
 const baseURL = `http://localhost:${e2ePort}`;
 
 export default defineConfig({
