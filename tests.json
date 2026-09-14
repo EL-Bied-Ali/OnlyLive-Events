@@ -167,7 +167,7 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/unit/orders/stateMachine.test.ts",
-    "note": "Covers the pure order-status transition table (including refunded/partially_refunded). The actual refund execution flow (PaymentProvider.refund + Refund rows) is schema-only this session — not yet exercised."
+    "note": "Covers the pure order-status transition table (including refunded/partially_refunded). The actual refund execution flow (PaymentProvider.refund + Refund rows) is now exercised end-to-end — see the refund-* entries below and tests/integration/refunds.test.ts."
   },
   {
     "id": "e2e-purchase-flow",
@@ -674,5 +674,61 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/e2e/admin-refund.spec.ts"
+  },
+  {
+    "id": "email-order-confirmation-idempotent",
+    "scenario": "Calling the order-confirmation email trigger twice for the same order sends exactly one email",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-payment-failed-idempotent",
+    "scenario": "Calling the payment-failed email trigger twice for the same order sends exactly one email",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-send-failure-recorded-not-thrown",
+    "scenario": "An email provider send failure is recorded (no providerMessageId) without throwing out of the trigger or blocking unrelated sends",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-webhook-order-confirmation-once",
+    "scenario": "The payment webhook sends an order-confirmation email exactly once, even when a second (differently-IDed) succeeded event arrives for the same already-settled order",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-webhook-payment-failed",
+    "scenario": "The payment webhook sends a payment-failed email when the payment fails",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-refund-confirmation",
+    "scenario": "A successful refund sends exactly one refund-confirmation email",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-unknown-entity-silent-noop",
+    "scenario": "Every email trigger is a silent no-op for an unknown order/refund id rather than throwing",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
   }
 ]

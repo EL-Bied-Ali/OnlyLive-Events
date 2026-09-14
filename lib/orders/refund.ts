@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { getPaymentProvider } from "@/lib/payments";
 import { ApiError } from "@/lib/http/errors";
 import { canTransition, type OrderStatus } from "@/lib/orders/stateMachine";
+import { sendRefundConfirmationEmail } from "@/lib/email/notifications";
 
 export interface InitiateRefundInput {
   paymentId: string;
@@ -192,5 +193,10 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   if (outcome.kind === "failed") {
     throw new ApiError(502, "PROVIDER_REFUND_FAILED", "The payment provider rejected the refund");
   }
+
+  // Sent after the transaction has committed, never inside it — same
+  // reasoning as the payment webhook route.
+  await sendRefundConfirmationEmail(outcome.refundId);
+
   return { refundId: outcome.refundId, paymentStatus: outcome.paymentStatus, orderStatus: outcome.orderStatus };
 }

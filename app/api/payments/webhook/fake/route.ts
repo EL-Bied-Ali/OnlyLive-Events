@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getPaymentProvider, isFakePaymentsAllowed } from "@/lib/payments";
 import { confirmOrderPayment, failOrderPayment } from "@/lib/orders/fulfillment";
+import { sendOrderConfirmationEmail, sendPaymentFailedEmail } from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -221,8 +222,9 @@ export async function POST(request: NextRequest) {
           break;
         }
         default:
-          // refund.succeeded etc. — schema exists (Refund model) but the
-          // refund flow itself is out of scope so far.
+          // refund.succeeded etc. — refunds are admin-initiated
+          // (lib/orders/refund.ts), not driven by an inbound PSP webhook
+          // event, so there's nothing to apply here yet.
           outcome = "ignored";
       }
 
@@ -241,6 +243,15 @@ export async function POST(request: NextRequest) {
       case "event_collision":
         return NextResponse.json({ error: "EVENT_COLLISION" }, { status: 409 });
       case "processed":
+        // Sent after the transaction has committed, never inside it — an
+        // email provider is external I/O and its own idempotency (see
+        // lib/email/notifications.ts) means a redelivered webhook that
+        // reaches this point again is a safe no-op, not a duplicate send.
+        if (result.outcome === "paid") {
+          await sendOrderConfirmationEmail(payment.orderId);
+        } else if (result.outcome === "failed" || result.outcome === "cancelled") {
+          await sendPaymentFailedEmail(payment.orderId);
+        }
         return NextResponse.json({ ok: true, outcome: result.outcome });
     }
   } catch (error) {
