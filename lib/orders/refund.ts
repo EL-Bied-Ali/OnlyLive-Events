@@ -1,6 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { getPaymentProvider } from "@/lib/payments";
+import { ProviderRequestError } from "@/lib/payments/provider";
 import { ApiError } from "@/lib/http/errors";
 import { canTransition, type OrderStatus } from "@/lib/orders/stateMachine";
 import { sendRefundConfirmationEmail } from "@/lib/email/notifications";
@@ -51,9 +52,6 @@ async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund
     const order = orderRows[0];
     if (!order) throw new ApiError(404, "ORDER_NOT_FOUND", "Order not found for this payment");
 
-    // A submitted-but-not-yet-settled provider refund reserves its amount.
-    // This is required for asynchronous PSPs: otherwise two concurrent 202
-    // responses could together exceed the original captured payment.
     const committedRefunds = await tx.refund.aggregate({
       where: { paymentId: payment.id, status: { in: ["processing", "succeeded"] } },
       _sum: { amountCents: true },
@@ -109,10 +107,6 @@ async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund
   });
 }
 
-/**
- * Applies the financial/ticket consequences only after the PSP has actually
- * confirmed success. Idempotent: duplicate success webhooks are harmless.
- */
 export async function finalizeRefundSuccess(
   refundId: string,
   providerRefundId?: string | null,
@@ -243,11 +237,6 @@ export async function finalizeRefundFailure(refundId: string, providerRefundId?:
   });
 }
 
-/**
- * Admin initiation is two-phase. The durable Refund row is committed before
- * external I/O. ChariPay's 202 leaves it `processing` until a signed webhook
- * settles it; FakeProvider can still settle immediately in tests.
- */
 export async function initiateRefund(input: InitiateRefundInput): Promise<InitiateRefundResult> {
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
     throw new ApiError(400, "INVALID_AMOUNT", "Refund amount must be a positive number of cents");
@@ -268,24 +257,25 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   } catch (error) {
     console.error("provider.refund submission failed", error);
 
-    // The local fake provider has no network ambiguity: a thrown call means
-    // no external refund could have been accepted, so preserving the old
-    // failed+retryable semantics is safe for tests/local development.
-    if (provider.name === "fake") {
+    const definitiveRejection =
+      provider.name === "fake" ||
+      (error instanceof ProviderRequestError && !error.outcomeUnknown);
+
+    if (definitiveRejection) {
       await finalizeRefundFailure(prepared.refundId);
       throw new ApiError(502, "PROVIDER_REFUND_FAILED", "The payment provider rejected the refund");
     }
 
-    // For a real PSP a timeout/5xx may happen after acceptance. Keep the same
-    // refund reference reserved instead of creating another one and risking
-    // a double refund. A webhook/reconciliation lookup can settle it later.
     await prisma.auditLog.create({
       data: {
         actorType: "system",
         action: "refund.submission_unknown",
         entityType: "refund",
         entityId: prepared.refundId,
-        metadata: { error: error instanceof Error ? error.message : "unknown provider error" },
+        metadata: {
+          error: error instanceof Error ? error.message : "unknown provider error",
+          providerStatus: error instanceof ProviderRequestError ? error.status : null,
+        },
       },
     });
     throw new ApiError(
