@@ -76,7 +76,7 @@ instrumentation.ts  boot-time config validation (payment provider)
 /lib
   db.ts             Prisma client singleton (driver adapter)
   admin/             dashboard queries + atomic catalogue mutations
-  auth/             customer.ts (Auth.js), admin.ts (custom session), password.ts
+  auth/             customer.ts (Auth.js), admin.ts (custom session), adminCsrf.ts
   inventory.ts      the oversell-prevention critical section
   orders/           stateMachine.ts, fulfillment.ts, checkout.ts, refund.ts
   payments/         provider.ts (interface), fakeProvider.ts, index.ts (factory)
@@ -128,8 +128,10 @@ TASKS.md, tests.json
    cannot reach the validation API.
 2. The client reads QR codes with `@zxing/browser` and posts only the
    selected `eventId` plus opaque validation token to
-   `POST /api/scanner/scan`. A manual-entry fallback exercises the same
-   endpoint.
+   `POST /api/scanner/scan`. The request also carries the session-bound
+   admin/scanner CSRF token in `X-CSRF-Token`; the route rejects requests
+   that fail the exact source-origin check or token verification. A manual
+   entry fallback exercises the same endpoint.
 3. `lib/scanner.ts::scanTicket()` verifies the selected event and locks
    the matching `tickets` row with `SELECT ... FOR UPDATE`. It decides
    `VALID`, `ALREADY_USED`, `INVALID`, `CANCELLED`, or `WRONG_EVENT` and
@@ -148,8 +150,11 @@ TASKS.md, tests.json
 
 1. Admin pages read directly from PostgreSQL as Server Components. Forms
    submit internal Next.js Server Actions; each action authenticates again
-   with `requireAdminRole(["super_admin", "admin"])` before validation or
-   mutation. `support` is intentionally read-only.
+   with `requireAdminRole(["super_admin", "admin"])` and verifies the
+   session-bound CSRF token supplied automatically by `AdminMutationForm`
+   before validation or mutation. This is defense in depth on top of
+   Next.js's own Server Action Origin-vs-Host validation. `support` is
+   intentionally read-only.
 2. Zod accepts only named fields. Event wall-clock inputs are converted
    through the IANA `Africa/Casablanca` timezone, including Morocco's
    seasonal offset changes, before UTC instants are stored.
@@ -172,8 +177,10 @@ TASKS.md, tests.json
    for `admin`/`super_admin` sessions only, a refund form; `support`
    never sees the form regardless of balance.
 2. Its Server Action (`refundPaymentAction`) re-checks
-   `requireAdminRole(["super_admin", "admin"])` itself — the page hiding
-   the form is a UX nicety, not the enforcement.
+   `requireAdminRole(["super_admin", "admin"])` and the session-bound CSRF
+   token itself before touching the refund input. The page hiding the form
+   is a UX nicety, not the enforcement, and Next.js's own Server Action
+   Origin check remains an additional layer.
 3. `lib/orders/refund.ts::initiateRefund` does the actual work: locks the
    Payment/Order rows for the whole operation (provider call included),
    validates the requested amount against what's actually still
@@ -233,8 +240,11 @@ shared by concurrent requests and serverless instances. Every auth flow
 uses both a generous per-IP ceiling and a tighter per-account/email ceiling:
 the former reduces bulk abuse without letting a few mistakes block a whole
 shared NAT, while the latter stops distributed guessing against one account.
-Identifiers are HMAC-pseudonymized with `RATE_LIMIT_KEY_SECRET`; raw IPs and
-emails are never stored in `rate_limit_buckets`.
+Only failed credentials consume the account-level login bucket; a successful
+login still counts toward the broader IP ceiling but cannot lock its own
+account simply through legitimate repeated sign-ins. Identifiers are
+HMAC-pseudonymized with `RATE_LIMIT_KEY_SECRET`; raw IPs and emails are never
+stored in `rate_limit_buckets`.
 
 IP resolution prefers `x-vercel-forwarded-for`, falls back to
 `x-forwarded-for`, accepts only valid IPv4/IPv6, and canonicalizes IPv6.
@@ -249,6 +259,25 @@ The authenticated expired-hold housekeeping endpoint also deletes buckets
 older than 48 hours. This limiter protects application authentication work;
 it is not a DDoS shield. Vercel WAF rate limiting remains a deployment task
 to stage in log mode, observe, and tune against real traffic before enforcing.
+
+## Browser security / admin CSRF
+
+`next.config.ts` applies the baseline CSP and browser-security headers to all
+routes. The current CSP deliberately avoids nonce-based rendering because a
+nonce would make otherwise-static pages dynamic; `docs/SECURITY.md` records
+that trade-off and the directives that must be revisited when a real PSP or
+remote event-image host is selected.
+
+Custom cookie-authenticated admin/scanner Route Handlers use
+`lib/auth/adminCsrf.ts`: an HMAC token bound to the opaque admin session is
+verified together with an exact source-origin check. Pre-authentication admin
+login cannot derive a session token yet, so it applies the origin / Referer /
+Fetch-Metadata checks before credential work. Catalogue and refund Server
+Actions receive the same derived token through a hidden field injected by the
+shared `AdminMutationForm`, and verify it again server-side. Vercel's
+documented `x-forwarded-host` / `x-forwarded-proto` request shape has a unit
+regression test; a real preview/custom-domain smoke test remains required
+before production rollout.
 
 ## Deployment
 
@@ -305,8 +334,12 @@ historical rather than future.
 - **Rate limiting** — implemented in the application per IP and per
   account/email on registration, admin login, and customer login
   (`lib/rateLimit.ts`). Production WAF rules and final thresholds still
-  require observed traffic and a staged rollout. **CSP headers** — not yet implemented; see
-  docs/SECURITY.md for the full checklist status.
+  require observed traffic and a staged rollout.
+- **CSP / admin CSRF** — implemented in the application. The CSP is a
+  compatibility baseline rather than a nonce-based strict CSP, and the
+  actual Vercel preview/custom-domain deployment must be smoke-tested before
+  production to confirm its forwarded-origin shape and required external
+  origins.
 - **`paid_but_unfulfillable`/`reconciliation_required` orders** are
   surfaced in the admin dashboard's attention metrics and can be resolved
   with a full refund from the order detail page, but there is still no
