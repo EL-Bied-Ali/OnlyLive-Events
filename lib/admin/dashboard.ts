@@ -100,6 +100,42 @@ export async function getOrdersForExport(status?: OrderStatus) {
   });
 }
 
+export async function getOrderForAdmin(orderId: string) {
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: {
+      user: { select: { name: true, email: true, phone: true } },
+      event: { select: { title: true } },
+      items: {
+        include: {
+          ticketCategory: { select: { name: true } },
+          tickets: { select: { id: true, status: true, validationToken: true } },
+        },
+      },
+      payments: {
+        orderBy: { createdAt: "desc" },
+        include: {
+          refunds: { orderBy: { createdAt: "desc" } },
+        },
+      },
+    },
+  });
+  if (!order) return null;
+
+  const paymentsWithRefundable = order.payments.map((payment) => {
+    const refundedCents = payment.refunds
+      .filter((refund) => refund.status === "succeeded")
+      .reduce((sum, refund) => sum + refund.amountCents, 0);
+    return {
+      ...payment,
+      refundedCents,
+      remainingRefundableCents: payment.amountCents - refundedCents,
+    };
+  });
+
+  return { ...order, payments: paymentsWithRefundable };
+}
+
 export function isOrderStatus(value: string | undefined): value is OrderStatus {
   return [
     "pending_payment",

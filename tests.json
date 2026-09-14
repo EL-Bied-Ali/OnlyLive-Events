@@ -594,5 +594,85 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/e2e/admin-reporting.spec.ts"
+  },
+  {
+    "id": "refund-full-cancels-tickets-releases-stock",
+    "scenario": "A full refund transitions payment/order to refunded, cancels every still-valid ticket, and releases its stock for resale",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "refund-partial-leaves-tickets-and-stock-untouched",
+    "scenario": "A partial refund transitions payment/order to partially_refunded without cancelling tickets or touching inventory",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "refund-second-partial-completes-balance",
+    "scenario": "A second partial refund that completes the remaining balance transitions to fully refunded and only then cancels tickets",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "refund-exceeds-remaining-balance-rejected",
+    "scenario": "A refund amount greater than the remaining refundable balance is rejected without changing payment status",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "refund-never-paid-or-already-fully-refunded-rejected",
+    "scenario": "Refunding a payment that was never paid, or one already fully refunded, is rejected (duplicate-refund guard)",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "refund-partial-not-allowed-without-fulfilled-tickets",
+    "scenario": "A partial refund is rejected on a paid_but_unfulfillable order (no fulfilled tickets to partially retain); a full refund is still accepted",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "refund-never-cancels-used-ticket",
+    "scenario": "A full refund never cancels an already-used ticket or double-releases its stock, only the still-valid ones",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "refund-provider-failure-recorded-and-retryable",
+    "scenario": "A payment-provider refund failure leaves payment/order status unchanged, is recorded on the Refund row and audited, and does not block a later successful retry",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "refund-concurrent-attempts-serialize",
+    "scenario": "Concurrent refund attempts on the same payment serialize so their total succeeded amount never exceeds the paid amount",
+    "category": "inventory-concurrency",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/refunds.test.ts"
+  },
+  {
+    "id": "admin-refund-ui-role-access",
+    "scenario": "An administrator can fully refund a paid order from the order detail page (cancelling its ticket); a support account sees the order but no refund form",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/e2e/admin-refund.spec.ts"
   }
 ]

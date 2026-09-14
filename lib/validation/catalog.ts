@@ -152,7 +152,8 @@ export const categoryMutationSchema = z.object({
   isActive: checkbox,
 });
 
-function parseMadPrice(value: unknown, context: z.RefinementCtx): number | typeof z.NEVER {
+/** Shared with lib/validation/refund.ts — same MAD-cents parsing rules apply to a refund amount. */
+export function parseMadPrice(value: unknown, context: z.RefinementCtx): number | typeof z.NEVER {
   const normalized = String(value ?? "").trim().replace(",", ".");
   if (!/^\d{1,8}(?:\.\d{1,2})?$/.test(normalized)) {
     context.addIssue({ code: "custom", message: "Prix MAD invalide (deux décimales maximum)" });

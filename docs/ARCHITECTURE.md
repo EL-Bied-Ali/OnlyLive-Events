@@ -163,6 +163,24 @@ TASKS.md, tests.json
    or pending-payment order exists. The dedicated cancellation/refund flow
    must be implemented before those cases can be resolved safely.
 
+## Request/data flow: admin refunds
+
+1. `/admin/orders/[orderId]` (a Server Component, protected by the shared
+   admin layout) shows each payment's remaining refundable balance and,
+   for `admin`/`super_admin` sessions only, a refund form; `support`
+   never sees the form regardless of balance.
+2. Its Server Action (`refundPaymentAction`) re-checks
+   `requireAdminRole(["super_admin", "admin"])` itself — the page hiding
+   the form is a UX nicety, not the enforcement.
+3. `lib/orders/refund.ts::initiateRefund` does the actual work: locks the
+   Payment/Order rows for the whole operation (provider call included),
+   validates the requested amount against what's actually still
+   refundable, calls `PaymentProvider.refund()`, and — on a full refund
+   only — cancels every still-`valid` ticket and releases its category's
+   `sold_quantity`. See docs/PAYMENTS.md's Refunds section for why the
+   provider call never `throw`s out of the transaction (it would roll
+   back the "mark this attempt failed" bookkeeping along with it).
+
 ## Request/data flow: admin reporting (audit log + CSV export)
 
 1. `/admin/audit` and `GET /api/admin/orders/export` are both read-only
@@ -219,9 +237,8 @@ historical rather than future.
 
 ## Known scope limitations (deferred, tracked in TASKS.md)
 
-- **Remaining admin operations** — event/category/phase creation/editing,
-  CSV order export, and the audit-log view all exist. Refund execution
-  remains deferred.
+- **Admin operations** — event/category/phase creation/editing, CSV order
+  export, the audit-log view, and full/partial refunds all exist.
 - **Offline scanning** — deliberately unsupported. The scanner PWA blocks
   validation without a live server connection because safe offline
   multi-device reconciliation is not implemented.
@@ -230,11 +247,10 @@ historical rather than future.
 - **Email delivery** — no transactional email sending yet.
 - **Rate limiting, CSP headers** — not yet implemented; see
   docs/SECURITY.md for the full checklist status.
-- **Refunds** — schema exists (`Refund` model,
-  `PaymentProvider.refund()`), no refund flow/UI is wired up.
 - **`paid_but_unfulfillable`/`reconciliation_required` orders** are
-  surfaced in the admin dashboard but have no automated resolution path
-  yet (refund flow is still required).
+  surfaced in the admin dashboard's attention metrics and can be resolved
+  with a full refund from the order detail page, but there is still no
+  *automatic* trigger — an admin has to notice and act.
 - **Local E2E tests run against the dev database**, not an isolated
   ephemeral one. CI uses its disposable PostgreSQL service, but local
   runs should move to a dedicated e2e database (or transaction-per-test

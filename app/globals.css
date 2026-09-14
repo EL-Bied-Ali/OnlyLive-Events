@@ -123,6 +123,7 @@ textarea {
 .admin-status-paid, .admin-status-on_sale { background: #13352b; color: #78dfbd; }
 .admin-status-pending_payment, .admin-status-published { background: #352d16; color: #e8cb70; }
 .admin-status-reconciliation_required, .admin-status-paid_but_unfulfillable, .admin-status-failed, .admin-status-cancelled { background: #3d1d27; color: #ff99ad; }
+.admin-status-refunded, .admin-status-partially_refunded { background: #2a2440; color: #c3b3ff; }
 .admin-empty { padding: 30px !important; color: #7f8797 !important; text-align: center; }
 .admin-event-list { display: grid; }
 .admin-event-list article { padding: 18px 20px; border-top: 1px solid #252832; }
@@ -153,6 +154,10 @@ textarea {
 .admin-panel-footer { padding: 16px 22px; border-top: 1px solid #292c36; text-align: center; }
 .admin-panel-footer a { color: #f06a83; font-size: 0.88rem; text-decoration: none; font-weight: 700; }
 .admin-audit-metadata { margin: 0; max-width: 360px; white-space: pre-wrap; word-break: break-word; color: #9ca2af; font-size: 0.78rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.admin-order-payments { display: grid; gap: 16px; padding: 20px; }
+.admin-payment-card { padding: 18px 20px; border: 1px solid #292c36; border-radius: 12px; background: #0e1016; }
+.admin-payment-card > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.admin-refund-history { margin: 10px 0 0; padding: 0; list-style: none; display: grid; gap: 4px; color: #9ca2af; font-size: 0.82rem; }
 .admin-form-grid { display: grid; grid-template-columns: minmax(280px, 0.7fr) minmax(0, 1.3fr); gap: 18px; align-items: start; }
 .admin-form-panel { padding: 24px; overflow: visible; }
 .admin-form-panel h2, .admin-form-panel h3 { margin: 0; }

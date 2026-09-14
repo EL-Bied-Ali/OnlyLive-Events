@@ -44,6 +44,13 @@ export interface RefundInput {
   providerPaymentId: string;
   amountCents: number;
   reason: string;
+  /**
+   * Stable per-refund-attempt key (the Refund row's id). FakeProvider
+   * ignores it since its refund() is a synchronous local operation with
+   * no real network call, but a real adapter must pass it through to the
+   * PSP so a retried refund request can never charge/refund twice.
+   */
+  idempotencyKey: string;
 }
 
 export interface RefundResult {
