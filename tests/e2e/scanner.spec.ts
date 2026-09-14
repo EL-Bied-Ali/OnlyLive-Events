@@ -6,7 +6,7 @@ import { hashPassword } from "@/lib/auth/password";
 const scannerEmail = `door-scanner-${crypto.randomUUID()}@test.onlylive.ma`;
 const supportEmail = `support-${crypto.randomUUID()}@test.onlylive.ma`;
 const password = "ScannerE2ETestPassword123!";
-const appOrigin = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+const appOrigin = `http://localhost:${process.env.PLAYWRIGHT_PORT ?? "3100"}`;
 let eventId: string;
 
 test.beforeAll(async () => {
