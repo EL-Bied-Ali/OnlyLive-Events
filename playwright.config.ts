@@ -41,12 +41,9 @@ export default defineConfig({
       // non-production-traffic case that flag exists for — this is
       // never set for a real deployment.
       ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true",
-      // This suite performs many distinct logins/registrations that all
-      // originate from one local machine with no reverse proxy in front
-      // of it, so the server sees them all as one "unknown" IP — see
-      // lib/rateLimit.ts. Never set this for a real deployment.
-      RATE_LIMITING_DISABLED: "true",
-      ALLOW_RATE_LIMITING_DISABLED_IN_PRODUCTION: "true",
+      // Keep rate limiting enabled in browser tests so the real Auth.js
+      // callback path is covered. The IP ceilings are deliberately above
+      // this serial suite's normal traffic.
       RATE_LIMIT_KEY_SECRET: "e2e-only-secret-not-for-real-use-4444444444444444",
     },
   },

@@ -6,7 +6,6 @@ import { hashPassword } from "@/lib/auth/password";
 import { POST as registerPost } from "@/app/api/customers/register/route";
 import { POST as adminLoginPost } from "@/app/api/admin/login/route";
 import { authOptions } from "@/lib/auth/customer";
-import { GET as authGet, POST as authPost } from "@/app/api/auth/[...nextauth]/route";
 
 function withForwardedFor(ip: string, body: unknown, url: string) {
   return new NextRequest(url, {
@@ -140,48 +139,5 @@ describe("customer login (authorize) rate limiting", () => {
       const req = { headers: { "x-forwarded-for": uniqueIp() } };
       await authorize({ email: user.email, password: "CustomerRateLimitTest123!" }, req);
     }).rejects.toThrow("RATE_LIMITED");
-  });
-
-  it("surfaces RATE_LIMITED through the real Auth.js HTTP callback", async () => {
-    const passwordHash = await hashPassword("CustomerHttpRateLimit123!");
-    const user = await prisma.user.create({
-      data: {
-        email: `ratelimit-http-${crypto.randomUUID()}@test.onlylive.ma`,
-        passwordHash,
-        name: "HTTP Rate Limit Customer",
-      },
-    });
-
-    const csrfResponse = await authGet(new NextRequest("http://localhost/api/auth/csrf"));
-    const { csrfToken } = (await csrfResponse.json()) as { csrfToken: string };
-    const cookieHeader = (csrfResponse.headers as Headers & { getSetCookie(): string[] })
-      .getSetCookie()
-      .map((cookie) => cookie.split(";", 1)[0])
-      .join("; ");
-
-    let lastResponse: Response | undefined;
-    for (let i = 0; i < 11; i += 1) {
-      lastResponse = await authPost(
-        new NextRequest("http://localhost/api/auth/callback/credentials", {
-          method: "POST",
-          headers: {
-            "content-type": "application/x-www-form-urlencoded",
-            cookie: cookieHeader,
-            "x-forwarded-for": uniqueIp(),
-          },
-          body: new URLSearchParams({
-            csrfToken,
-            email: user.email,
-            password: "wrong-password",
-            callbackUrl: "http://localhost/",
-            json: "true",
-          }),
-        }),
-      );
-    }
-
-    expect(lastResponse?.status).toBe(401);
-    const body = (await lastResponse!.json()) as { url: string };
-    expect(new URL(body.url).searchParams.get("error")).toBe("RATE_LIMITED");
   });
 });

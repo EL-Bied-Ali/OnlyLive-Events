@@ -833,6 +833,6 @@
     "category": "access-control",
     "implemented": true,
     "status": "pending",
-    "testFile": "tests/integration/authRateLimiting.test.ts"
+    "testFile": "tests/e2e/auth-rate-limiting.spec.ts"
   }
 ]
