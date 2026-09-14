@@ -101,6 +101,29 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
   }
 
   return prisma.$transaction(async (tx) => {
+    const initialCategory = await tx.ticketCategory.findUnique({
+      where: { id: input.ticketCategoryId },
+      select: { eventId: true },
+    });
+    if (!initialCategory) {
+      throw new ApiError(409, "CATEGORY_NOT_AVAILABLE", "This ticket category is not available");
+    }
+
+    // Shared catalogue lock: other purchases can proceed concurrently,
+    // but event/category/phase edits take the matching exclusive lock and
+    // therefore cannot change eligibility between this validation and the
+    // inventory mutation.
+    await tx.$executeRaw`
+      SELECT pg_advisory_xact_lock_shared(hashtext('onlylive_catalogue'), hashtext(${initialCategory.eventId}))
+    `;
+
+    // Serialize all hold attempts by this user for this event, across
+    // every category — released automatically at transaction end.
+    await tx.$executeRaw`
+      SELECT pg_advisory_xact_lock(hashtext(${initialCategory.eventId}), hashtext(${input.userId}))
+    `;
+
+    const snapshot = await releaseExpiredAndLock(tx, input.ticketCategoryId);
     const category = await tx.ticketCategory.findUnique({
       where: { id: input.ticketCategoryId },
       include: { event: true },
@@ -124,14 +147,10 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
       phase.ticketCategoryId !== input.ticketCategoryId ||
       !phase.isActive ||
       phase.startsAt > now ||
-      (phase.endsAt && phase.endsAt < now)
+      (phase.endsAt && phase.endsAt <= now)
     ) {
       throw new ApiError(409, "PHASE_NOT_AVAILABLE", "This sales phase is not currently open");
     }
-
-    // Serialize all hold attempts by this user for this event, across
-    // every category — released automatically at transaction end.
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${event.id}), hashtext(${input.userId}))`;
 
     // Excludes reservations that are 'active' in name only — expired
     // (expires_at in the past) but not yet flipped by the sweep or by
@@ -158,7 +177,6 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
       );
     }
 
-    const snapshot = await releaseExpiredAndLock(tx, input.ticketCategoryId);
     const available = snapshot.total_quantity - snapshot.reserved_quantity - snapshot.sold_quantity;
     if (available < input.quantity) {
       throw new ApiError(409, "SOLD_OUT", "Not enough tickets available in this category");

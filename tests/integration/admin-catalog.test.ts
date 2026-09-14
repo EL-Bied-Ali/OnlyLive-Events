@@ -1,0 +1,266 @@
+import crypto from "node:crypto";
+import { describe, expect, it } from "vitest";
+import { prisma } from "@/lib/db";
+import {
+  createCategory,
+  createSalesPhase,
+  updateCategory,
+  updateEvent,
+  updateSalesPhase,
+} from "@/lib/admin/catalog";
+import { createHold } from "@/lib/inventory";
+import { createTestCategory, createTestUser } from "../helpers/fixtures";
+
+async function createActor() {
+  return prisma.adminUser.create({
+    data: {
+      email: `catalog-admin-${crypto.randomUUID()}@test.onlylive.ma`,
+      passwordHash: "not-used-in-tests",
+      name: "Catalogue Admin",
+      role: "admin",
+    },
+  });
+}
+
+describe("admin catalogue integrity", () => {
+  it("creates a category and its inventory atomically with an audit record", async () => {
+    const { event } = await createTestCategory(10);
+    const actor = await createActor();
+    const category = await createCategory(
+      {
+        eventId: event.id,
+        name: "Balcon",
+        description: "Vue surélevée",
+        totalQuantity: 250,
+        sortOrder: 2,
+        isActive: true,
+      },
+      actor.id,
+    );
+
+    expect(category.inventory?.totalQuantity).toBe(250);
+    await expect(
+      prisma.auditLog.findFirstOrThrow({
+        where: { actorId: actor.id, action: "ticket_category.created", entityId: category.id },
+      }),
+    ).resolves.toBeTruthy();
+  });
+
+  it("refuses to reduce capacity below active reservations", async () => {
+    const { event, category, phase } = await createTestCategory(5);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-capacity")]);
+    await createHold({ ticketCategoryId: category.id, salesPhaseId: phase.id, userId: customer.id, quantity: 2 });
+
+    await expect(
+      updateCategory(
+        {
+          categoryId: category.id,
+          eventId: event.id,
+          name: category.name,
+          totalQuantity: 1,
+          sortOrder: 0,
+          isActive: true,
+        },
+        actor.id,
+      ),
+    ).rejects.toMatchObject({ code: "CAPACITY_BELOW_COMMITTED", status: 409 });
+  });
+
+  it("refuses overlapping active sales phases but permits adjacent windows", async () => {
+    const { category, phase } = await createTestCategory(100);
+    const actor = await createActor();
+    await prisma.salesPhase.update({
+      where: { id: phase.id },
+      data: { startsAt: new Date("2027-01-01T00:00:00Z"), endsAt: new Date("2027-02-01T00:00:00Z") },
+    });
+
+    await expect(
+      createSalesPhase(
+        {
+          ticketCategoryId: category.id,
+          name: "Chevauchement",
+          priceCents: 20_000,
+          startsAt: new Date("2027-01-15T00:00:00Z"),
+          endsAt: new Date("2027-03-01T00:00:00Z"),
+          sortOrder: 1,
+          isActive: true,
+        },
+        actor.id,
+      ),
+    ).rejects.toMatchObject({ code: "PHASE_WINDOW_OVERLAP", status: 409 });
+
+    await expect(
+      createSalesPhase(
+        {
+          ticketCategoryId: category.id,
+          name: "Phase adjacente",
+          priceCents: 25_000,
+          startsAt: new Date("2027-02-01T00:00:00Z"),
+          endsAt: new Date("2027-03-01T00:00:00Z"),
+          sortOrder: 2,
+          isActive: true,
+        },
+        actor.id,
+      ),
+    ).resolves.toMatchObject({ name: "Phase adjacente" });
+  });
+
+  it("refuses to lower a phase cap below already reserved tickets", async () => {
+    const { category, phase } = await createTestCategory(10);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-phase-cap")]);
+    await createHold({ ticketCategoryId: category.id, salesPhaseId: phase.id, userId: customer.id, quantity: 3 });
+
+    await expect(
+      updateSalesPhase(
+        {
+          phaseId: phase.id,
+          ticketCategoryId: category.id,
+          name: phase.name,
+          priceCents: phase.priceCents,
+          startsAt: phase.startsAt,
+          endsAt: phase.endsAt ?? undefined,
+          phaseQuantityLimit: 2,
+          sortOrder: phase.sortOrder,
+          isActive: phase.isActive,
+        },
+        actor.id,
+      ),
+    ).rejects.toMatchObject({ code: "PHASE_LIMIT_BELOW_COMMITTED", status: 409 });
+  });
+
+  it("blocks direct cancellation after tickets have been issued", async () => {
+    const { event, category, phase } = await createTestCategory(1);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-cancel")]);
+    const order = await prisma.order.create({
+      data: {
+        orderNumber: `CAT-${crypto.randomUUID()}`,
+        userId: customer.id,
+        eventId: event.id,
+        status: "paid",
+        totalAmountCents: phase.priceCents,
+      },
+    });
+    const item = await prisma.orderItem.create({
+      data: {
+        orderId: order.id,
+        ticketCategoryId: category.id,
+        salesPhaseId: phase.id,
+        quantity: 1,
+        unitPriceCents: phase.priceCents,
+      },
+    });
+    await prisma.ticket.create({
+      data: {
+        orderItemId: item.id,
+        eventId: event.id,
+        ticketCategoryId: category.id,
+        validationToken: crypto.randomBytes(32).toString("base64url"),
+      },
+    });
+
+    await expect(
+      updateEvent(
+        {
+          eventId: event.id,
+          slug: event.slug,
+          title: event.title,
+          description: event.description,
+          venueId: event.venueId,
+          startsAt: event.startsAt,
+          doorsOpenAt: event.doorsOpenAt ?? undefined,
+          salesOpenAt: event.salesOpenAt,
+          salesCloseAt: event.salesCloseAt,
+          status: "cancelled",
+          coverImageUrl: event.coverImageUrl ?? undefined,
+        },
+        actor.id,
+      ),
+    ).rejects.toMatchObject({ code: "CANCELLATION_WORKFLOW_REQUIRED", status: 409 });
+  });
+
+  it("blocks direct cancellation while a live hold exists", async () => {
+    const { event, category, phase } = await createTestCategory(2);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-live-hold")]);
+    await createHold({ ticketCategoryId: category.id, salesPhaseId: phase.id, userId: customer.id, quantity: 1 });
+
+    await expect(
+      updateEvent(
+        {
+          eventId: event.id,
+          slug: event.slug,
+          title: event.title,
+          description: event.description,
+          venueId: event.venueId,
+          startsAt: event.startsAt,
+          salesOpenAt: event.salesOpenAt,
+          salesCloseAt: event.salesCloseAt,
+          status: "cancelled",
+        },
+        actor.id,
+      ),
+    ).rejects.toMatchObject({ code: "CANCELLATION_WORKFLOW_REQUIRED", status: 409 });
+  });
+
+  it("blocks direct cancellation while a payment is pending", async () => {
+    const { event } = await createTestCategory(2);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-pending")]);
+    await prisma.order.create({
+      data: {
+        orderNumber: `CAT-PENDING-${crypto.randomUUID()}`,
+        userId: customer.id,
+        eventId: event.id,
+        status: "pending_payment",
+        totalAmountCents: 10_000,
+      },
+    });
+
+    await expect(
+      updateEvent(
+        {
+          eventId: event.id,
+          slug: event.slug,
+          title: event.title,
+          description: event.description,
+          venueId: event.venueId,
+          startsAt: event.startsAt,
+          salesOpenAt: event.salesOpenAt,
+          salesCloseAt: event.salesCloseAt,
+          status: "cancelled",
+        },
+        actor.id,
+      ),
+    ).rejects.toMatchObject({ code: "CANCELLATION_WORKFLOW_REQUIRED", status: 409 });
+  });
+
+  it("makes a waiting purchase revalidate after an exclusive catalogue edit", async () => {
+    const { event, category, phase } = await createTestCategory(2);
+    const customer = await createTestUser("catalog-lock-race");
+    let releaseEdit!: () => void;
+    let editLocked!: () => void;
+    const editMayCommit = new Promise<void>((resolve) => { releaseEdit = resolve; });
+    const lockAcquired = new Promise<void>((resolve) => { editLocked = resolve; });
+
+    const edit = prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        SELECT pg_advisory_xact_lock(hashtext('onlylive_catalogue'), hashtext(${event.id}))
+      `;
+      editLocked();
+      await editMayCommit;
+      await tx.ticketCategory.update({ where: { id: category.id }, data: { isActive: false } });
+    });
+
+    await lockAcquired;
+    const purchase = createHold({
+      ticketCategoryId: category.id,
+      salesPhaseId: phase.id,
+      userId: customer.id,
+      quantity: 1,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    releaseEdit();
+    await edit;
+
+    await expect(purchase).rejects.toMatchObject({ code: "CATEGORY_NOT_AVAILABLE", status: 409 });
+    await expect(prisma.reservation.count({ where: { userId: customer.id } })).resolves.toBe(0);
+  });
+});
