@@ -39,8 +39,8 @@ export type PaymentWebhookEventType =
 
 export interface ParsedWebhookEvent {
   externalEventId: string;
-  /** Provider payment/session id when the emitted event carries it. */
-  providerPaymentId?: string;
+  /** Empty string means the payload did not carry a provider payment/session id. */
+  providerPaymentId: string;
   /** Provider refund id when the emitted event carries it. */
   providerRefundId?: string;
   /** Stable OnlyLive Payment id echoed by the provider. */
@@ -48,10 +48,10 @@ export interface ParsedWebhookEvent {
   /** Stable OnlyLive Refund id/refundReference echoed by the provider. */
   refundExternalId?: string;
   type: PaymentWebhookEventType;
-  /** Undefined means the provider payload did not prove this immutable fact. */
-  amountCents?: number;
-  /** Undefined means the provider payload did not prove this immutable fact. */
-  currency?: string;
+  /** Zero is only a placeholder when payloadValid=false; it is never trusted. */
+  amountCents: number;
+  /** Provider-normalized currency. ChariPay's documented contract is MAD-only. */
+  currency: string;
   signatureValid: boolean;
   /**
    * Provider-schema validation is deliberately separate from authentication.
