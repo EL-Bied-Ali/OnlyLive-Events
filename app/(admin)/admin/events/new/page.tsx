@@ -1,7 +1,6 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireAdminForPage } from "@/lib/auth/admin";
-import { getAdminCsrfTokenForPage } from "@/lib/auth/adminCsrf";
 import { formatMoroccoDateTime } from "@/lib/validation/catalog";
 import { AdminMutationForm } from "../AdminMutationForm";
 import { createEventAction, createVenueAction } from "../actions";
@@ -12,10 +11,9 @@ function defaultLocalDate(daysFromNow: number, hour: number) {
 }
 
 export default async function NewAdminEventPage() {
-  const [admin, venues, csrfToken] = await Promise.all([
+  const [admin, venues] = await Promise.all([
     requireAdminForPage(),
     prisma.venue.findMany({ orderBy: [{ city: "asc" }, { name: "asc" }] }),
-    getAdminCsrfTokenForPage(),
   ]);
   if (admin.role === "support") redirect("/admin/events");
 
@@ -29,7 +27,7 @@ export default async function NewAdminEventPage() {
         <section className="admin-panel admin-form-panel">
           <h2>1. Lieu</h2>
           <p className="admin-muted">Créez le lieu seulement s’il n’existe pas encore, puis sélectionnez-le dans l’événement.</p>
-          <AdminMutationForm action={createVenueAction} csrfToken={csrfToken} submitLabel="Créer le lieu">
+          <AdminMutationForm action={createVenueAction} submitLabel="Créer le lieu">
             <label>Nom<input name="name" required maxLength={120} /></label>
             <label>Adresse<input name="addressLine1" required maxLength={200} /></label>
             <label>Complément<input name="addressLine2" maxLength={200} /></label>
@@ -44,7 +42,7 @@ export default async function NewAdminEventPage() {
           {venues.length === 0 ? (
             <p className="admin-form-error">Créez d’abord un lieu.</p>
           ) : (
-            <AdminMutationForm action={createEventAction} csrfToken={csrfToken} submitLabel="Créer l’événement">
+            <AdminMutationForm action={createEventAction} submitLabel="Créer l’événement">
               <label>Titre<input name="title" required maxLength={160} /></label>
               <label>URL courte<input name="slug" required maxLength={100} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="artiste-casablanca-2027" /></label>
               <label className="admin-field-wide">Description<textarea name="description" required minLength={10} maxLength={10_000} rows={5} /></label>
