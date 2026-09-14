@@ -5,7 +5,7 @@ const dev = "postgresql://onlylive:onlylive@localhost:5432/onlylive_dev";
 const test = "postgresql://onlylive:onlylive@localhost:5432/onlylive_test";
 
 describe("assertSafeE2eDatabase", () => {
-  it("accepts a separately named PostgreSQL e2e database", () => {
+  it("accepts a separately named PostgreSQL e2e database on loopback", () => {
     expect(
       assertSafeE2eDatabase({
         e2eDatabaseUrl: "postgresql://onlylive:onlylive@localhost:5432/onlylive_e2e",
@@ -13,6 +13,14 @@ describe("assertSafeE2eDatabase", () => {
         testDatabaseUrl: test,
       }),
     ).toMatchObject({ databaseName: "onlylive_e2e" });
+
+    expect(
+      assertSafeE2eDatabase({
+        e2eDatabaseUrl: "postgresql://onlylive:onlylive@127.0.0.1:5432/onlylive_browser_e2e",
+        developmentDatabaseUrl: dev,
+        testDatabaseUrl: test,
+      }),
+    ).toMatchObject({ databaseName: "onlylive_browser_e2e" });
   });
 
   it("refuses a missing URL or a non-PostgreSQL URL", () => {
@@ -20,6 +28,16 @@ describe("assertSafeE2eDatabase", () => {
     expect(() => assertSafeE2eDatabase({ e2eDatabaseUrl: "mysql://localhost/onlylive_e2e" })).toThrow(
       "must use the postgresql:// or postgres:// protocol",
     );
+  });
+
+  it("refuses any remote database even when its name looks like e2e", () => {
+    expect(() =>
+      assertSafeE2eDatabase({
+        e2eDatabaseUrl: "postgresql://onlylive:secret@db.example.com:5432/production_e2e",
+        developmentDatabaseUrl: dev,
+        testDatabaseUrl: test,
+      }),
+    ).toThrow("must target localhost/loopback");
   });
 
   it("refuses a database name that is not explicitly marked e2e", () => {
