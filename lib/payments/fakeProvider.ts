@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type {
+  ClosePaymentSessionResult,
   CreatePaymentInput,
   CreatePaymentResult,
   ParsedWebhookEvent,
@@ -105,5 +106,12 @@ export class FakeProvider implements PaymentProvider {
 
   async getRefundStatus(refundReference: string): Promise<RefundStatusResult> {
     return { providerRefundId: refundReference, status: "succeeded" };
+  }
+
+  async closePaymentSession(_providerPaymentId: string, _requestId: string): Promise<ClosePaymentSessionResult> {
+    // The fake provider has no external rail. Once OnlyLive decides an expired
+    // fake checkout should close, there is no remote session that could still
+    // capture money after this method returns.
+    return { state: "non_payable", providerStatus: "FAKE_CLOSED" };
   }
 }
