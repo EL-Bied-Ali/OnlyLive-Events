@@ -62,10 +62,12 @@ function enableChariPay() {
 }
 
 async function ageRefund(refundId: string) {
-  await prisma.refund.update({
-    where: { id: refundId },
-    data: { createdAt: new Date("2000-01-01T00:00:00.000Z") },
-  });
+  const dueAt = new Date("2000-01-01T00:00:00.000Z");
+  await prisma.$executeRaw`
+    UPDATE refunds
+    SET created_at = ${dueAt}, updated_at = ${dueAt}
+    WHERE id = ${refundId}
+  `;
 }
 
 const processingRefundIds = new Set<string>();
