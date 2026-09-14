@@ -62,6 +62,24 @@ export interface RefundResult {
   state: "processing" | "succeeded";
 }
 
+/**
+ * Providers can explicitly reject a request (safe to retry later with a new
+ * business attempt) or leave the caller uncertain whether it was accepted
+ * (network drop / 5xx after receipt). Money-moving code must distinguish the
+ * two: an unknown refund outcome must keep its original idempotency reference
+ * reserved rather than submit a second refund.
+ */
+export class ProviderRequestError extends Error {
+  constructor(
+    message: string,
+    public readonly outcomeUnknown: boolean,
+    public readonly status?: number,
+  ) {
+    super(message);
+    this.name = "ProviderRequestError";
+  }
+}
+
 export interface PaymentProvider {
   readonly name: string;
   createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult>;
