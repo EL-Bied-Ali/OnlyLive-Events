@@ -1,7 +1,8 @@
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { CHECKOUT_EXTENSION_MS } from "@/lib/inventory";
-import { getOnlyLivePublicUrl, getPaymentProvider } from "@/lib/payments";
+import { getOnlyLivePublicUrl, getPaymentProvider, getPaymentProviderByName } from "@/lib/payments";
+import { ProviderRequestError } from "@/lib/payments/provider";
 import { ApiError } from "@/lib/http/errors";
 import type { Order, Payment } from "@prisma/client";
 
@@ -58,11 +59,25 @@ async function ensurePendingOrderAndPayment(
       const existingPayment = existingOrder.payments[0];
       if (!existingPayment) throw new ApiError(500, "PAYMENT_MISSING", "Order has no payment record");
 
+      if (reservation.status !== "active") {
+        throw new ApiError(409, "HOLD_EXPIRED", "This reservation is no longer active");
+      }
+      if (reservation.expires_at <= new Date()) {
+        // Never resurface a possibly-payable provider URL after the local hold
+        // deadline. Inventory remains reserved until provider reconciliation
+        // proves the session terminal/non-payable.
+        if (existingPayment.providerPaymentId) {
+          throw new ApiError(
+            409,
+            "CHECKOUT_RECONCILIATION_REQUIRED",
+            "This checkout expired locally and must be reconciled with the payment provider before it can be retried",
+          );
+        }
+        throw new ApiError(409, "HOLD_EXPIRED", "This reservation has expired");
+      }
+
       if (existingPayment.providerPaymentId && existingPayment.redirectUrl) {
         return { order: existingOrder, payment: existingPayment };
-      }
-      if (reservation.status !== "active" || reservation.expires_at <= new Date()) {
-        throw new ApiError(409, "HOLD_EXPIRED", "This reservation has expired or is no longer active");
       }
       return { order: existingOrder, payment: existingPayment };
     }
@@ -79,6 +94,7 @@ async function ensurePendingOrderAndPayment(
       tx.salesPhase.findUniqueOrThrow({ where: { id: reservation.sales_phase_id }, select: { currency: true } }),
     ]);
     const totalAmountCents = reservation.quantity * reservation.unit_price_cents;
+    const provider = getPaymentProvider();
 
     const order = await tx.order.create({
       data: {
@@ -105,7 +121,7 @@ async function ensurePendingOrderAndPayment(
     const payment = await tx.payment.create({
       data: {
         orderId: order.id,
-        provider: getPaymentProvider().name,
+        provider: provider.name,
         status: "awaiting_payment",
         amountCents: totalAmountCents,
         currency: phase.currency,
@@ -119,6 +135,7 @@ async function ensurePendingOrderAndPayment(
 const PROVIDER_INIT_CLAIM_TIMEOUT_MS = 30_000;
 const PROVIDER_INIT_POLL_INTERVAL_MS = 150;
 const PROVIDER_INIT_POLL_ATTEMPTS = 15;
+const PROVIDER_EXPIRY_GUARD_MS = 60_000;
 
 async function claimAndInitializeProvider(
   order: Order,
@@ -149,12 +166,18 @@ async function claimAndInitializeProvider(
     }
 
     try {
-      const provider = getPaymentProvider();
-      // FakeProvider may use the incoming application origin in isolated local
-      // tests. Real PSP callback/return URLs never trust request.url/Host: they
-      // are derived from the explicitly configured canonical public origin.
+      // The Payment row is authoritative after creation. A default-provider
+      // migration must never reroute an existing payment initialization retry.
+      const provider = getPaymentProviderByName(payment.provider);
       const callbackBaseUrl = provider.name === "charipay" ? getOnlyLivePublicUrl() : requestBaseUrl;
       const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
+      const providerExpiresAt = order.expiresAt
+        ? new Date(order.expiresAt.getTime() - PROVIDER_EXPIRY_GUARD_MS)
+        : undefined;
+      if (providerExpiresAt && providerExpiresAt <= new Date()) {
+        throw new ApiError(409, "CHECKOUT_TOO_CLOSE_TO_EXPIRY", "Not enough time remains to start a safe provider checkout");
+      }
+
       const created = await provider.createPayment({
         paymentId: payment.id,
         orderId: order.id,
@@ -164,7 +187,7 @@ async function claimAndInitializeProvider(
         customerEmail: user.email,
         returnUrl: `${callbackBaseUrl}/orders/${order.id}`,
         webhookUrl: `${callbackBaseUrl}/api/payments/webhook/${provider.name}`,
-        expiresAt: order.expiresAt ?? undefined,
+        expiresAt: providerExpiresAt,
       });
 
       const updated = await prisma.payment.update({
@@ -173,11 +196,19 @@ async function claimAndInitializeProvider(
       });
       return { orderId: order.id, redirectUrl: updated.redirectUrl! };
     } catch (error) {
-      console.error("provider.createPayment failed", error instanceof Error ? error.name : "unknown error");
+      console.error(
+        "provider.createPayment failed",
+        error instanceof ProviderRequestError
+          ? { name: error.name, status: error.status, outcomeUnknown: error.outcomeUnknown, correlationId: error.correlationId }
+          : error instanceof Error
+            ? { name: error.name }
+            : { name: "unknown" },
+      );
       await prisma.payment.updateMany({
         where: { id: payment.id, providerPaymentId: null },
         data: { providerInitAt: null },
       });
+      if (error instanceof ApiError) throw error;
       throw new ApiError(
         502,
         "PROVIDER_UNAVAILABLE",
