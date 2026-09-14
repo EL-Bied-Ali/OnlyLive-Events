@@ -308,6 +308,10 @@ state unchanged and auditable followed by a successful retry, and
 concurrent refund attempts on the same payment serializing so their
 total never exceeds the paid amount.
 
+A successful refund also triggers `lib/email/notifications.ts::sendRefundConfirmationEmail`,
+after the transaction commits — see docs/ARCHITECTURE.md's transactional
+email section.
+
 ## Hold cancellation vs. checkout
 
 Once a reservation's checkout has started (`reservation.order_id` is

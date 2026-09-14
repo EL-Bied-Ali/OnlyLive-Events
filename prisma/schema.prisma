@@ -504,3 +504,32 @@ model AuditLog {
   @@index([createdAt])
   @@map("audit_logs")
 }
+
+// ─────────────────────────────────────────────────────────────────────────
+// Transactional email — idempotency ledger
+// ─────────────────────────────────────────────────────────────────────────
+
+enum EmailType {
+  order_confirmation
+  payment_failed
+  refund_confirmation
+}
+
+/// One row per email actually sent. The unique (type, entityType, entityId)
+/// constraint is the idempotency guarantee — a retried trigger (e.g. a
+/// redelivered webhook that reaches the send step again) claims via
+/// `INSERT ... ON CONFLICT DO NOTHING`, exactly like `PaymentEvent`'s
+/// (provider, external_event_id), so the same order/refund can never
+/// receive the same email twice.
+model EmailLog {
+  id               String    @id @default(uuid())
+  type             EmailType
+  entityType       String    @map("entity_type")
+  entityId         String    @map("entity_id")
+  recipientEmail   String    @map("recipient_email")
+  providerMessageId String?  @map("provider_message_id")
+  createdAt        DateTime  @default(now()) @map("created_at")
+
+  @@unique([type, entityType, entityId])
+  @@map("email_logs")
+}

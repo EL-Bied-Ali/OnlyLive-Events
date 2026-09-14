@@ -78,8 +78,9 @@ instrumentation.ts  boot-time config validation (payment provider)
   admin/             dashboard queries + atomic catalogue mutations
   auth/             customer.ts (Auth.js), admin.ts (custom session), password.ts
   inventory.ts      the oversell-prevention critical section
-  orders/           stateMachine.ts, fulfillment.ts, checkout.ts
+  orders/           stateMachine.ts, fulfillment.ts, checkout.ts, refund.ts
   payments/         provider.ts (interface), fakeProvider.ts, index.ts (factory)
+  email/            provider.ts (interface), fakeProvider.ts, index.ts (factory), notifications.ts
   scanner.ts         atomic ticket validation + scan audit records
   tickets.ts        validation token + QR
   audit.ts          writeAuditLog()
@@ -199,6 +200,30 @@ TASKS.md, tests.json
    renders accented names correctly. It is bounded to the most recent
    20,000 orders — there is no pagination UI for the export yet.
 
+## Request/data flow: transactional email
+
+1. `lib/email/provider.ts` defines the same kind of swappable interface as
+   payments — no real provider is chosen yet, `lib/email/fakeProvider.ts`
+   (`ConsoleEmailProvider`) just logs the message and returns a fake id.
+2. `lib/email/notifications.ts` has one function per email CLAUDE.md
+   requires: `sendOrderConfirmationEmail` (order confirmation + payment
+   confirmation + ticket delivery combined into one message — in this
+   system all three become true at the same instant, so three separate
+   emails would only fragment one event), `sendPaymentFailedEmail`, and
+   `sendRefundConfirmationEmail`.
+3. Each claims idempotency via `EmailLog`'s `UNIQUE(type, entity_type,
+   entity_id)` with the same `INSERT ... ON CONFLICT DO NOTHING RETURNING
+   id` idiom as `PaymentEvent` — a retriggering caller (e.g. the webhook
+   route reached again for an unrelated reason) is a safe no-op.
+4. Triggered after the relevant transaction commits, never inside it: the
+   payment webhook route dispatches based on the fulfillment outcome
+   (`paid` → confirmation, `failed`/`cancelled` → failure notice), and
+   `lib/orders/refund.ts::initiateRefund` dispatches its confirmation
+   after a successful refund. A send failure is logged and swallowed —
+   email delivery must never roll back or block the payment/refund it's
+   reporting on. There is no background retry for a failed send yet (see
+   TASKS.md).
+
 ## Deployment
 
 Target: Vercel or an equivalent Node.js serverless/edge-capable platform.
@@ -244,7 +269,11 @@ historical rather than future.
   multi-device reconciliation is not implemented.
 - **Real payment provider** — no Moroccan PSP is integrated; only the
   `fake` sandbox provider. See docs/PAYMENTS.md.
-- **Email delivery** — no transactional email sending yet.
+- **Real email provider** — order confirmation, payment failure, and
+  refund confirmation emails are all sent, but only through the `console`
+  sandbox provider (logs the message, no real delivery) — no real
+  provider (Resend/Postmark/SES/...) is integrated, and a failed send has
+  no background retry yet.
 - **Rate limiting, CSP headers** — not yet implemented; see
   docs/SECURITY.md for the full checklist status.
 - **`paid_but_unfulfillable`/`reconciliation_required` orders** are

@@ -220,6 +220,26 @@ payment-id mismatch, event-type mismatch).
 - `/admin/orders/[orderId]`: new order detail page (payments, refund
   history, tickets with status) linked from the orders list.
 
+## Completed (transactional email — current branch)
+
+- `lib/email/provider.ts` + `lib/email/fakeProvider.ts`
+  (`ConsoleEmailProvider`): the same swappable-interface treatment as
+  payments, since no real email provider has been chosen either —
+  `ConsoleEmailProvider` logs the message and returns a fake id, no real
+  delivery.
+- `lib/email/notifications.ts`: `sendOrderConfirmationEmail` (order +
+  payment confirmation + ticket delivery combined into one message, since
+  all three become true at the same instant in this system),
+  `sendPaymentFailedEmail`, `sendRefundConfirmationEmail`.
+- Idempotency via a new `EmailLog` model, `UNIQUE(type, entity_type,
+  entity_id)`, claimed with the same `INSERT ... ON CONFLICT DO NOTHING
+  RETURNING id` idiom as `PaymentEvent` — a retriggering caller is a safe
+  no-op, never a duplicate send.
+- Triggered after the relevant transaction commits (payment webhook route;
+  `lib/orders/refund.ts::initiateRefund`), never inside it. A send
+  failure is logged and swallowed, never allowed to roll back or block
+  the payment/refund it's reporting on.
+
 ## In progress
 
 - None.
@@ -233,9 +253,9 @@ payment-id mismatch, event-type mismatch).
    provider's actual documented event lifecycle rather than this
    session's conservative stopgap, and revisit whether `initiateRefund`
    still safely holds a row lock across the real (network) provider call.
-2. Transactional email (order confirmation, ticket delivery, payment
-   failure, refund confirmation) — must be idempotent, no duplicate
-   tickets from a retried email job.
+2. Select a real email provider (Resend/Postmark/SES/...) and implement
+   its adapter from official docs; add a background retry for a send
+   that failed (currently logged and dropped — no retry mechanism yet).
 3. Rate limiting on `/api/customers/register`, customer login, and
    `/api/admin/login` (see docs/SECURITY.md — currently a documented gap).
 4. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
@@ -265,6 +285,6 @@ payment-id mismatch, event-type mismatch).
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
-Offline scanning, real payment provider, email delivery, background
+Offline scanning, real payment provider, real email provider, background
 worker infrastructure beyond the sweep endpoint, rate limiting, CSP
 headers, database backup strategy documentation.
