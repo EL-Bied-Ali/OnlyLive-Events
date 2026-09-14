@@ -19,6 +19,20 @@ function requiredEnv(name: string): string {
   return value;
 }
 
+function requireHttpsUrl(value: string | undefined, label: string): string {
+  if (!value) throw new Error(`ChariPay requires ${label}`);
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`ChariPay ${label} must be a valid HTTPS URL`);
+  }
+  if (url.protocol !== "https:" || url.port) {
+    throw new Error(`ChariPay ${label} must use HTTPS on the default port`);
+  }
+  return url.toString();
+}
+
 function centsToMad(cents: number): number {
   if (!Number.isInteger(cents) || cents <= 0) throw new Error("ChariPay amount must be positive integer cents");
   return Number((cents / 100).toFixed(2));
@@ -110,6 +124,11 @@ export class ChariPayProvider implements PaymentProvider {
 
   async createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult> {
     if (input.currency !== "MAD") throw new Error(`ChariPay only supports MAD in this integration, got ${input.currency}`);
+    const returnUrl = requireHttpsUrl(input.returnUrl, "returnUrl");
+    const webhookUrl = requireHttpsUrl(input.webhookUrl, "webhookUrl");
+    if (!input.expiresAt || input.expiresAt <= new Date()) {
+      throw new Error("ChariPay requires a future checkout expiry");
+    }
 
     const response = await fetch(`${CHARIPAY_API_BASE_URL}/v1/payment-sessions`, {
       method: "POST",
@@ -122,13 +141,16 @@ export class ChariPayProvider implements PaymentProvider {
       body: JSON.stringify({
         amount: centsToMad(input.amountCents),
         orderId: input.orderId,
+        singleUse: true,
         externalId: input.paymentId,
+        expiresAt: input.expiresAt.toISOString(),
+        notifyOnFailure: true,
         config: {
           customer: { email: input.customerEmail },
           urls: {
-            accept: input.returnUrl,
-            decline: input.returnUrl,
-            notification: input.webhookUrl,
+            accept: returnUrl,
+            decline: returnUrl,
+            notification: webhookUrl,
           },
         },
         metadata: {
