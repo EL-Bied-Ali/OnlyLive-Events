@@ -1020,5 +1020,29 @@
     "status": "pass",
     "testFile": "tests/e2e/purchase-flow.spec.ts",
     "note": "Configuration is enforced in playwright.config.ts and exercised by the full 17-test Playwright CI suite; auth, CSRF, scanner, catalogue, refund, reporting and purchase flows all pass on the isolated runtime."
+  },
+  {
+    "id": "reconciliation-alert-paid-but-unfulfillable",
+    "scenario": "Every active admin/super_admin is emailed exactly once when an order becomes paid_but_unfulfillable; support and scanner accounts are never notified",
+    "category": "notifications",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "reconciliation-alert-reconciliation-required",
+    "scenario": "An active admin is alerted exactly once when an order becomes reconciliation_required, a redelivered webhook event does not send a second alert, and an inactive admin is never notified",
+    "category": "notifications",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "reconciliation-alert-unknown-order-noop",
+    "scenario": "sendReconciliationAlertEmail is a silent no-op for an unknown order id rather than throwing",
+    "category": "notifications",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
   }
 ]

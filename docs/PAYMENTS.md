@@ -96,10 +96,12 @@ confirms payment" while the order was still `pending_payment` — see
 `lib/orders/checkout.ts`'s checkout-expiry extension, which shrinks but
 cannot eliminate this race. When it happens, the customer's money was
 captured (`Payment.status = 'paid'`) but no tickets are generated; this is
-intentional (never oversell) but currently has **no automated
-resolution** — an admin must notice it (surfaced in the dashboard's
-attention metrics) and manually issue a full refund from the order
-detail page; there is no automatic trigger yet (tracked in TASKS.md).
+intentional (never oversell), and resolution is still a manual admin
+action from the order detail page (fulfil manually if stock frees up, or
+refund) — but every admin/super_admin is now emailed the moment this
+happens (`lib/email/notifications.ts::sendReconciliationAlertEmail`,
+triggered right after the webhook transaction commits), rather than
+relying solely on an admin noticing the dashboard's attention metrics.
 
 ## Reconciliation: a contradictory payment.succeeded after failed/cancelled
 
@@ -133,7 +135,10 @@ treating it as `already_handled`:
    `reconciliation_required` — no ticket is generated (never oversell),
    and a human must resolve it (manually fulfil if stock frees up, or
    refund). This is a terminal, human-only state: it is never
-   re-attempted automatically by a later event.
+   re-attempted automatically by a later event — but every admin/
+   super_admin is emailed as soon as it happens (see the alert described
+   just above `paid_but_unfulfillable`), so "human must resolve it" no
+   longer depends on someone happening to check the dashboard.
 4. Either way, `Payment.status` is set to `paid` (money was captured —
    this is a fact, independent of whether the order could be fulfilled)
    and an `AuditLog` entry is written
@@ -361,5 +366,7 @@ later, a webhook confirmation.
 
 - Which Moroccan PSP to integrate (CMI, HPS/Onepay, or another —
   **undecided**, do not build against any of them speculatively).
-- Automated (rather than admin-triggered) handling of
-  `paid_but_unfulfillable`/`reconciliation_required` orders.
+- Automated (rather than admin-triggered) *resolution* of
+  `paid_but_unfulfillable`/`reconciliation_required` orders — detection and
+  admin notification are now automatic (see above), but fulfilling or
+  refunding one is still a manual admin action from the order detail page.

@@ -136,6 +136,45 @@ async function renderRefundConfirmation(refundId: string): Promise<RenderedEmail
   return { subject: `Remboursement — commande ${order.orderNumber}`, text };
 }
 
+/**
+ * entityId is `${orderId}:${adminUserId}` (see
+ * `enqueueReconciliationAlertEmail`) — only orderId is needed to render
+ * content, since the recipient address was already captured on the row at
+ * enqueue time. The outcome/reason is deliberately re-derived from the
+ * order's CURRENT status rather than trusted from enqueue time: if the
+ * order has since moved past reconciliation (e.g. an admin already
+ * resolved it) the alert is stale and this returns null instead of
+ * re-alerting on outdated information.
+ */
+async function renderReconciliationAlert(entityId: string): Promise<RenderedEmail | null> {
+  const orderId = entityId.split(":")[0]!;
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { user: { select: { email: true } }, event: { select: { title: true } } },
+  });
+  if (!order || (order.status !== "paid_but_unfulfillable" && order.status !== "reconciliation_required")) return null;
+
+  const reason =
+    order.status === "paid_but_unfulfillable"
+      ? "la réservation avait expiré avant la confirmation du paiement"
+      : "un événement de paiement contradictoire est arrivé après l’échec/l’annulation de la commande, et le stock n’était plus disponible";
+
+  const text = [
+    `Alerte réconciliation — commande ${order.orderNumber} (${order.event.title})`,
+    "",
+    `Le paiement de ${money(order.totalAmountCents, order.currency)} a été capturé (client : ${order.user.email}),`,
+    `mais aucun billet n’a pu être émis : ${reason}.`,
+    "",
+    `Statut actuel : ${order.status}. Cette commande ne se résoudra pas automatiquement —`,
+    "vérifiez le stock disponible pour cet événement puis remboursez ou honorez manuellement",
+    `la commande depuis /admin/orders/${order.id}.`,
+    "",
+    "— OnlyLive",
+  ].join("\n");
+
+  return { subject: `Alerte réconciliation — commande ${order.orderNumber}`, text };
+}
+
 async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId">): Promise<RenderedEmail | null> {
   switch (row.type) {
     case "order_confirmation":
@@ -144,6 +183,8 @@ async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId">): Promise
       return renderPaymentFailed(row.entityId);
     case "refund_confirmation":
       return renderRefundConfirmation(row.entityId);
+    case "reconciliation_alert":
+      return renderReconciliationAlert(row.entityId);
   }
 }
 

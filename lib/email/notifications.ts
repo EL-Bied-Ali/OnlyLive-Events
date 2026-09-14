@@ -65,3 +65,48 @@ export async function enqueueRefundConfirmationEmail(tx: Tx, refundId: string): 
   if (!refund) return;
   await enqueue(tx, "refund_confirmation", "refund", refundId, refund.payment.order.user.email);
 }
+
+/**
+ * Enqueues an alert for every active admin/super_admin that a customer's
+ * payment was captured but the order could not be (fully) fulfilled —
+ * `Payment.status` is "paid" while `Order.status` is
+ * `paid_but_unfulfillable` (the hold expired before confirmation arrived)
+ * or `reconciliation_required` (a contradictory succeeded event arrived
+ * after the order had already failed/cancelled, and the stock was no
+ * longer available). Neither state resolves itself: see
+ * docs/PAYMENTS.md's Reconciliation section — an admin has to notice and
+ * act (fulfil manually if stock frees up, or refund from the order detail
+ * page).
+ *
+ * Fans out to every recipient rather than a single claim: entityId is
+ * `${orderId}:${adminUserId}` so each admin gets their own idempotent
+ * outbox row instead of only the first-claimed recipient ever being
+ * notified — see the EmailOutbox model's doc comment in schema.prisma.
+ * `support` is deliberately excluded: this alert asks someone to act
+ * (fulfil or refund), and only `admin`/`super_admin` can do either
+ * (`lib/orders/refund.ts`'s role check) — support already sees these
+ * orders via the read-only dashboard attention metrics.
+ *
+ * The outcome itself is never passed in and never stored: the dispatcher
+ * re-derives it from the order's live status at send time (see
+ * `renderReconciliationAlert` in lib/email/dispatcher.ts), consistent with
+ * every other enqueue* function here only recording the *fact* that a
+ * notification is owed, never the content.
+ */
+export async function enqueueReconciliationAlertEmail(tx: Tx, orderId: string): Promise<void> {
+  const recipients = await tx.adminUser.findMany({
+    where: { role: { in: ["admin", "super_admin"] }, isActive: true },
+    select: { id: true, email: true },
+  });
+  if (recipients.length === 0) return;
+
+  await tx.emailOutbox.createMany({
+    data: recipients.map((admin) => ({
+      type: "reconciliation_alert" as const,
+      entityType: "order",
+      entityId: `${orderId}:${admin.id}`,
+      recipientEmail: admin.email,
+    })),
+    skipDuplicates: true,
+  });
+}

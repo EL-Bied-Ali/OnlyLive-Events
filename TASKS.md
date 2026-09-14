@@ -346,6 +346,23 @@ running this migration — not a concern for the app's current state.
   cross-category/concurrent enforcement, converted/expired reservation
   semantics, exact-bound decreases and rejected unsafe decreases.
 
+## Completed (reconciliation admin alert)
+
+- `lib/email/notifications.ts::sendReconciliationAlertEmail` fires as soon
+  as an order becomes `paid_but_unfulfillable` or `reconciliation_required`
+  (webhook route, right after the transaction commits) — money was
+  captured but no ticket was issued, and this no longer depends on an
+  admin happening to check the dashboard's attention metrics.
+- Every active `admin`/`super_admin` is notified independently
+  (`support`/`scanner` are excluded — they can't act on a refund); each
+  gets its own idempotent `email_logs` claim (`entityId =
+  "${orderId}:${adminUserId}"`), so a redelivered webhook event can't
+  double-alert, and a genuinely new admin still gets notified even after
+  others already have been for the same order.
+- Resolution itself (fulfil manually or refund) remains a manual admin
+  action from the order detail page — only detection/notification is
+  automatic now (see docs/PAYMENTS.md's Open decisions).
+
 ## In progress
 
 - None.
@@ -366,12 +383,9 @@ running this migration — not a concern for the app's current state.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
    requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
 5. Paginate the orders CSV export beyond its current most-recent-20,000 cap.
-6. Add an automatic trigger/alert path for
-   `paid_but_unfulfillable`/`reconciliation_required` orders rather than
-   relying only on dashboard attention metrics.
-7. Stage Vercel WAF rate-limit rules in log mode before production, observe
+6. Stage Vercel WAF rate-limit rules in log mode before production, observe
    real traffic, then tune/enforce without replacing account-level limiting.
-8. Before production rollout, smoke-test admin login/logout, catalogue
+7. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
 9. Before ChariPay go-live: a customer who registered before phone became
    required (PR #18) has `phone: null` and cannot pay — ChariPay's adapter

@@ -6,8 +6,14 @@ import { signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
 import { ConsoleEmailProvider } from "@/lib/email/fakeProvider";
 import { POST as webhookPost } from "@/app/api/payments/webhook/fake/route";
 import { initiateRefund } from "@/lib/orders/refund";
-import { enqueueOrderConfirmationEmail, enqueuePaymentFailedEmail, enqueueRefundConfirmationEmail } from "@/lib/email/notifications";
+import {
+  enqueueOrderConfirmationEmail,
+  enqueuePaymentFailedEmail,
+  enqueueRefundConfirmationEmail,
+  enqueueReconciliationAlertEmail,
+} from "@/lib/email/notifications";
 import { dispatchPendingEmails } from "@/lib/email/dispatcher";
+import { createHold } from "@/lib/inventory";
 import { createOrderAwaitingPayment } from "../helpers/fixtures";
 
 function buildWebhookRequest(payload: unknown) {
@@ -438,5 +444,153 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     }
     const summary = await dispatchPendingEmails();
     expect(summary).toMatchObject({ claimed: 0, sent: 0, retried: 0, permanentlyFailed: 0, skipped: 0 });
+  });
+});
+
+describe("reconciliation alert — enqueue fan-out and delivery", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // These run against the same shared, non-isolated onlylive_test database
+  // as every other test in this suite (no per-test transaction rollback),
+  // so other tests' admin/super_admin rows remain active and will also be
+  // enqueued for any order — assertions below check membership for the
+  // recipients THIS test controls, never an exact total set/count, except
+  // where scoped to one specific email address this test itself created.
+  it("enqueues admin and super_admin when an order becomes paid_but_unfulfillable, and never support/scanner", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await prisma.reservation.update({ where: { id: fixture.reservationId }, data: { status: "expired" } });
+
+    function createRecon(role: "super_admin" | "admin" | "support" | "scanner") {
+      return prisma.adminUser.create({
+        data: {
+          email: `recon-${role}-${crypto.randomUUID()}@test.onlylive.ma`,
+          passwordHash: "not-used-in-tests",
+          name: `Recon ${role}`,
+          role,
+        },
+      });
+    }
+    const [superAdmin, admin, support, scanner] = await Promise.all([
+      createRecon("super_admin"),
+      createRecon("admin"),
+      createRecon("support"),
+      createRecon("scanner"),
+    ]);
+
+    const response = await postWebhook(fixture, "payment.succeeded");
+    expect(response.status).toBe(200);
+
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
+    expect(order.status).toBe("paid_but_unfulfillable");
+
+    const rows = await prisma.emailOutbox.findMany({
+      where: { type: "reconciliation_alert", entityType: "order", entityId: { startsWith: `${order.id}:` } },
+    });
+    const notifiedRecipients = rows.map((row) => row.recipientEmail);
+    expect(notifiedRecipients).toContain(superAdmin.email);
+    expect(notifiedRecipients).toContain(admin.email);
+    expect(notifiedRecipients).not.toContain(support.email);
+    expect(notifiedRecipients).not.toContain(scanner.email);
+
+    const superAdminRow = rows.find((row) => row.recipientEmail === superAdmin.email)!;
+    expect(superAdminRow.entityId).toBe(`${order.id}:${superAdmin.id}`);
+    expect(superAdminRow.status).toBe("pending");
+
+    await dispatchPendingEmails();
+    const sentRow = await prisma.emailOutbox.findUniqueOrThrow({ where: { id: superAdminRow.id } });
+    expect(sentRow.status).toBe("sent");
+    expect(sentRow.providerMessageId).toBeTruthy();
+  });
+
+  it("enqueues a specific active admin exactly once for reconciliation_required, even redelivered, and skips an inactive admin", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await postWebhook(fixture, "payment.failed");
+
+    const otherBuyer = await prisma.user.create({
+      data: { email: `other-${crypto.randomUUID()}@test.onlylive.ma`, passwordHash: "x", name: "Other buyer" },
+    });
+    await createHold({
+      ticketCategoryId: fixture.category.id,
+      salesPhaseId: fixture.phase.id,
+      userId: otherBuyer.id,
+      quantity: 1,
+    });
+
+    const [activeAdmin, inactiveAdmin] = await Promise.all([
+      prisma.adminUser.create({
+        data: {
+          email: `recon-active-${crypto.randomUUID()}@test.onlylive.ma`,
+          passwordHash: "not-used-in-tests",
+          name: "Active Admin",
+          role: "admin",
+        },
+      }),
+      prisma.adminUser.create({
+        data: {
+          email: `recon-inactive-${crypto.randomUUID()}@test.onlylive.ma`,
+          passwordHash: "not-used-in-tests",
+          name: "Inactive Admin",
+          role: "admin",
+          isActive: false,
+        },
+      }),
+    ]);
+
+    const first = await postWebhook(fixture, "payment.succeeded");
+    expect(first.status).toBe(200);
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
+    expect(order.status).toBe("reconciliation_required");
+
+    // A second event for the same already-settled order resolves to
+    // "already_handled" (see confirmOrderPayment), which never re-enqueues —
+    // must not create a second row for this specific admin.
+    const second = await postWebhook(fixture, "payment.succeeded");
+    expect(second.status).toBe(200);
+
+    const rowsForActiveAdmin = await prisma.emailOutbox.findMany({
+      where: { type: "reconciliation_alert", entityType: "order", recipientEmail: activeAdmin.email },
+    });
+    expect(rowsForActiveAdmin).toHaveLength(1);
+    expect(rowsForActiveAdmin[0]!.entityId).toBe(`${order.id}:${activeAdmin.id}`);
+
+    const rowsForInactiveAdmin = await prisma.emailOutbox.findMany({
+      where: { type: "reconciliation_alert", entityType: "order", recipientEmail: inactiveAdmin.email },
+    });
+    expect(rowsForInactiveAdmin).toHaveLength(0);
+  });
+
+  it("is a silent no-op for an unknown order id rather than throwing, and enqueues nothing", async () => {
+    const unknownId = crypto.randomUUID();
+    await expect(prisma.$transaction((tx) => enqueueReconciliationAlertEmail(tx, unknownId))).resolves.toBeUndefined();
+
+    const rows = await prisma.emailOutbox.findMany({ where: { entityId: { startsWith: `${unknownId}:` } } });
+    expect(rows).toHaveLength(0);
+  });
+
+  it("a stale alert (order already resolved by the time the dispatcher runs) is never sent", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await prisma.reservation.update({ where: { id: fixture.reservationId }, data: { status: "expired" } });
+    await postWebhook(fixture, "payment.succeeded");
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
+    expect(order.status).toBe("paid_but_unfulfillable");
+
+    // An admin resolves it (e.g. manually refunds) before the dispatcher
+    // gets to the already-enqueued alert row.
+    await prisma.order.update({ where: { id: fixture.order.id }, data: { status: "refunded" } });
+
+    const sendSpy = vi.spyOn(ConsoleEmailProvider.prototype, "send");
+    await dispatchPendingEmails();
+    expect(sendSpy).not.toHaveBeenCalled();
+
+    const rows = await prisma.emailOutbox.findMany({
+      where: { type: "reconciliation_alert", entityType: "order", entityId: { startsWith: `${order.id}:` } },
+    });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(row.status).toBe("failed");
+      expect(row.lastErrorCode).toBe("entity_state_no_longer_valid");
+    }
   });
 });
