@@ -1,11 +1,13 @@
 import Link from "next/link";
 import { requireAdminForPage } from "@/lib/auth/admin";
+import { getAdminCsrfTokenForPage } from "@/lib/auth/adminCsrf";
 import { AdminLogoutButton } from "./AdminLogoutButton";
 
 export const dynamic = "force-dynamic";
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const admin = await requireAdminForPage();
+  const csrfToken = await getAdminCsrfTokenForPage();
 
   return (
     <div className="admin-shell">
@@ -24,7 +26,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <div className="admin-account">
           <span>{admin.name}</span>
           <small>{admin.role.replace("_", " ")}</small>
-          <AdminLogoutButton />
+          <AdminLogoutButton csrfToken={csrfToken} />
         </div>
       </aside>
       <div className="admin-main">{children}</div>
