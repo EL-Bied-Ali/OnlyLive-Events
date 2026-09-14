@@ -38,6 +38,24 @@ describe("FakeProvider", () => {
     expect(parsed.type).toBe("payment.succeeded");
   });
 
+  it("rejects a valid digest with one extra hex nibble instead of letting Buffer.from truncate it", async () => {
+    const provider = new FakeProvider();
+    const payload = JSON.stringify({
+      eventId: "evt_odd_nibble",
+      providerPaymentId: "fake_odd_nibble",
+      type: "payment.succeeded",
+      amountCents: 1000,
+    });
+    const exact = signFakeWebhookPayload(payload);
+    expect(exact).toHaveLength(64);
+
+    const parsed = await provider.parseWebhook({
+      rawBody: payload,
+      headers: { "x-onlylive-fake-signature": `${exact}a` },
+    });
+    expect(parsed.signatureValid).toBe(false);
+  });
+
   it("rejects a tampered payload / wrong signature", async () => {
     const provider = new FakeProvider();
     const payload = JSON.stringify({
@@ -46,14 +64,11 @@ describe("FakeProvider", () => {
       type: "payment.succeeded",
       amountCents: 1000,
     });
-    // Signed for a different payload than the one actually sent.
     const wrongSignature = signFakeWebhookPayload(payload + "tampered");
-
     const parsed = await provider.parseWebhook({
       rawBody: payload,
       headers: { "x-onlylive-fake-signature": wrongSignature },
     });
-
     expect(parsed.signatureValid).toBe(false);
   });
 
@@ -65,7 +80,6 @@ describe("FakeProvider", () => {
       type: "payment.succeeded",
       amountCents: 1000,
     });
-
     const parsed = await provider.parseWebhook({ rawBody: payload, headers: {} });
     expect(parsed.signatureValid).toBe(false);
   });
