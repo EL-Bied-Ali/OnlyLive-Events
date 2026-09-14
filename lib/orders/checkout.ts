@@ -160,6 +160,7 @@ async function claimAndInitializeProvider(
         customerEmail: user.email,
         returnUrl: `${baseUrl}/orders/${order.id}`,
         webhookUrl: `${baseUrl}/api/payments/webhook/${provider.name}`,
+        expiresAt: order.expiresAt ?? undefined,
       });
 
       const updated = await prisma.payment.update({
