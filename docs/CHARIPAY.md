@@ -85,7 +85,10 @@ current integration needs `payment.succeeded`, `payment.failed`,
 Payment and refund events must carry an explicit MAD currency and a parseable
 provider amount before any financial mutation. Refund events additionally must
 match the stored Refund amount and resolved Payment, plus any external/provider
-identifiers supplied by ChariPay. A valid signature by itself is never enough.
+identifiers supplied by ChariPay. Those refund facts are re-checked again under
+the Refund/Payment row locks inside the finalizer transaction, so a concurrent
+reconciliation update cannot invalidate a pre-check and then be overwritten. A
+valid signature by itself is never enough.
 
 ### Exact JSON payload gate
 

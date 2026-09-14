@@ -943,7 +943,7 @@
   },
   {
     "id": "charipay-webhook-financial-integrity",
-    "scenario": "Signed ChariPay payment/refund events are rejected before financial mutation when amount, currency, payment reference, provider payment id or provider refund id conflicts with stored state",
+    "scenario": "Signed ChariPay payment/refund events are rejected before financial mutation when amount, currency, payment reference, provider payment id or provider refund id conflicts with stored state; refund evidence is rechecked under row locks inside the finalizer transaction",
     "category": "payments",
     "implemented": true,
     "status": "pass",

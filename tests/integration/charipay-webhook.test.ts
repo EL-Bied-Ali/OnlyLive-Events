@@ -185,6 +185,32 @@ describe("ChariPay webhook route", () => {
     await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "paid" });
   });
 
+  it("accepts a signed refund webhook when optional provider ids are absent", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    expect((await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents),
+      "payment.succeeded",
+    ))).status).toBe(200);
+
+    const admin = await createAdmin();
+    vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({ providerRefundId: null, state: "processing" });
+    const initiated = await initiateRefund({
+      paymentId: fixture.payment.id,
+      amountCents: fixture.payment.amountCents,
+      reason: "Optional provider ids",
+      actorId: admin.id,
+    });
+
+    const response = await chariWebhookPost(signedRequest({
+      refundReference: initiated.refundId,
+      refundAmount: fixture.payment.amountCents / 100,
+      currency: fixture.payment.currency,
+    }, "refund.succeeded"));
+    expect(response.status).toBe(200);
+    await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "succeeded" });
+  });
+
   it("applies a signed refund.succeeded exactly once without double-releasing inventory", async () => {
     const fixture = await createChariPendingOrder({ quantity: 1, priceCents: 10_000 });
     enableChariPay();

@@ -175,7 +175,8 @@ cannot generate tickets or mutate payment/order settlement state.
 Refund webhooks already apply the same fail-closed integrity checks before any
 financial mutation: exact Refund amount, explicit MAD currency, ownership of
 the resolved Payment, and provider/external identifiers whenever the event
-contains them. The exact ChariPay sandbox JSON shape still must be captured and
+contains them. The same evidence is revalidated under Refund/Payment row locks
+inside the finalizer transaction before status, ticket or inventory mutation. The exact ChariPay sandbox JSON shape still must be captured and
 pinned before production; fields not guaranteed by public documentation are
 never invented or defaulted into trusted financial facts.
 

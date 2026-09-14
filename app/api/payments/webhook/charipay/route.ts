@@ -4,7 +4,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getPaymentProvider } from "@/lib/payments";
 import { confirmOrderPayment, failOrderPayment } from "@/lib/orders/fulfillment";
-import { finalizeRefundFailure, finalizeRefundSuccess } from "@/lib/orders/refund";
+import {
+  finalizeRefundFailure,
+  finalizeRefundSuccess,
+  type RefundProviderEvidence,
+} from "@/lib/orders/refund";
 import { sendOrderConfirmationEmail, sendPaymentFailedEmail } from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
 
@@ -88,7 +92,7 @@ export async function POST(request: NextRequest) {
         || payment.currency !== "MAD"
         || (event.currency !== undefined && event.currency !== payment.currency)
         || (event.paymentExternalId !== undefined && event.paymentExternalId !== payment.id)
-        || (event.providerPaymentId !== undefined && payment.providerPaymentId !== event.providerPaymentId)
+        || (event.providerPaymentId !== "" && payment.providerPaymentId !== event.providerPaymentId)
         || (event.providerRefundId !== undefined
           && refund.providerRefundId !== null
           && refund.providerRefundId !== event.providerRefundId);
@@ -119,7 +123,7 @@ export async function POST(request: NextRequest) {
         || payment.currency !== "MAD"
         || (event.currency !== undefined && event.currency !== payment.currency)
         || (event.paymentExternalId !== undefined && event.paymentExternalId !== payment.id)
-        || (event.providerPaymentId !== undefined && payment.providerPaymentId !== event.providerPaymentId);
+        || (event.providerPaymentId !== "" && payment.providerPaymentId !== event.providerPaymentId);
       if (mismatch) {
         await auditIntegrityMismatch("payment.amount_mismatch", payment.id, {
           expectedAmountCents: payment.amountCents,
@@ -131,6 +135,15 @@ export async function POST(request: NextRequest) {
         return NextResponse.json({ error: "AMOUNT_MISMATCH" }, { status: 409 });
       }
     }
+
+    const refundEvidence: RefundProviderEvidence | undefined = isRefundEvent ? {
+      provider: provider.name,
+      amountCents: event.amountCents,
+      currency: event.currency,
+      paymentExternalId: event.paymentExternalId,
+      providerPaymentId: event.providerPaymentId || undefined,
+      providerRefundId: event.providerRefundId,
+    } : undefined;
 
     const paymentId = payment.id;
     const result: WebhookResult = await prisma.$transaction(async (tx) => {
@@ -201,10 +214,10 @@ export async function POST(request: NextRequest) {
     if (result.kind === "event_collision") return NextResponse.json({ error: "EVENT_COLLISION" }, { status: 409 });
 
     if (result.outcome === "refund.succeeded" && result.refundId && result.paymentEventId) {
-      await finalizeRefundSuccess(result.refundId, result.providerRefundId);
+      await finalizeRefundSuccess(result.refundId, result.providerRefundId, refundEvidence);
       await prisma.paymentEvent.update({ where: { id: result.paymentEventId }, data: { processedAt: new Date() } });
     } else if (result.outcome === "refund.failed" && result.refundId && result.paymentEventId) {
-      await finalizeRefundFailure(result.refundId, result.providerRefundId);
+      await finalizeRefundFailure(result.refundId, result.providerRefundId, refundEvidence);
       await prisma.paymentEvent.update({ where: { id: result.paymentEventId }, data: { processedAt: new Date() } });
     } else if (result.outcome === "paid" && result.orderId) {
       await sendOrderConfirmationEmail(result.orderId);

@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
 import { ChariPayProvider } from "@/lib/payments/charipayProvider";
 import { POST as fakeWebhookPost } from "@/app/api/payments/webhook/fake/route";
-import { initiateRefund, reconcileProcessingRefunds } from "@/lib/orders/refund";
+import { finalizeRefundSuccess, initiateRefund, reconcileProcessingRefunds } from "@/lib/orders/refund";
 import { createOrderAwaitingPayment } from "../helpers/fixtures";
 
 function fakeWebhookRequest(payload: unknown) {
@@ -196,6 +196,34 @@ describe("ChariPay asynchronous refund reconciliation", () => {
       status: "processing",
       providerRefundId: "rf_pending",
     });
+  });
+
+  it("rechecks provider refund evidence inside the finalizer transaction", async () => {
+    const fixture = await createPaidOrderForChariPay({ priceCents: 10_000 });
+    const admin = await createAdmin();
+    enableChariPay();
+    vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({ providerRefundId: "rf_expected", state: "processing" });
+    const initiated = await initiateRefund({
+      paymentId: fixture.payment.id,
+      amountCents: fixture.payment.amountCents,
+      reason: "Atomic evidence guard",
+      actorId: admin.id,
+    });
+
+    await expect(finalizeRefundSuccess(initiated.refundId, "rf_conflicting", {
+      provider: "charipay",
+      amountCents: fixture.payment.amountCents,
+      currency: fixture.payment.currency,
+      paymentExternalId: fixture.payment.id,
+      providerPaymentId: fixture.payment.providerPaymentId!,
+      providerRefundId: "rf_conflicting",
+    })).rejects.toMatchObject({ code: "REFUND_INTEGRITY_MISMATCH", status: 409 });
+
+    await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({
+      status: "processing",
+      providerRefundId: "rf_expected",
+    });
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "paid" });
   });
 
   it("refuses to refund a payment through a different configured provider", async () => {

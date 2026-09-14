@@ -30,6 +30,34 @@ interface PreparedRefund {
   reason: string;
 }
 
+export interface RefundProviderEvidence {
+  provider: string;
+  amountCents: number;
+  currency: string;
+  paymentExternalId?: string;
+  providerPaymentId?: string;
+  providerRefundId?: string;
+}
+
+function assertRefundProviderEvidence(
+  refund: { amount_cents: number; provider_refund_id: string | null },
+  payment: { id: string; provider: string; provider_payment_id: string | null; currency: string },
+  evidence?: RefundProviderEvidence,
+): void {
+  if (!evidence) return;
+  const mismatch = evidence.provider !== payment.provider
+    || evidence.amountCents !== refund.amount_cents
+    || evidence.currency !== payment.currency
+    || (evidence.paymentExternalId !== undefined && evidence.paymentExternalId !== payment.id)
+    || (evidence.providerPaymentId !== undefined && evidence.providerPaymentId !== payment.provider_payment_id)
+    || (evidence.providerRefundId !== undefined
+      && refund.provider_refund_id !== null
+      && evidence.providerRefundId !== refund.provider_refund_id);
+  if (mismatch) {
+    throw new ApiError(409, "REFUND_INTEGRITY_MISMATCH", "Provider refund evidence conflicts with stored payment/refund state");
+  }
+}
+
 async function prepareRefund(input: InitiateRefundInput, expectedProvider: string): Promise<PreparedRefund> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<
@@ -115,6 +143,7 @@ async function prepareRefund(input: InitiateRefundInput, expectedProvider: strin
 export async function finalizeRefundSuccess(
   refundId: string,
   providerRefundId?: string | null,
+  evidence?: RefundProviderEvidence,
 ): Promise<{ state: "succeeded"; paymentStatus: "refunded" | "partially_refunded"; orderStatus: OrderStatus; changed: boolean }> {
   const outcome = await prisma.$transaction(async (tx): Promise<{
     changed: boolean;
@@ -131,10 +160,11 @@ export async function finalizeRefundSuccess(
     if (!refund) throw new ApiError(404, "REFUND_NOT_FOUND", "Refund not found");
 
     const paymentRows = await tx.$queryRaw<
-      { id: string; order_id: string; amount_cents: number; status: string }[]
-    >`SELECT id, order_id, amount_cents, status FROM payments WHERE id = ${refund.payment_id} FOR UPDATE`;
+      { id: string; order_id: string; provider: string; provider_payment_id: string | null; amount_cents: number; currency: string; status: string }[]
+    >`SELECT id, order_id, provider, provider_payment_id, amount_cents, currency, status FROM payments WHERE id = ${refund.payment_id} FOR UPDATE`;
     const payment = paymentRows[0];
     if (!payment) throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+    assertRefundProviderEvidence(refund, payment, evidence);
     const orderRows = await tx.$queryRaw<{ id: string; status: OrderStatus }[]>`
       SELECT id, status FROM orders WHERE id = ${payment.order_id} FOR UPDATE
     `;
@@ -167,9 +197,10 @@ export async function finalizeRefundSuccess(
       throw new ApiError(409, "REFUND_STATE_CONFLICT", `Cannot apply confirmed refund to order status "${order.status}"`);
     }
 
+    const resolvedProviderRefundId = evidence?.providerRefundId ?? providerRefundId ?? refund.provider_refund_id;
     await tx.refund.update({
       where: { id: refund.id },
-      data: { status: "succeeded", providerRefundId: providerRefundId ?? refund.provider_refund_id },
+      data: { status: "succeeded", providerRefundId: resolvedProviderRefundId },
     });
     await tx.payment.update({ where: { id: payment.id }, data: { status: paymentStatus } });
     await tx.order.update({ where: { id: order.id }, data: { status: orderStatus } });
@@ -208,7 +239,7 @@ export async function finalizeRefundSuccess(
           orderId: order.id,
           amountCents: refund.amount_cents,
           orderStatus,
-          providerRefundId: providerRefundId ?? refund.provider_refund_id,
+          providerRefundId: resolvedProviderRefundId,
         },
       },
     });
@@ -221,18 +252,29 @@ export async function finalizeRefundSuccess(
   return { state: "succeeded", ...outcome };
 }
 
-export async function finalizeRefundFailure(refundId: string, providerRefundId?: string | null): Promise<{ changed: boolean }> {
+export async function finalizeRefundFailure(
+  refundId: string,
+  providerRefundId?: string | null,
+  evidence?: RefundProviderEvidence,
+): Promise<{ changed: boolean }> {
   return prisma.$transaction(async (tx) => {
-    const rows = await tx.$queryRaw<{ id: string; status: string; provider_refund_id: string | null }[]>`
-      SELECT id, status, provider_refund_id FROM refunds WHERE id = ${refundId} FOR UPDATE
+    const rows = await tx.$queryRaw<{ id: string; payment_id: string; amount_cents: number; status: string; provider_refund_id: string | null }[]>`
+      SELECT id, payment_id, amount_cents, status, provider_refund_id FROM refunds WHERE id = ${refundId} FOR UPDATE
     `;
     const refund = rows[0];
     if (!refund) throw new ApiError(404, "REFUND_NOT_FOUND", "Refund not found");
+    const paymentRows = await tx.$queryRaw<
+      { id: string; provider: string; provider_payment_id: string | null; currency: string }[]
+    >`SELECT id, provider, provider_payment_id, currency FROM payments WHERE id = ${refund.payment_id} FOR UPDATE`;
+    const payment = paymentRows[0];
+    if (!payment) throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+    assertRefundProviderEvidence(refund, payment, evidence);
     if (refund.status === "succeeded" || refund.status === "failed") return { changed: false };
 
+    const resolvedProviderRefundId = evidence?.providerRefundId ?? providerRefundId ?? refund.provider_refund_id;
     await tx.refund.update({
       where: { id: refund.id },
-      data: { status: "failed", providerRefundId: providerRefundId ?? refund.provider_refund_id },
+      data: { status: "failed", providerRefundId: resolvedProviderRefundId },
     });
     await tx.auditLog.create({
       data: {
@@ -240,7 +282,7 @@ export async function finalizeRefundFailure(refundId: string, providerRefundId?:
         action: "refund.failed",
         entityType: "refund",
         entityId: refund.id,
-        metadata: { providerRefundId: providerRefundId ?? refund.provider_refund_id },
+        metadata: { providerRefundId: resolvedProviderRefundId },
       },
     });
     return { changed: true };
