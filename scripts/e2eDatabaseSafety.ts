@@ -31,6 +31,11 @@ function databaseName(url: URL): string {
   return decodeURIComponent(url.pathname.replace(/^\//, ""));
 }
 
+function isLoopbackHost(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === "localhost" || normalized === "127.0.0.1" || normalized === "::1" || normalized === "[::1]";
+}
+
 export function assertSafeE2eDatabase(input: {
   e2eDatabaseUrl: string | undefined;
   developmentDatabaseUrl?: string;
@@ -42,6 +47,12 @@ export function assertSafeE2eDatabase(input: {
 
   if (!e2eName) {
     throw new Error("Refusing destructive e2e reset: E2E_DATABASE_URL must name a database.");
+  }
+
+  if (!isLoopbackHost(e2e.hostname)) {
+    throw new Error(
+      `Refusing destructive e2e reset: E2E_DATABASE_URL must target localhost/loopback, not "${e2e.hostname}".`,
+    );
   }
 
   if (!/(^|[_-])e2e($|[_-])/i.test(e2eName)) {
