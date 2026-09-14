@@ -173,6 +173,42 @@ describe("admin catalogue integrity", () => {
     });
   });
 
+  it("keeps converted reservations in the lower-bound calculation", async () => {
+    const { event, category, phase } = await createTestCategory(20);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-user-cap-converted")]);
+    const hold = await createHold({
+      ticketCategoryId: category.id,
+      salesPhaseId: phase.id,
+      userId: customer.id,
+      quantity: 3,
+    });
+    await prisma.reservation.update({ where: { id: hold.reservationId }, data: { status: "converted" } });
+
+    await expect(updateEvent(eventUpdateInput(event, { maxTicketsPerUser: 2 }), actor.id)).rejects.toMatchObject({
+      code: "PURCHASE_LIMIT_BELOW_COMMITTED",
+      status: 409,
+    });
+  });
+
+  it("ignores expired active reservations when lowering the per-user event cap", async () => {
+    const { event, category, phase } = await createTestCategory(20);
+    const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-user-cap-expired")]);
+    const hold = await createHold({
+      ticketCategoryId: category.id,
+      salesPhaseId: phase.id,
+      userId: customer.id,
+      quantity: 3,
+    });
+    await prisma.reservation.update({
+      where: { id: hold.reservationId },
+      data: { expiresAt: new Date(Date.now() - 1000) },
+    });
+
+    await expect(updateEvent(eventUpdateInput(event, { maxTicketsPerUser: 1 }), actor.id)).resolves.toMatchObject({
+      maxTicketsPerUser: 1,
+    });
+  });
+
   it("allows lowering the per-user event cap to the largest committed quantity and audits the change", async () => {
     const { event, category, phase } = await createTestCategory(20);
     const [actor, customer] = await Promise.all([createActor(), createTestUser("catalog-user-cap-exact")]);
