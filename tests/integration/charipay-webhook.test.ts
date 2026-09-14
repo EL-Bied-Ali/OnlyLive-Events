@@ -96,6 +96,17 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.paymentEvent.count({ where: { paymentId: fixture.payment.id } })).toBe(0);
   });
 
+  it("acknowledges a signed synthetic ChariPay test without mutating financial state", async () => {
+    enableChariPay();
+    const response = await chariWebhookPost(signedRequest(
+      { Test: true },
+      "payment.succeeded",
+      `test-${crypto.randomUUID()}`,
+    ));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, test: true });
+  });
+
   it("fails closed on a correctly signed but incomplete payload", async () => {
     const fixture = await createChariPendingOrder();
     enableChariPay();
@@ -130,6 +141,21 @@ describe("ChariPay webhook route", () => {
     expect(collision.status).toBe(409);
     await expect(collision.json()).resolves.toMatchObject({ error: "EVENT_COLLISION" });
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(2);
+  });
+
+  it("reconciles a payment webhook by externalId when sessionId is absent", async () => {
+    const fixture = await createChariPendingOrder({ quantity: 1, priceCents: 8_500 });
+    enableChariPay();
+    const response = await chariWebhookPost(signedRequest({
+      externalId: fixture.payment.id,
+      amount: fixture.payment.amountCents / 100,
+      currency: fixture.payment.currency,
+      metadata: { onlylivePaymentId: fixture.payment.id },
+    }, "payment.succeeded"));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, outcome: "paid" });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
   });
 
   it("rejects a validly signed payment amount mismatch", async () => {
@@ -171,7 +197,6 @@ describe("ChariPay webhook route", () => {
     for (const type of ["refund.succeeded", "refund.failed"] as const) {
       for (const { payload, expectedStatus } of [
         { payload: { ...base, refundAmount: base.refundAmount + 1 }, expectedStatus: 409 },
-        // Unsupported currency is rejected even earlier by the fail-closed parser.
         { payload: { ...base, currency: "EUR" }, expectedStatus: 400 },
         { payload: { ...base, externalId: crypto.randomUUID() }, expectedStatus: 409 },
         { payload: { ...base, sessionId: "ps_wrong" }, expectedStatus: 409 },
@@ -183,6 +208,24 @@ describe("ChariPay webhook route", () => {
       }
     }
     await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "paid" });
+  });
+
+  it("captures and acknowledges an authentic provider refund that has no local Refund row", async () => {
+    enableChariPay();
+    const unknownReference = crypto.randomUUID();
+    const eventId = crypto.randomUUID();
+    const response = await chariWebhookPost(signedRequest({
+      refundReference: unknownReference,
+      refundId: `rf_${crypto.randomUUID()}`,
+      refundAmount: 10,
+      currency: "MAD",
+    }, "refund.succeeded", eventId));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
+    expect(await prisma.auditLog.count({
+      where: { action: "refund.provider_unknown", entityId: unknownReference },
+    })).toBe(1);
   });
 
   it("accepts a signed refund webhook when optional provider ids are absent", async () => {
