@@ -2,14 +2,17 @@ import { NextRequest, NextResponse } from "next/server";
 import { sweepExpiredHolds } from "@/lib/inventory";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 import { pruneRateLimitBuckets } from "@/lib/rateLimit";
+import { reconcileProcessingRefunds } from "@/lib/orders/refund";
 
 export const runtime = "nodejs";
 
 /**
  * Invoked by a scheduled trigger (Vercel Cron or an external cron hitting
- * this route) roughly every minute. Purely for UI-freshness of displayed
- * availability — correctness never depends on this running; see
- * lib/inventory.ts's lazy release inside createHold.
+ * this route) roughly every minute. Hold correctness never depends on this
+ * running because createHold also lazily expires reservations. Refund
+ * reconciliation uses it as a webhook-loss fallback: provider callbacks are
+ * still the normal low-latency path, while old processing refunds are polled
+ * in a bounded batch so money state cannot remain unknown indefinitely.
  */
 export async function POST(request: NextRequest) {
   try {
@@ -19,8 +22,16 @@ export async function POST(request: NextRequest) {
       throw new ApiError(401, "UNAUTHENTICATED", "Invalid internal secret");
     }
 
-    const [holds, rateLimits] = await Promise.all([sweepExpiredHolds(), pruneRateLimitBuckets()]);
-    return NextResponse.json({ ...holds, rateLimitBucketsDeleted: rateLimits.deleted });
+    const [holds, rateLimits, refunds] = await Promise.all([
+      sweepExpiredHolds(),
+      pruneRateLimitBuckets(),
+      reconcileProcessingRefunds(),
+    ]);
+    return NextResponse.json({
+      ...holds,
+      rateLimitBucketsDeleted: rateLimits.deleted,
+      refunds,
+    });
   } catch (error) {
     return apiErrorResponse(error);
   }
