@@ -3,6 +3,9 @@ import { z } from "zod";
 const MOROCCO_TIME_ZONE = "Africa/Casablanca";
 const LOCAL_DATE_TIME = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/;
 
+export const DEFAULT_MAX_TICKETS_PER_USER = 10;
+export const MAX_CONFIGURABLE_TICKETS_PER_USER = 1000;
+
 const moroccoFormatter = new Intl.DateTimeFormat("en-CA", {
   timeZone: MOROCCO_TIME_ZONE,
   year: "numeric",
@@ -124,6 +127,7 @@ export const eventMutationSchema = z
     doorsOpenAt: optionalLocalDateTimeSchema,
     salesOpenAt: localDateTimeSchema,
     salesCloseAt: localDateTimeSchema,
+    maxTicketsPerUser: integer(1, MAX_CONFIGURABLE_TICKETS_PER_USER),
     status: z.enum(["draft", "published", "on_sale", "sold_out", "closed", "cancelled"]),
     coverImageUrl: z.preprocess(
       (value) => (typeof value === "string" && value.trim() === "" ? undefined : value),

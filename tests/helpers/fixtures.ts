@@ -56,6 +56,7 @@ interface CategoryOverrides {
   eventStatus?: "draft" | "published" | "on_sale" | "sold_out" | "closed" | "cancelled";
   salesOpenAt?: Date;
   salesCloseAt?: Date;
+  maxTicketsPerUser?: number;
   categoryIsActive?: boolean;
   phaseIsActive?: boolean;
   phaseStartsAt?: Date;
@@ -66,8 +67,8 @@ interface CategoryOverrides {
 /**
  * Like createTestCategory, but with every eligibility-relevant field
  * overridable — for testing the sales-eligibility gate in
- * lib/inventory.ts::createHold (event status/window, category active,
- * phase active/window/quantity-limit).
+ * lib/inventory.ts::createHold (event status/window/purchase limit,
+ * category active, phase active/window/quantity-limit).
  */
 export async function createTestCategoryWithOverrides(overrides: CategoryOverrides = {}) {
   const venue = await prisma.venue.create({
@@ -83,6 +84,7 @@ export async function createTestCategoryWithOverrides(overrides: CategoryOverrid
       startsAt: new Date(Date.now() + 30 * 86_400_000),
       salesOpenAt: overrides.salesOpenAt ?? new Date(Date.now() - 86_400_000),
       salesCloseAt: overrides.salesCloseAt ?? new Date(Date.now() + 30 * 86_400_000),
+      maxTicketsPerUser: overrides.maxTicketsPerUser,
       status: overrides.eventStatus ?? "on_sale",
     },
   });

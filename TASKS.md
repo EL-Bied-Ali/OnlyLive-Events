@@ -66,9 +66,9 @@ against the actual code (none dismissed) and fixed:
    entirely if unset. See docs/SECURITY.md for bootstrap/rotation.
 8. **Sales eligibility** — `createHold` now atomically enforces event
    status/window, category active, phase active/window/quantity-limit,
-   and a per-user/event purchase cap (`MAX_TICKETS_PER_USER_PER_EVENT`,
-   via a `pg_advisory_xact_lock` so it holds across categories) — none
-   of it from a pre-transaction read.
+   and an event-configured per-user purchase cap. A user/event advisory
+   lock makes that cap atomic across categories; no eligibility decision
+   is trusted from a pre-transaction read.
 9. **Reproducible install/build** — `postinstall: prisma generate`
    added; `prisma.config.ts` no longer requires `DATABASE_URL` for
    `prisma generate`.
@@ -212,6 +212,24 @@ dismissed without evidence) and fixed:
 - Verified on the final code path: typecheck, lint, migrations, all Vitest
   tests, all 17 Playwright tests and the production build pass.
 
+## Completed (per-event purchase limits — PR #11)
+
+- `Event.maxTicketsPerUser` replaces the old global cap. Existing events
+  migrate to the previous default of 10, while admins can configure 1–1000
+  tickets per customer/event; PostgreSQL enforces the same range with a
+  CHECK constraint.
+- `createHold` reads the event-specific cap inside the existing catalogue
+  lock and user/event advisory lock, so separate holds or categories cannot
+  race past the configured total.
+- Admin event create/edit forms expose the setting. Lowering a cap takes the
+  exclusive catalogue lock and is refused below the largest quantity already
+  committed by any customer (converted reservations + active unexpired
+  holds); expired active rows do not artificially block a safe decrease.
+- Event creation/updates audit the configured cap and cap changes.
+- Regression coverage verifies independent limits on separate events,
+  cross-category/concurrent enforcement, converted/expired reservation
+  semantics, exact-bound decreases and rejected unsafe decreases.
+
 ## In progress
 
 - None.
@@ -228,15 +246,13 @@ dismissed without evidence) and fixed:
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
    requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
-5. Make `MAX_TICKETS_PER_USER_PER_EVENT` per-event-configurable if OnlyLive
-   needs different caps for different shows.
-6. Paginate the orders CSV export beyond its current most-recent-20,000 cap.
-7. Add an automatic trigger/alert path for
+5. Paginate the orders CSV export beyond its current most-recent-20,000 cap.
+6. Add an automatic trigger/alert path for
    `paid_but_unfulfillable`/`reconciliation_required` orders rather than
    relying only on dashboard attention metrics.
-8. Stage Vercel WAF rate-limit rules in log mode before production, observe
+7. Stage Vercel WAF rate-limit rules in log mode before production, observe
    real traffic, then tune/enforce without replacing account-level limiting.
-9. Before production rollout, smoke-test admin login/logout, catalogue
+8. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
 
 ## Blocked

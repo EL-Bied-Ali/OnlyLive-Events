@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { prisma } from "@/lib/db";
-import { createHold, MAX_TICKETS_PER_USER_PER_EVENT } from "@/lib/inventory";
+import { createHold } from "@/lib/inventory";
 import { createTestCategoryWithOverrides, createTestUser } from "../helpers/fixtures";
+
+const DEFAULT_TEST_PURCHASE_LIMIT = 10;
 
 async function attemptHold(category: { id: string }, phase: { id: string }, userId: string, quantity = 1) {
   return createHold({ ticketCategoryId: category.id, salesPhaseId: phase.id, userId, quantity });
@@ -70,8 +72,8 @@ describe("hold creation — sales eligibility gate", () => {
 
   it("enforces the sales phase's quantity limit even under concurrent buyers", async () => {
     const { category, phase } = await createTestCategoryWithOverrides({
-      totalQuantity: 100, // category has plenty of stock —
-      phaseQuantityLimit: 3, // but this phase itself is capped at 3
+      totalQuantity: 100,
+      phaseQuantityLimit: 3,
     });
     const buyers = await Promise.all(Array.from({ length: 5 }, (_, i) => createTestUser(`phase-limit-${i}`)));
 
@@ -86,23 +88,21 @@ describe("hold creation — sales eligibility gate", () => {
       }
     }
 
-    // Category-level inventory must reflect exactly the phase-capped
-    // amount, not the full category stock.
     const inventory = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: category.id } });
     expect(inventory.reservedQuantity).toBe(3);
   });
 
   it("enforces a per-user/event purchase limit that can't be bypassed by splitting into several separate holds", async () => {
-    const { category, phase } = await createTestCategoryWithOverrides({ totalQuantity: 1000 });
+    const { category, phase } = await createTestCategoryWithOverrides({
+      totalQuantity: 1000,
+      maxTicketsPerUser: DEFAULT_TEST_PURCHASE_LIMIT,
+    });
     const user = await createTestUser("limit-bypass");
 
-    // Buy up to the limit across several separate one-at-a-time holds.
-    for (let i = 0; i < MAX_TICKETS_PER_USER_PER_EVENT; i++) {
+    for (let i = 0; i < DEFAULT_TEST_PURCHASE_LIMIT; i++) {
       await attemptHold(category, phase, user.id, 1);
     }
 
-    // One more hold, even for a single ticket, must be refused —
-    // splitting into small requests must not bypass the cap.
     await expect(attemptHold(category, phase, user.id, 1)).rejects.toMatchObject({
       code: "PURCHASE_LIMIT_EXCEEDED",
     });
@@ -111,42 +111,51 @@ describe("hold creation — sales eligibility gate", () => {
       where: { userId: user.id, ticketCategoryId: category.id, status: "active" },
       _sum: { quantity: true },
     });
-    expect(total._sum.quantity).toBe(MAX_TICKETS_PER_USER_PER_EVENT);
+    expect(total._sum.quantity).toBe(DEFAULT_TEST_PURCHASE_LIMIT);
+  });
+
+  it("uses each event's configured purchase limit independently", async () => {
+    const low = await createTestCategoryWithOverrides({ totalQuantity: 100, maxTicketsPerUser: 2 });
+    const high = await createTestCategoryWithOverrides({ totalQuantity: 100, maxTicketsPerUser: 4 });
+    const user = await createTestUser("per-event-limits");
+
+    await attemptHold(low.category, low.phase, user.id, 2);
+    await expect(attemptHold(low.category, low.phase, user.id, 1)).rejects.toMatchObject({
+      code: "PURCHASE_LIMIT_EXCEEDED",
+    });
+
+    await attemptHold(high.category, high.phase, user.id, 4);
+    await expect(attemptHold(high.category, high.phase, user.id, 1)).rejects.toMatchObject({
+      code: "PURCHASE_LIMIT_EXCEEDED",
+    });
   });
 
   it("an expired-but-unswept hold does not keep consuming the user's purchase allowance", async () => {
-    const { category, phase } = await createTestCategoryWithOverrides({ totalQuantity: 1000 });
+    const { category, phase } = await createTestCategoryWithOverrides({
+      totalQuantity: 1000,
+      maxTicketsPerUser: DEFAULT_TEST_PURCHASE_LIMIT,
+    });
     const user = await createTestUser("expired-limit-exclusion");
 
     const holds = [];
-    for (let i = 0; i < MAX_TICKETS_PER_USER_PER_EVENT; i++) {
+    for (let i = 0; i < DEFAULT_TEST_PURCHASE_LIMIT; i++) {
       holds.push(await attemptHold(category, phase, user.id, 1));
     }
 
-    // At the limit — one more must be refused.
     await expect(attemptHold(category, phase, user.id, 1)).rejects.toMatchObject({
       code: "PURCHASE_LIMIT_EXCEEDED",
     });
 
-    // Expire one hold directly in the database, WITHOUT running the
-    // sweep — status is still 'active', only expires_at is in the past.
     await prisma.reservation.update({
       where: { id: holds[0]!.reservationId },
       data: { expiresAt: new Date(Date.now() - 1000) },
     });
     const stillActiveInDb = await prisma.reservation.findUniqueOrThrow({ where: { id: holds[0]!.reservationId } });
-    expect(stillActiveInDb.status).toBe("active"); // confirms this exercises the lazy-exclusion path, not a sweep
+    expect(stillActiveInDb.status).toBe("active");
 
-    // The purchase-limit check must exclude it even though the sweep
-    // never ran, freeing up exactly one unit of allowance.
     const newHold = await attemptHold(category, phase, user.id, 1);
     expect(newHold.reservationId).toBeTruthy();
 
-    // Inventory correctness: the category-level lock this new hold
-    // acquires lazily releases the now-expired reservation as a side
-    // effect (same as any other createHold call for this category), so
-    // reserved_quantity reflects exactly the genuinely-active
-    // reservations — released exactly once, not double-decremented.
     const expiredReservation = await prisma.reservation.findUniqueOrThrow({
       where: { id: holds[0]!.reservationId },
     });
@@ -155,15 +164,16 @@ describe("hold creation — sales eligibility gate", () => {
     const activeCount = await prisma.reservation.count({
       where: { ticketCategoryId: category.id, userId: user.id, status: "active" },
     });
-    expect(activeCount).toBe(MAX_TICKETS_PER_USER_PER_EVENT);
+    expect(activeCount).toBe(DEFAULT_TEST_PURCHASE_LIMIT);
 
     const inventory = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: category.id } });
-    expect(inventory.reservedQuantity).toBe(MAX_TICKETS_PER_USER_PER_EVENT);
+    expect(inventory.reservedQuantity).toBe(DEFAULT_TEST_PURCHASE_LIMIT);
   });
 
   it("excludes an expired-but-unswept hold from the purchase limit even in a different category, without touching that category's inventory", async () => {
     const { event, category: categoryA, phase: phaseA } = await createTestCategoryWithOverrides({
       totalQuantity: 1000,
+      maxTicketsPerUser: DEFAULT_TEST_PURCHASE_LIMIT,
     });
     const categoryB = await prisma.ticketCategory.create({ data: { eventId: event.id, name: "Category B-expiry" } });
     await prisma.inventory.create({ data: { ticketCategoryId: categoryB.id, totalQuantity: 1000 } });
@@ -178,34 +188,27 @@ describe("hold creation — sales eligibility gate", () => {
 
     const user = await createTestUser("cross-category-expired-limit");
 
-    await attemptHold(categoryA, phaseA, user.id, MAX_TICKETS_PER_USER_PER_EVENT - 1);
-    const holdB = await attemptHold(categoryB, phaseB, user.id, 1); // total now at the limit
+    await attemptHold(categoryA, phaseA, user.id, DEFAULT_TEST_PURCHASE_LIMIT - 1);
+    const holdB = await attemptHold(categoryB, phaseB, user.id, 1);
 
-    // Expire the category B hold directly, without sweeping and without
-    // any further createHold call touching category B at all.
     await prisma.reservation.update({
       where: { id: holdB.reservationId },
       data: { expiresAt: new Date(Date.now() - 1000) },
     });
 
-    // A new hold in category A must succeed: the purchase-limit query
-    // excludes the expired category B hold purely by its WHERE clause,
-    // with no dependency on category B's own lock/lazy-release ever
-    // running.
     const newHold = await attemptHold(categoryA, phaseA, user.id, 1);
     expect(newHold.reservationId).toBeTruthy();
 
-    // Category B's own inventory is untouched by this — its lazy
-    // release only happens when something actually locks category B.
     const stillActiveInDb = await prisma.reservation.findUniqueOrThrow({ where: { id: holdB.reservationId } });
     expect(stillActiveInDb.status).toBe("active");
     const inventoryB = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: categoryB.id } });
-    expect(inventoryB.reservedQuantity).toBe(1); // unchanged — not double-decremented, not touched at all
+    expect(inventoryB.reservedQuantity).toBe(1);
   });
 
   it("enforces the per-user/event purchase limit across different categories of the same event", async () => {
     const { event, category: categoryA, phase: phaseA } = await createTestCategoryWithOverrides({
       totalQuantity: 1000,
+      maxTicketsPerUser: DEFAULT_TEST_PURCHASE_LIMIT,
     });
     const categoryB = await prisma.ticketCategory.create({ data: { eventId: event.id, name: "Category B" } });
     await prisma.inventory.create({ data: { ticketCategoryId: categoryB.id, totalQuantity: 1000 } });
@@ -220,8 +223,8 @@ describe("hold creation — sales eligibility gate", () => {
 
     const user = await createTestUser("cross-category-limit");
 
-    await attemptHold(categoryA, phaseA, user.id, MAX_TICKETS_PER_USER_PER_EVENT - 2);
-    await attemptHold(categoryB, phaseB, user.id, 2); // total now at the limit, across two categories
+    await attemptHold(categoryA, phaseA, user.id, DEFAULT_TEST_PURCHASE_LIMIT - 2);
+    await attemptHold(categoryB, phaseB, user.id, 2);
 
     await expect(attemptHold(categoryA, phaseA, user.id, 1)).rejects.toMatchObject({
       code: "PURCHASE_LIMIT_EXCEEDED",
@@ -231,6 +234,7 @@ describe("hold creation — sales eligibility gate", () => {
   it("rejects concurrent same-user holds across categories that together would exceed the limit", async () => {
     const { event, category: categoryA, phase: phaseA } = await createTestCategoryWithOverrides({
       totalQuantity: 1000,
+      maxTicketsPerUser: DEFAULT_TEST_PURCHASE_LIMIT,
     });
     const categoryB = await prisma.ticketCategory.create({ data: { eventId: event.id, name: "Category B2" } });
     await prisma.inventory.create({ data: { ticketCategoryId: categoryB.id, totalQuantity: 1000 } });
@@ -244,15 +248,11 @@ describe("hold creation — sales eligibility gate", () => {
     });
 
     const user = await createTestUser("cross-category-concurrent-limit");
-    const half = Math.ceil(MAX_TICKETS_PER_USER_PER_EVENT / 2);
+    const half = Math.ceil(DEFAULT_TEST_PURCHASE_LIMIT / 2);
 
-    // Two concurrent requests, different categories, same user+event —
-    // each individually within the limit, but together over it. Only
-    // the advisory lock (not the per-category Inventory lock) can catch
-    // this, since it spans categories.
     const results = await Promise.allSettled([
       attemptHold(categoryA, phaseA, user.id, half),
-      attemptHold(categoryB, phaseB, user.id, MAX_TICKETS_PER_USER_PER_EVENT - half + 1),
+      attemptHold(categoryB, phaseB, user.id, DEFAULT_TEST_PURCHASE_LIMIT - half + 1),
     ]);
 
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);

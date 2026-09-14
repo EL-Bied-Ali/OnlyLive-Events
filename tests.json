@@ -323,6 +323,14 @@
     "testFile": "tests/integration/hold-eligibility.test.ts"
   },
   {
+    "id": "per-event-purchase-limit-enforced",
+    "scenario": "Different events can enforce different per-user purchase limits while split, cross-category and concurrent holds remain serialized against each event's configured cap",
+    "category": "sales-eligibility",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/hold-eligibility.test.ts"
+  },
+  {
     "id": "reconciliation-failed-then-succeeded-fulfillable",
     "scenario": "A payment.succeeded after an already-failed order is fulfilled directly (paid, ticket generated) when inventory is still available",
     "category": "payments",
@@ -502,6 +510,14 @@
   {
     "id": "admin-phase-cap-guard",
     "scenario": "A sales phase cap cannot be lowered below already sold or live-reserved quantities",
+    "category": "admin",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/admin-catalog.test.ts"
+  },
+  {
+    "id": "admin-event-purchase-limit-lower-bound",
+    "scenario": "Admin cannot lower an event's per-user cap below the largest converted or live unexpired quantity already committed to one customer; expired holds are ignored, the exact committed bound is allowed, and the change is audited",
     "category": "admin",
     "implemented": true,
     "status": "pass",

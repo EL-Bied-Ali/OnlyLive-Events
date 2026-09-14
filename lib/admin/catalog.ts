@@ -86,6 +86,7 @@ export async function createEvent(input: EventMutationInput, actorId: string) {
         doorsOpenAt: input.doorsOpenAt ?? null,
         salesOpenAt: input.salesOpenAt,
         salesCloseAt: input.salesCloseAt,
+        maxTicketsPerUser: input.maxTicketsPerUser,
         status: input.status,
         coverImageUrl: input.coverImageUrl ?? null,
         createdById: actorId,
@@ -95,6 +96,7 @@ export async function createEvent(input: EventMutationInput, actorId: string) {
       title: event.title,
       slug: event.slug,
       status: event.status,
+      maxTicketsPerUser: event.maxTicketsPerUser,
     });
     return event;
   });
@@ -117,6 +119,32 @@ export async function updateEvent(input: EventMutationInput & { eventId: string 
     });
     if (slugExists) {
       throw new ApiError(409, "SLUG_ALREADY_USED", "Cette URL d’événement est déjà utilisée");
+    }
+
+    if (input.maxTicketsPerUser < current.maxTicketsPerUser) {
+      // The exclusive event catalogue lock above also blocks createHold's
+      // shared lock, so this maximum cannot increase while we validate the
+      // new cap. Expired active reservations are excluded exactly like the
+      // purchase-time limit check in lib/inventory.ts.
+      const rows = await tx.$queryRaw<{ max_total: bigint }[]>`
+        SELECT COALESCE(MAX(user_total), 0) AS max_total
+        FROM (
+          SELECT SUM(r.quantity)::bigint AS user_total
+          FROM reservations r
+          JOIN ticket_categories tc ON tc.id = r.ticket_category_id
+          WHERE tc.event_id = ${input.eventId}
+            AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= now()))
+          GROUP BY r.user_id
+        ) committed_by_user
+      `;
+      const largestCommittedTotal = Number(rows[0]?.max_total ?? 0);
+      if (input.maxTicketsPerUser < largestCommittedTotal) {
+        throw new ApiError(
+          409,
+          "PURCHASE_LIMIT_BELOW_COMMITTED",
+          `La limite ne peut pas être inférieure aux ${largestCommittedTotal} billets déjà vendus ou réservés par un client`,
+        );
+      }
     }
 
     if (input.status === "cancelled" && current.status !== "cancelled") {
@@ -151,6 +179,7 @@ export async function updateEvent(input: EventMutationInput & { eventId: string 
         doorsOpenAt: input.doorsOpenAt ?? null,
         salesOpenAt: input.salesOpenAt,
         salesCloseAt: input.salesCloseAt,
+        maxTicketsPerUser: input.maxTicketsPerUser,
         status: input.status,
         coverImageUrl: input.coverImageUrl ?? null,
       },
@@ -160,6 +189,8 @@ export async function updateEvent(input: EventMutationInput & { eventId: string 
       status: event.status,
       title: event.title,
       slug: event.slug,
+      previousMaxTicketsPerUser: current.maxTicketsPerUser,
+      maxTicketsPerUser: event.maxTicketsPerUser,
     });
     return event;
   });
