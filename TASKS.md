@@ -240,17 +240,19 @@ payment-id mismatch, event-type mismatch).
   failure is logged and swallowed, never allowed to roll back or block
   the payment/refund it's reporting on.
 
-## Completed (auth rate limiting — current branch, pending review)
+## Completed (auth rate limiting — PR #8)
 
 - `lib/rateLimit.ts`: an atomic Postgres-backed fixed-window counter shared
   by every serverless instance. Rejected counters cap at `limit + 1` and
   responses expose `Retry-After`/rate-limit reset metadata.
 - Authentication uses two independent HMAC-pseudonymized buckets: a
   generous IP ceiling to avoid easy lockout of shared NATs, plus a tighter
-  normalized-account/email ceiling that still stops distributed guessing.
-  No raw IP or email is persisted in `rate_limit_buckets`.
-- Client-IP resolution prefers Vercel's platform header, validates IPv4/
-  IPv6, canonicalizes IPv6, and collapses malformed input to `unknown`.
+  normalized-account/email ceiling that stops distributed guessing. The
+  account bucket records failed credentials only; successful logins do not
+  consume a user's failed-attempt budget.
+- No raw IP or email is persisted in `rate_limit_buckets`; client-IP
+  resolution prefers Vercel's platform header, validates IPv4/IPv6,
+  canonicalizes IPv6, and collapses malformed input to `unknown`.
 - Production startup fails if the HMAC secret is missing/weak or if rate
   limiting is disabled without the explicit isolated-test opt-in.
 - The existing authenticated housekeeping route prunes buckets older than
@@ -259,6 +261,37 @@ payment-id mismatch, event-type mismatch).
 - Limits remain conservative defaults pending real traffic. Platform-edge
   WAF rules must be staged in log mode and tuned before production; the DB
   limiter is defense in depth, not a DDoS shield.
+
+## Completed (CSP + admin/scanner CSRF hardening — PR #9)
+
+- Global browser security headers and CSP are configured in
+  `next.config.ts`, including `object-src 'none'`, `base-uri 'self'`,
+  `form-action 'self'`, `frame-ancestors 'none'`, `nosniff`, referrer and
+  Permissions-Policy controls. The current policy deliberately remains
+  compatible with Next.js static rendering instead of forcing a nonce on
+  every page.
+- `lib/auth/adminCsrf.ts` derives a session-bound HMAC synchronizer token
+  from the opaque admin session token. The raw httpOnly session token never
+  reaches client JavaScript.
+- `/api/admin/login` rejects cross-site/origin-mismatched requests before
+  credential lookup; logout and scanner mutations require both a matching
+  source origin and the session-bound token.
+- Sensitive catalogue/refund Server Actions also require the session-bound
+  token as a hidden form field, in addition to Next.js's built-in
+  Origin/Host validation and the action's own role check. The admin layout
+  provides this automatically to every `AdminMutationForm` so future forms
+  using that shared component inherit the protection.
+- Origin comparison covers scheme + host + port and supports Vercel's
+  documented `x-forwarded-host`/`x-forwarded-proto` shape; a matching unit
+  test protects that deployment assumption. A real preview/custom-domain
+  smoke test remains a pre-production deployment check.
+- Independent review specifically checked token construction,
+  timing-safe comparison, role/session boundaries, CSP/scanner
+  compatibility and the historical Next.js Server Action CSRF advisory.
+  The project uses Next.js 16.3.5, above that advisory's 16.1.7 fix.
+- CI verifies the complete stack: typecheck, lint, migrations,
+  unit/integration tests, isolated-Postgres Playwright flows and production
+  build all pass.
 
 ## In progress
 
@@ -276,28 +309,29 @@ payment-id mismatch, event-type mismatch).
 2. Select a real email provider (Resend/Postmark/SES/...) and implement
    its adapter from official docs; add a background retry for a send
    that failed (currently logged and dropped — no retry mechanism yet).
-3. CSP headers and a CSRF token for custom (non-Auth.js) state-changing
-   admin routes.
-4. Move local Playwright e2e tests off the dev database onto a dedicated
+3. Move local Playwright e2e tests off the dev database onto a dedicated
    ephemeral one. CI already runs them against an isolated ephemeral
    PostgreSQL service.
-5. Decide production managed-Postgres provider and write the backup
+4. Decide production managed-Postgres provider and write the backup
    strategy doc mentioned in CLAUDE.md's Observability section.
-6. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
-    needs OnlyLive's accountant/lawyer and the eventual PSP's
-    requirements; do not draft speculative legal text.
-7. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
-    `lib/inventory.ts`) per-event-configurable if OnlyLive needs
-    different caps for different shows.
-8. Paginate the orders CSV export (currently capped at the most recent
-    20,000 rows with no way to reach older ones).
-9. An automatic (rather than admin-noticed) trigger for
-    `paid_but_unfulfillable`/`reconciliation_required` orders — the
-    refund action to resolve them now exists, but nothing surfaces them
-    beyond the dashboard's attention metrics.
-10. Stage Vercel WAF rate-limit rules in log mode before production, review
-    real traffic, then tune/enforce them without replacing the application
-    account-level limiter.
+5. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
+   needs OnlyLive's accountant/lawyer and the eventual PSP's
+   requirements; do not draft speculative legal text.
+6. Make `MAX_TICKETS_PER_USER_PER_EVENT` (currently a global constant in
+   `lib/inventory.ts`) per-event-configurable if OnlyLive needs
+   different caps for different shows.
+7. Paginate the orders CSV export (currently capped at the most recent
+   20,000 rows with no way to reach older ones).
+8. Add an automatic (rather than admin-noticed) trigger for
+   `paid_but_unfulfillable`/`reconciliation_required` orders — the
+   refund action to resolve them exists, but nothing surfaces them beyond
+   the dashboard's attention metrics.
+9. Stage Vercel WAF rate-limit rules in log mode before production, review
+   real traffic, then tune/enforce them without replacing the application
+   account-level limiter.
+10. Before production rollout, smoke-test admin login/logout, catalogue
+    mutation and scanner validation on the actual Vercel preview/custom
+    domain so forwarded-host/protocol behavior is verified end to end.
 
 ## Blocked
 
@@ -307,5 +341,5 @@ payment-id mismatch, event-type mismatch).
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
 Offline scanning, real payment provider, real email provider, background
-worker infrastructure beyond the sweep endpoint, rate limiting, CSP
-headers, database backup strategy documentation.
+worker infrastructure beyond the sweep endpoint, database backup strategy
+documentation.

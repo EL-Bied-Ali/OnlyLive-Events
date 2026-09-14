@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { verifyPassword } from "@/lib/auth/password";
 import { adminLoginSchema } from "@/lib/validation/admin";
 import { createAdminSession, ADMIN_SESSION_COOKIE } from "@/lib/auth/admin";
+import { assertSameOriginMutation, createAdminCsrfToken } from "@/lib/auth/adminCsrf";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 import { writeAuditLog } from "@/lib/audit";
 import {
@@ -34,6 +35,11 @@ function rateLimitedResponse(result: Awaited<ReturnType<typeof consumeRateLimit>
 
 export async function POST(request: NextRequest) {
   try {
+    // There is no authenticated session yet from which to derive a CSRF
+    // synchronizer token, so login CSRF is prevented with strict source-
+    // origin verification instead.
+    assertSameOriginMutation(request);
+
     const ip = getClientIp(request.headers);
     const ipLimit = await consumeRateLimit(buildRateLimitKey("admin_login_ip", ip), ADMIN_LOGIN_IP_RATE_LIMIT);
     if (!ipLimit.allowed) {
@@ -72,6 +78,7 @@ export async function POST(request: NextRequest) {
       ipAddress: request.headers.get("x-forwarded-for"),
       userAgent: request.headers.get("user-agent"),
     });
+    const csrfToken = createAdminCsrfToken(token);
 
     await prisma.adminUser.update({ where: { id: admin.id }, data: { lastLoginAt: new Date() } });
     await writeAuditLog({
@@ -82,7 +89,10 @@ export async function POST(request: NextRequest) {
       entityId: admin.id,
     });
 
-    const response = NextResponse.json({ admin: { id: admin.id, email: admin.email, role: admin.role } });
+    const response = NextResponse.json({
+      admin: { id: admin.id, email: admin.email, role: admin.role },
+      csrfToken,
+    });
     response.cookies.set(ADMIN_SESSION_COOKIE, token, {
       httpOnly: true,
       secure: process.env.NODE_ENV === "production",

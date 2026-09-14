@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdminRole } from "@/lib/auth/admin";
+import { assertAdminServerActionCsrf } from "@/lib/auth/adminCsrf";
 import { ApiError } from "@/lib/http/errors";
 import { initiateRefund } from "@/lib/orders/refund";
 import { refundMutationSchema } from "@/lib/validation/refund";
@@ -12,8 +13,11 @@ export async function refundPaymentAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    // Refunds move money: admin/super_admin only, never support.
+    // Refunds move money: admin/super_admin only, never support. Keep both
+    // authorization and the session-bound CSRF token check inside the
+    // action because Server Actions are directly invocable POST endpoints.
     const admin = await requireAdminRole(["super_admin", "admin"]);
+    await assertAdminServerActionCsrf(formData);
 
     const parsed = refundMutationSchema.safeParse(Object.fromEntries(formData.entries()));
     if (!parsed.success) {

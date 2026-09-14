@@ -27,9 +27,14 @@ export function ScannerLoginForm() {
         return;
       }
 
-      const data = (await response.json()) as { admin?: { role?: string } };
+      const data = (await response.json()) as { admin?: { role?: string }; csrfToken?: string };
       if (!data.admin?.role || !SCANNER_ROLES.has(data.admin.role)) {
-        await fetch("/api/admin/logout", { method: "POST" });
+        if (data.csrfToken) {
+          await fetch("/api/admin/logout", {
+            method: "POST",
+            headers: { "x-csrf-token": data.csrfToken },
+          });
+        }
         setError("Ce compte n’est pas autorisé à contrôler les billets.");
         return;
       }

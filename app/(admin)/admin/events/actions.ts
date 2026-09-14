@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireAdminRole } from "@/lib/auth/admin";
+import { assertAdminServerActionCsrf } from "@/lib/auth/adminCsrf";
 import { ApiError } from "@/lib/http/errors";
 import {
   createCategory,
@@ -45,8 +46,9 @@ function failure(error: unknown): AdminActionState {
   return { status: "error", message: "Une erreur interne est survenue" };
 }
 
-async function actorId() {
+async function authorizeMutation(formData: FormData) {
   const admin = await requireAdminRole(["super_admin", "admin"]);
+  await assertAdminServerActionCsrf(formData);
   return admin.id;
 }
 
@@ -55,7 +57,7 @@ export async function createVenueAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    const adminId = await actorId();
+    const adminId = await authorizeMutation(formData);
     const parsed = validationError(venueMutationSchema, formValues(formData));
     if (!parsed.success) return { status: "error", message: parsed.message };
     await createVenue(parsed.data, adminId);
@@ -71,7 +73,7 @@ export async function createEventAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    const adminId = await actorId();
+    const adminId = await authorizeMutation(formData);
     const parsed = validationError(eventMutationSchema, formValues(formData));
     if (!parsed.success) return { status: "error", message: parsed.message };
     await createEvent(parsed.data, adminId);
@@ -87,7 +89,7 @@ export async function updateEventAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    const adminId = await actorId();
+    const adminId = await authorizeMutation(formData);
     const parsed = validationError(eventMutationSchema, formValues(formData));
     if (!parsed.success) return { status: "error", message: parsed.message };
     if (!parsed.data.eventId) return { status: "error", message: "Événement manquant" };
@@ -104,7 +106,7 @@ export async function createCategoryAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    const adminId = await actorId();
+    const adminId = await authorizeMutation(formData);
     const parsed = validationError(categoryMutationSchema, formValues(formData));
     if (!parsed.success) return { status: "error", message: parsed.message };
     await createCategory(parsed.data, adminId);
@@ -120,7 +122,7 @@ export async function updateCategoryAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    const adminId = await actorId();
+    const adminId = await authorizeMutation(formData);
     const parsed = validationError(categoryMutationSchema, formValues(formData));
     if (!parsed.success) return { status: "error", message: parsed.message };
     if (!parsed.data.categoryId) return { status: "error", message: "Catégorie manquante" };
@@ -137,7 +139,7 @@ export async function createSalesPhaseAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    const adminId = await actorId();
+    const adminId = await authorizeMutation(formData);
     const parsed = validationError(salesPhaseMutationSchema, formValues(formData));
     if (!parsed.success) return { status: "error", message: parsed.message };
     await createSalesPhase(parsed.data, adminId);
@@ -153,7 +155,7 @@ export async function updateSalesPhaseAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    const adminId = await actorId();
+    const adminId = await authorizeMutation(formData);
     const parsed = validationError(salesPhaseMutationSchema, formValues(formData));
     if (!parsed.success) return { status: "error", message: parsed.message };
     if (!parsed.data.phaseId) return { status: "error", message: "Phase manquante" };

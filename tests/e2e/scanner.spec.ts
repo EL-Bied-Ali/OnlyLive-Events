@@ -6,6 +6,7 @@ import { hashPassword } from "@/lib/auth/password";
 const scannerEmail = `door-scanner-${crypto.randomUUID()}@test.onlylive.ma`;
 const supportEmail = `support-${crypto.randomUUID()}@test.onlylive.ma`;
 const password = "ScannerE2ETestPassword123!";
+const appOrigin = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
 let eventId: string;
 
 test.beforeAll(async () => {
@@ -49,6 +50,16 @@ test("scanner staff can sign in and securely reject an unknown ticket", async ({
   await page.waitForURL("/scanner");
 
   await expect(page.getByText("Événement contrôlé")).toBeVisible();
+
+  // A valid scanner session is still insufficient for a custom mutation:
+  // the session-bound synchronizer token must also be supplied.
+  const missingCsrf = await page.request.post("/api/scanner/scan", {
+    headers: { origin: appOrigin },
+    data: { eventId, validationToken: "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" },
+  });
+  expect(missingCsrf.status()).toBe(403);
+  expect(await missingCsrf.json()).toMatchObject({ error: "CSRF_REJECTED" });
+
   await page.getByText("Saisie manuelle").click();
   await page.getByLabel("Code du billet").fill("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA");
   await page.getByRole("button", { name: "Vérifier" }).click();
@@ -68,11 +79,13 @@ test("scanner staff can sign in and securely reject an unknown ticket", async ({
 
 test("a support account cannot validate tickets", async ({ page }) => {
   const login = await page.request.post("/api/admin/login", {
+    headers: { origin: appOrigin },
     data: { email: supportEmail, password },
   });
   expect(login.status()).toBe(200);
 
   const response = await page.request.post("/api/scanner/scan", {
+    headers: { origin: appOrigin },
     data: { eventId, validationToken: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" },
   });
   expect(response.status()).toBe(403);
