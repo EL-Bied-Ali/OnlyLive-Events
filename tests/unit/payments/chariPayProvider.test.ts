@@ -31,7 +31,7 @@ afterEach(() => {
 });
 
 describe("ChariPayProvider", () => {
-  it("creates a hosted checkout session with MAD major units and stable idempotency/external ids", async () => {
+  it("creates a hosted checkout session with MAD major units, stable ids, HTTPS callbacks and our checkout expiry", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(
         JSON.stringify({
@@ -44,6 +44,7 @@ describe("ChariPayProvider", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
+    const expiresAt = new Date("2026-09-15T10:15:00.000Z");
     const provider = new ChariPayProvider();
     const result = await provider.createPayment({
       paymentId: "payment-local-1",
@@ -56,6 +57,7 @@ describe("ChariPayProvider", () => {
       returnUrl: "https://tickets.onlylive.ma/orders/order-local-1",
       declineUrl: "https://tickets.onlylive.ma/orders/order-local-1",
       notificationUrl: "https://tickets.onlylive.ma/api/payments/webhook/charipay",
+      expiresAt,
     });
 
     expect(result).toEqual({
@@ -77,6 +79,7 @@ describe("ChariPayProvider", () => {
       externalId: "payment-local-1",
       singleUse: true,
       notifyOnFailure: true,
+      expiresAt: expiresAt.toISOString(),
       config: {
         customer: { email: "buyer@example.com" },
         urls: {
@@ -112,6 +115,25 @@ describe("ChariPayProvider", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("refuses non-HTTPS callback URLs before making a network call", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new ChariPayProvider();
+
+    await expect(
+      provider.createPayment({
+        paymentId: "pay-local-http",
+        orderId: "order-local-http",
+        amountCents: 1_000,
+        currency: "MAD",
+        idempotencyKey: "idem-http",
+        customerEmail: "buyer@example.com",
+        returnUrl: "http://localhost:3000/orders/order-local-http",
+      }),
+    ).rejects.toThrow(/must use HTTPS/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("verifies ChariPay HMAC/timestamp on the raw body and reconciles through signed metadata", async () => {
     const rawBody = JSON.stringify({
       amount: 249.9,
@@ -134,6 +156,26 @@ describe("ChariPayProvider", () => {
       currency: "MAD",
       signatureValid: true,
     });
+  });
+
+  it("rejects a body changed after the signature was calculated", async () => {
+    const original = JSON.stringify({
+      metadata: {
+        onlyLivePaymentId: "payment-local-1",
+        onlyLiveAmountCents: 24_990,
+        onlyLiveCurrency: "MAD",
+      },
+    });
+    const tampered = JSON.stringify({
+      metadata: {
+        onlyLivePaymentId: "payment-local-1",
+        onlyLiveAmountCents: 1,
+        onlyLiveCurrency: "MAD",
+      },
+    });
+    const provider = new ChariPayProvider();
+    const event = await provider.parseWebhook({ rawBody: tampered, headers: signedHeaders(original) });
+    expect(event.signatureValid).toBe(false);
   });
 
   it("rejects a correctly HMACed webhook whose timestamp is outside the five-minute replay window", async () => {
@@ -173,7 +215,8 @@ describe("ChariPayProvider", () => {
     });
 
     expect(result).toEqual({ providerRefundId: "refund-local-1", status: "pending" });
-    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api-psp.charipay.ma/v1/refunds");
     expect(JSON.parse(String(init.body))).toMatchObject({
       externalId: "payment-local-1",
       refundReference: "refund-local-1",
@@ -185,6 +228,46 @@ describe("ChariPayProvider", () => {
         onlyLiveAmountCents: 5_025,
         onlyLiveCurrency: "MAD",
       },
+    });
+  });
+
+  it.each([
+    ["PENDING", "pending"],
+    ["SUCCESS", "succeeded"],
+    ["FAILED", "failed"],
+  ] as const)("maps refund status %s to %s", async (providerStatus, expected) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: providerStatus, refundId: "crf_123", refundReference: "refund-local-1" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new ChariPayProvider();
+
+    await expect(provider.getRefundStatus("refund-local-1")).resolves.toEqual({
+      providerRefundId: "crf_123",
+      status: expected,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api-psp.charipay.ma/v1/refunds/refund-local-1",
+      expect.objectContaining({ method: "GET" }),
+    );
+  });
+
+  it("returns not_found for a missing refund reference so the same idempotent request can be safely replayed", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: { code: "OPERATION_NOT_FOUND", message: "not found" } }), {
+        status: 404,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new ChariPayProvider();
+
+    await expect(provider.getRefundStatus("refund-missing")).resolves.toEqual({
+      providerRefundId: "refund-missing",
+      status: "not_found",
     });
   });
 });
