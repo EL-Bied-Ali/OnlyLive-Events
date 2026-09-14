@@ -50,9 +50,23 @@ function requestSourceOrigin(request: NextRequest): string | null {
   }
 }
 
-function targetHost(request: NextRequest): string {
-  const forwarded = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
-  return (forwarded || request.headers.get("host") || request.nextUrl.host).toLowerCase();
+function targetOrigin(request: NextRequest): string {
+  const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
+  const host = forwardedHost || request.headers.get("host") || request.nextUrl.host;
+  const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim().toLowerCase();
+  const protocol = forwardedProto || request.nextUrl.protocol.replace(/:$/, "").toLowerCase();
+
+  if (protocol !== "http" && protocol !== "https") {
+    throw new ApiError(403, "CSRF_REJECTED", "Invalid request target origin");
+  }
+
+  try {
+    // URL canonicalization removes default ports and gives us a full origin
+    // comparison (scheme + host + port), not just a host comparison.
+    return new URL(`${protocol}://${host}`).origin.toLowerCase();
+  } catch {
+    throw new ApiError(403, "CSRF_REJECTED", "Invalid request target origin");
+  }
 }
 
 /**
@@ -70,14 +84,14 @@ export function assertSameOriginMutation(request: NextRequest): void {
     throw new ApiError(403, "CSRF_REJECTED", "Request origin is required");
   }
 
-  let sourceHost: string;
+  let sourceOrigin: string;
   try {
-    sourceHost = new URL(source).host.toLowerCase();
+    sourceOrigin = new URL(source).origin.toLowerCase();
   } catch {
     throw new ApiError(403, "CSRF_REJECTED", "Invalid request origin");
   }
 
-  if (sourceHost !== targetHost(request)) {
+  if (sourceOrigin !== targetOrigin(request)) {
     throw new ApiError(403, "CSRF_REJECTED", "Cross-origin request rejected");
   }
 }
