@@ -792,7 +792,7 @@
     "scenario": "Rate-limit keys are deterministic but never contain the raw IP address or account email",
     "category": "privacy",
     "implemented": true,
-    "status": "pending",
+    "status": "pass",
     "testFile": "tests/integration/rateLimit.test.ts"
   },
   {
@@ -800,7 +800,7 @@
     "scenario": "Platform-owned Vercel IP is preferred; malformed values collapse to unknown and equivalent IPv6 forms canonicalize to one identity",
     "category": "access-control",
     "implemented": true,
-    "status": "pending",
+    "status": "pass",
     "testFile": "tests/integration/rateLimit.test.ts"
   },
   {
@@ -808,7 +808,7 @@
     "scenario": "Rejected buckets cap at limit + 1 and return Retry-After plus reset/remaining metadata",
     "category": "access-control",
     "implemented": true,
-    "status": "pending",
+    "status": "pass",
     "testFile": "tests/integration/rateLimit.test.ts"
   },
   {
@@ -816,7 +816,7 @@
     "scenario": "Production refuses a missing/weak HMAC secret and refuses disabled rate limiting without the explicit isolated-test opt-in",
     "category": "configuration",
     "implemented": true,
-    "status": "pending",
+    "status": "pass",
     "testFile": "tests/unit/rateLimitConfig.test.ts"
   },
   {
@@ -824,7 +824,7 @@
     "scenario": "The authenticated housekeeping path can remove expired rate-limit buckets while retaining recent buckets",
     "category": "privacy",
     "implemented": true,
-    "status": "pending",
+    "status": "pass",
     "testFile": "tests/integration/rateLimit.test.ts"
   },
   {
@@ -832,7 +832,7 @@
     "scenario": "The real Auth.js credentials callback surfaces RATE_LIMITED after the account allowance is exhausted",
     "category": "access-control",
     "implemented": true,
-    "status": "pending",
+    "status": "pass",
     "testFile": "tests/e2e/auth-rate-limiting.spec.ts"
   }
 ]
