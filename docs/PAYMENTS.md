@@ -308,9 +308,12 @@ state unchanged and auditable followed by a successful retry, and
 concurrent refund attempts on the same payment serializing so their
 total never exceeds the paid amount.
 
-A successful refund also triggers `lib/email/notifications.ts::sendRefundConfirmationEmail`,
-after the transaction commits — see docs/ARCHITECTURE.md's transactional
-email section.
+A successful refund also enqueues a refund-confirmation row via
+`lib/email/notifications.ts::enqueueRefundConfirmationEmail`, inside the
+same transaction as the refund's own state change and audit log — see
+docs/ARCHITECTURE.md's transactional email section. The admin-entered
+`reason` is an internal note and is never included in that email's
+customer-facing text.
 
 ## Hold cancellation vs. checkout
 

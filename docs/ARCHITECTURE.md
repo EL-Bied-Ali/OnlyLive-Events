@@ -97,7 +97,9 @@ instrumentation.ts  boot-time config validation (payment provider)
   inventory.ts      the oversell-prevention critical section
   orders/           stateMachine.ts, fulfillment.ts, checkout.ts, refund.ts
   payments/         provider.ts (interface), fakeProvider.ts, index.ts (factory)
-  email/            provider.ts (interface), fakeProvider.ts, index.ts (factory), notifications.ts
+  email/            provider.ts (interface), fakeProvider.ts, index.ts (factory),
+                    notifications.ts (enqueue), dispatcher.ts (claim/send/retry)
+  appUrl.ts         absolute-URL helper shared by email content and elsewhere
   scanner.ts         atomic ticket validation + scan audit records
   tickets.ts        validation token + QR
   audit.ts          writeAuditLog()
@@ -225,29 +227,49 @@ TASKS.md, tests.json
    renders accented names correctly. It is bounded to the most recent
    20,000 orders — there is no pagination UI for the export yet.
 
-## Request/data flow: transactional email
+## Request/data flow: transactional email (durable outbox)
+
+A production-safe outbox/dispatcher foundation — no real email provider is
+integrated yet (see Known scope limitations below).
 
 1. `lib/email/provider.ts` defines the same kind of swappable interface as
-   payments — no real provider is chosen yet, `lib/email/fakeProvider.ts`
-   (`ConsoleEmailProvider`) just logs the message and returns a fake id.
-2. `lib/email/notifications.ts` has one function per email CLAUDE.md
-   requires: `sendOrderConfirmationEmail` (order confirmation + payment
-   confirmation + ticket delivery combined into one message — in this
-   system all three become true at the same instant, so three separate
-   emails would only fragment one event), `sendPaymentFailedEmail`, and
-   `sendRefundConfirmationEmail`.
-3. Each claims idempotency via `EmailLog`'s `UNIQUE(type, entity_type,
-   entity_id)` with the same `INSERT ... ON CONFLICT DO NOTHING RETURNING
-   id` idiom as `PaymentEvent` — a retriggering caller (e.g. the webhook
-   route reached again for an unrelated reason) is a safe no-op.
-4. Triggered after the relevant transaction commits, never inside it: the
-   payment webhook route dispatches based on the fulfillment outcome
-   (`paid` → confirmation, `failed`/`cancelled` → failure notice), and
-   `lib/orders/refund.ts::initiateRefund` dispatches its confirmation
-   after a successful refund. A send failure is logged and swallowed —
-   email delivery must never roll back or block the payment/refund it's
-   reporting on. There is no background retry for a failed send yet (see
-   TASKS.md).
+   payments — `lib/email/fakeProvider.ts` (`ConsoleEmailProvider`) just
+   logs the message and returns a fake id. `SendEmailInput` carries an
+   `idempotencyKey` (mirroring `RefundInput`'s), so a retried send of the
+   same outbox row can never double-send at a real provider's own layer.
+2. `lib/email/notifications.ts::enqueue*` (`enqueueOrderConfirmationEmail`,
+   `enqueuePaymentFailedEmail`, `enqueueRefundConfirmationEmail`) each take
+   a `Prisma.TransactionClient` and insert one `EmailOutbox` row via
+   `createMany({ skipDuplicates: true })`, keyed by the same
+   `UNIQUE(type, entity_type, entity_id)` idempotency pattern `PaymentEvent`
+   uses. Callers enqueue **inside the same transaction as the business
+   fact** — the payment webhook route enqueues right after
+   `tx.payment.update(...)` (based on the fulfillment outcome: `paid` →
+   confirmation, `failed`/`cancelled` → failure notice), and
+   `lib/orders/refund.ts::initiateRefund` enqueues right after its
+   `refund.succeeded` audit log write, all before the transaction commits.
+   This closes the gap in the previous after-commit design: once the
+   business fact is durable, so is the obligation to notify about it — a
+   crash or thrown error between "commit" and "send" can no longer lose
+   the notification silently.
+3. `lib/email/dispatcher.ts::dispatchPendingEmails` runs separately,
+   out-of-band (invoked by `/api/internal/dispatch-emails` on the same
+   `X-Internal-Secret` auth pattern as `sweep-expired-holds`, meant to run
+   on a schedule):
+   - Claims a batch of due rows with `SELECT ... FOR UPDATE SKIP LOCKED`
+     (pending rows whose `nextAttemptAt` has arrived, or `processing` rows
+     whose lease has expired — a crashed worker never finished them) —
+     overlapping/concurrent invocations get disjoint batches, never double-
+     sending the same row.
+   - Re-renders each row's content fresh from current data and re-validates
+     the business state it depends on (e.g. the order must still be `paid`
+     for a confirmation email) before sending — a row whose underlying
+     entity moved on since it was enqueued is marked `failed` with
+     `entity_state_no_longer_valid` rather than sending stale/wrong content.
+   - On a provider failure, retries with bounded exponential backoff plus
+     jitter, up to 8 attempts, before marking the row permanently `failed`.
+   - Never logs a raw recipient address (a truncated SHA-256 hash only) or
+     a full error object (a bounded message only).
 
 ## Rate limiting
 
@@ -362,11 +384,14 @@ historical rather than future.
   multi-device reconciliation is not implemented.
 - **Real payment provider** — no Moroccan PSP is integrated; only the
   `fake` sandbox provider. See docs/PAYMENTS.md.
-- **Real email provider** — order confirmation, payment failure, and
-  refund confirmation emails are all sent, but only through the `console`
-  sandbox provider (logs the message, no real delivery) — no real
-  provider (Resend/Postmark/SES/...) is integrated, and a failed send has
-  no background retry yet.
+- **Real email provider** — the durable outbox/dispatcher foundation is in
+  place (idempotent enqueue in the same transaction as the business fact,
+  batched claiming, lease-timeout reclaim, retry with backoff, business-
+  state re-validation at send time), but sending still only goes through
+  the `console` sandbox provider (logs the message, no real delivery) — no
+  real provider (Resend/Postmark/SES/...) is integrated yet. Adding one is
+  a new `EmailProvider` implementation plus a `getEmailProvider()` case; no
+  change to the outbox/dispatcher is expected.
 - **Rate limiting** — implemented in the application per IP and per
   account/email on registration, admin login, and customer login
   (`lib/rateLimit.ts`). Production WAF rules and final thresholds still

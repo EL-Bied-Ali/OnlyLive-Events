@@ -158,13 +158,60 @@ dismissed without evidence) and fixed:
 - Provider failures are recorded/audited without blocking a later retry.
 - `/admin/orders/[orderId]` exposes payment/refund/ticket history.
 
-## Completed (transactional email)
+## Completed (transactional email — superseded by the durable outbox below)
 
 - Swappable email-provider interface with a console-only sandbox provider.
-- Idempotent order-confirmation, payment-failure and refund-confirmation
-  triggers using `EmailLog` uniqueness.
-- Notifications run after the business transaction commits; email failure
-  never rolls back money/ticket state.
+- Original design: idempotent order-confirmation/payment-failure/refund-
+  confirmation triggers using `EmailLog` uniqueness, sent after the
+  business transaction committed. An independent audit found this could
+  silently lose a notification forever (a crash or a thrown error between
+  commit and send left no record an email was ever owed) — replaced by the
+  durable outbox described next.
+
+## Completed (durable email outbox — branch fix/email-outbox-durable)
+
+A production-safe outbox foundation for transactional email — **not** a
+real email provider integration, which remains selected-provider work in
+`Next` below.
+
+- `EmailOutbox` replaces `EmailLog`: the same `(type, entityType,
+  entityId)` idempotency key, plus `status`
+  (`pending`/`processing`/`sent`/`failed`), `attemptCount`,
+  `nextAttemptAt`, `processingStartedAt` and `lastErrorCode`.
+- The webhook handler and `initiateRefund` now `enqueue*` a row inside the
+  **same** database transaction as the payment/refund state change itself
+  (`app/api/payments/webhook/fake/route.ts`, `lib/orders/refund.ts`) —
+  closing the commit-then-crash gap: once the business fact commits, the
+  obligation to notify is durably recorded with it, never sent from a
+  post-commit code path that could fail to run.
+- `lib/email/dispatcher.ts` — a separate, out-of-band dispatcher
+  (`dispatchPendingEmails`, invoked by the internal
+  `/api/internal/dispatch-emails` endpoint on the same auth pattern as
+  `sweep-expired-holds`, meant to run on a schedule):
+  - Atomically claims a batch with `SELECT ... FOR UPDATE SKIP LOCKED` so
+    overlapping/concurrent invocations never double-send.
+  - Reclaims a row stuck in `processing` past a lease timeout (a crashed
+    worker never finished it) instead of leaving it stuck forever.
+  - Re-validates business state fresh at send time rather than trusting
+    the enqueue-time snapshot — a row is not sent (and marked `failed`
+    with `entity_state_no_longer_valid`) if the order/refund has since
+    moved to a state the enqueued email no longer describes (e.g. a paid
+    order that was fully refunded before its confirmation email went out).
+  - Bounded exponential backoff with jitter on transient provider failure,
+    up to 8 attempts before a row is marked permanently `failed`.
+  - Passes the outbox row's own id as the provider's `idempotencyKey`, so
+    a retried send can never double-send at the provider's own layer once
+    a real provider is integrated.
+  - Never logs a raw recipient address (a truncated SHA-256 hash only) or
+    a full error object (a bounded message only); the refund
+    confirmation email omits the admin-entered internal `reason` text.
+- `lib/appUrl.ts` centralizes absolute-URL construction for email content
+  (ticket links), requiring HTTPS in production except for local-loopback
+  hosts (exempted for the Playwright/CI `next start` run).
+- `isConsoleEmailAllowed()` mirrors the existing fake-payments guard:
+  the console provider is refused in production unless
+  `ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=true` is explicitly set; validated at
+  server boot (`instrumentation.ts`).
 
 ## Completed (auth rate limiting — PR #8)
 
@@ -241,7 +288,10 @@ dismissed without evidence) and fixed:
    reconciliation from that provider's real lifecycle and revisit holding a
    database row lock across the real network refund call.
 2. Select a real email provider (Resend/Postmark/SES/...) and implement its
-   adapter from official docs; add background retry for failed sends.
+   `EmailProvider` adapter from official docs — the durable outbox/dispatcher
+   (batching, retry with backoff, idempotency key) already exist and need no
+   change to accept it; only `lib/email/index.ts`'s `getEmailProvider()`
+   factory gains a new case.
 3. Decide the production managed-Postgres provider and document/test the
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
