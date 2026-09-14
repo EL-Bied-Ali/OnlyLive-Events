@@ -169,15 +169,16 @@ describe("ChariPay webhook route", () => {
       currency: "MAD",
     };
     for (const type of ["refund.succeeded", "refund.failed"] as const) {
-      for (const payload of [
-        { ...base, refundAmount: base.refundAmount + 1 },
-        { ...base, currency: "EUR" },
-        { ...base, externalId: crypto.randomUUID() },
-        { ...base, sessionId: "ps_wrong" },
-        { ...base, refundId: "rf_wrong" },
+      for (const { payload, expectedStatus } of [
+        { payload: { ...base, refundAmount: base.refundAmount + 1 }, expectedStatus: 409 },
+        // Unsupported currency is rejected even earlier by the fail-closed parser.
+        { payload: { ...base, currency: "EUR" }, expectedStatus: 400 },
+        { payload: { ...base, externalId: crypto.randomUUID() }, expectedStatus: 409 },
+        { payload: { ...base, sessionId: "ps_wrong" }, expectedStatus: 409 },
+        { payload: { ...base, refundId: "rf_wrong" }, expectedStatus: 409 },
       ]) {
         const response = await chariWebhookPost(signedRequest(payload, type));
-        expect(response.status).toBe(409);
+        expect(response.status).toBe(expectedStatus);
         await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "processing" });
       }
     }

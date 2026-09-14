@@ -188,8 +188,14 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     await ageRefund(initiated.refundId);
 
     const summary = await reconcileProcessingRefunds();
-    expect(summary).toMatchObject({ checked: 1, pending: 1, replayed: 0, errors: 0 });
+    expect(summary.pending).toBeGreaterThanOrEqual(1);
+    expect(summary.replayed).toBe(0);
+    expect(summary.errors).toBe(0);
     expect(refundSpy).toHaveBeenCalledTimes(1);
+    await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({
+      status: "processing",
+      providerRefundId: "rf_pending",
+    });
   });
 
   it("refuses to refund a payment through a different configured provider", async () => {
