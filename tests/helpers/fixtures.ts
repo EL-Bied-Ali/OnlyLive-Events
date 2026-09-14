@@ -6,6 +6,7 @@ export async function createTestUser(prefix = "user") {
     data: {
       email: `${prefix}-${crypto.randomUUID()}@test.onlylive.ma`,
       passwordHash: "not-used-in-tests",
+      phone: "+212600000000",
       name: `Test ${prefix}`,
     },
   });
