@@ -14,6 +14,7 @@ import {
 
 const CHARIPAY_API_BASE_URL = "https://api-psp.charipay.ma";
 const WEBHOOK_MAX_SKEW_MS = 5 * 60 * 1000;
+const REQUEST_TIMEOUT_MS = 12_000;
 
 function requiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -40,10 +41,10 @@ function validateHostedCheckoutUrl(value: string): string {
   try {
     url = new URL(value);
   } catch {
-    throw new ProviderRequestError("ChariPay returned an invalid checkoutUrl", false);
+    throw new ProviderRequestError("ChariPay returned an invalid checkoutUrl", true);
   }
   if (url.protocol !== "https:" || url.port || url.username || url.password) {
-    throw new ProviderRequestError("ChariPay returned an unsafe checkoutUrl", false);
+    throw new ProviderRequestError("ChariPay returned an unsafe checkoutUrl", true);
   }
   return url.toString();
 }
@@ -60,10 +61,10 @@ function madToCents(value: unknown): number | undefined {
 }
 
 function safeHexEqual(actual: string, expected: string): boolean {
-  if (!/^[0-9a-f]+$/i.test(actual) || !/^[0-9a-f]+$/i.test(expected)) return false;
+  if (!/^[0-9a-f]{64}$/i.test(actual) || !/^[0-9a-f]{64}$/i.test(expected)) return false;
   const a = Buffer.from(actual, "hex");
   const b = Buffer.from(expected, "hex");
-  return a.length === b.length && crypto.timingSafeEqual(a, b);
+  return crypto.timingSafeEqual(a, b);
 }
 
 function verifySignature(rawBody: string, headers: Record<string, string>): boolean {
@@ -110,7 +111,38 @@ interface ChariPayWebhookBody {
 }
 
 function isRetryableOrAmbiguousStatus(status: number): boolean {
-  return status === 408 || status === 429 || status >= 500;
+  return status === 408 || status === 409 || status === 429 || status >= 500;
+}
+
+function parseRetryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const date = Date.parse(value);
+  if (!Number.isFinite(date)) return undefined;
+  return Math.max(0, date - Date.now());
+}
+
+function responseCorrelationId(response: Response): string | undefined {
+  return response.headers.get("x-correlation-id")
+    ?? response.headers.get("correlation-id")
+    ?? response.headers.get("x-request-id")
+    ?? undefined;
+}
+
+async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } catch (error) {
+    if (error instanceof Error && error.name === "AbortError") {
+      throw new ProviderRequestError("ChariPay request timed out", true);
+    }
+    throw new ProviderRequestError("ChariPay request failed before a definitive response", true);
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function readJsonResponse(response: Response): Promise<Record<string, unknown>> {
@@ -121,8 +153,10 @@ async function readJsonResponse(response: Response): Promise<Record<string, unkn
   } catch {
     throw new ProviderRequestError(
       `ChariPay returned non-JSON response (${response.status})`,
-      isRetryableOrAmbiguousStatus(response.status),
+      response.ok || isRetryableOrAmbiguousStatus(response.status),
       response.status,
+      parseRetryAfterMs(response.headers.get("retry-after")),
+      responseCorrelationId(response),
     );
   }
 }
@@ -133,10 +167,13 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
     const error = body.error as { code?: unknown; message?: unknown } | undefined;
     const code = typeof error?.code === "string" ? error.code : `HTTP_${response.status}`;
     const message = typeof error?.message === "string" ? error.message : "ChariPay request failed";
+    const outcomeUnknown = isRetryableOrAmbiguousStatus(response.status) || code === "IDEMPOTENCY_CONFLICT";
     throw new ProviderRequestError(
       `ChariPay ${code}: ${message}`,
-      isRetryableOrAmbiguousStatus(response.status),
+      outcomeUnknown,
       response.status,
+      parseRetryAfterMs(response.headers.get("retry-after")),
+      responseCorrelationId(response),
     );
   }
   return body;
@@ -160,7 +197,7 @@ export class ChariPayProvider implements PaymentProvider {
       throw new Error("ChariPay requires a future checkout expiry");
     }
 
-    const response = await fetch(`${CHARIPAY_API_BASE_URL}/v1/payment-sessions`, {
+    const response = await fetchWithTimeout(`${CHARIPAY_API_BASE_URL}/v1/payment-sessions`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -185,7 +222,13 @@ export class ChariPayProvider implements PaymentProvider {
 
     const body = (await parseApiResponse(response)) as ChariPayPaymentSessionResponse;
     if (typeof body.sessionId !== "string" || typeof body.checkoutUrl !== "string") {
-      throw new ProviderRequestError("ChariPay payment-session response is missing sessionId or checkoutUrl", false, response.status);
+      throw new ProviderRequestError(
+        "ChariPay payment-session response is missing sessionId or checkoutUrl",
+        true,
+        response.status,
+        undefined,
+        responseCorrelationId(response),
+      );
     }
     return {
       providerPaymentId: body.sessionId,
@@ -264,7 +307,7 @@ export class ChariPayProvider implements PaymentProvider {
 
   async refund(input: RefundInput): Promise<RefundResult> {
     if (input.currency !== "MAD") throw new Error(`ChariPay only supports MAD refunds, got ${input.currency}`);
-    const response = await fetch(`${CHARIPAY_API_BASE_URL}/v1/refunds`, {
+    const response = await fetchWithTimeout(`${CHARIPAY_API_BASE_URL}/v1/refunds`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -289,13 +332,21 @@ export class ChariPayProvider implements PaymentProvider {
         : input.idempotencyKey;
     const status = normalizeRefundStatus(body.status);
     if (status === "failed") {
-      throw new ProviderRequestError("ChariPay reports this refund reference as FAILED", false, response.status);
+      throw new ProviderRequestError(
+        "ChariPay reports this refund reference as FAILED",
+        false,
+        response.status,
+        undefined,
+        responseCorrelationId(response),
+      );
     }
+    // A successful HTTP response without a definitive terminal status is kept
+    // processing. The stable refundReference remains reserved for reconciliation.
     return { providerRefundId, state: status === "succeeded" ? "succeeded" : "processing" };
   }
 
   async getRefundStatus(refundReference: string): Promise<RefundStatusResult> {
-    const response = await fetch(`${CHARIPAY_API_BASE_URL}/v1/refunds/${encodeURIComponent(refundReference)}`, {
+    const response = await fetchWithTimeout(`${CHARIPAY_API_BASE_URL}/v1/refunds/${encodeURIComponent(refundReference)}`, {
       method: "GET",
       headers: { "X-CHARI-PAY-API-KEY": requiredEnv("CHARIPAY_API_KEY") },
     });
@@ -305,7 +356,13 @@ export class ChariPayProvider implements PaymentProvider {
     const body = (await parseApiResponse(response)) as ChariPayRefundResponse;
     const status = normalizeRefundStatus(body.status);
     if (!status) {
-      throw new ProviderRequestError("ChariPay refund lookup returned an unknown status", false, response.status);
+      throw new ProviderRequestError(
+        "ChariPay refund lookup returned an unknown status",
+        true,
+        response.status,
+        undefined,
+        responseCorrelationId(response),
+      );
     }
     const providerRefundId = typeof body.refundId === "string"
       ? body.refundId
