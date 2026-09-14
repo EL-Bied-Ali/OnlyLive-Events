@@ -1,21 +1,25 @@
 /**
- * No Moroccan PSP has been selected yet. Every payment interaction goes
- * through this interface so that swapping FakeProvider for a real adapter
- * later (implemented from that PSP's official docs) touches nothing else
- * in the app. See docs/PAYMENTS.md.
+ * Every payment interaction goes through this interface. The fake provider
+ * exercises the same lifecycle as the real hosted-checkout provider, while
+ * provider-specific authentication/signature details stay in the adapter.
  */
 export interface CreatePaymentInput {
+  /** Stable OnlyLive Payment id; real providers may use this as externalId. */
   paymentId: string;
   orderId: string;
   amountCents: number;
   currency: string;
   idempotencyKey: string;
   customerEmail: string;
+  /** Browser return destination. A redirect is never proof of payment. */
   returnUrl: string;
+  /** Provider callback endpoint. Must be public HTTPS for ChariPay. */
+  webhookUrl: string;
 }
 
 export interface CreatePaymentResult {
   redirectUrl: string;
+  /** Provider reference stored on Payment for support/reconciliation. */
   providerPaymentId: string;
 }
 
@@ -28,11 +32,18 @@ export type PaymentWebhookEventType =
   | "payment.succeeded"
   | "payment.failed"
   | "payment.cancelled"
-  | "refund.succeeded";
+  | "refund.succeeded"
+  | "refund.failed";
 
 export interface ParsedWebhookEvent {
+  /** Stable provider event id used for webhook deduplication. */
   externalEventId: string;
+  /** Provider payment/session reference when the event is payment-scoped. */
   providerPaymentId: string;
+  /** Stable OnlyLive Payment id echoed through provider externalId/metadata when available. */
+  paymentExternalId?: string;
+  /** Stable OnlyLive Refund id echoed through refundReference when refund-scoped. */
+  refundExternalId?: string;
   type: PaymentWebhookEventType;
   amountCents: number;
   currency: string;
@@ -42,19 +53,22 @@ export interface ParsedWebhookEvent {
 
 export interface RefundInput {
   providerPaymentId: string;
+  /** Stable OnlyLive Payment id used as ChariPay's payment externalId. */
+  paymentExternalId: string;
   amountCents: number;
   reason: string;
-  /**
-   * Stable per-refund-attempt key (the Refund row's id). FakeProvider
-   * ignores it since its refund() is a synchronous local operation with
-   * no real network call, but a real adapter must pass it through to the
-   * PSP so a retried refund request can never charge/refund twice.
-   */
+  /** Stable refund reference. Replaying it must never create a second refund. */
   idempotencyKey: string;
 }
 
 export interface RefundResult {
-  providerRefundId: string;
+  /** Provider refund id/reference when returned by the provider. */
+  providerRefundId: string | null;
+  /**
+   * `succeeded` is used by the local FakeProvider. Real ChariPay refunds are
+   * asynchronous and return `processing`; final state arrives by webhook.
+   */
+  state: "processing" | "succeeded";
 }
 
 export interface PaymentProvider {
