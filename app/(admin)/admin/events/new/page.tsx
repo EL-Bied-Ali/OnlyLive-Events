@@ -1,7 +1,11 @@
 import { redirect } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireAdminForPage } from "@/lib/auth/admin";
-import { formatMoroccoDateTime } from "@/lib/validation/catalog";
+import {
+  DEFAULT_MAX_TICKETS_PER_USER,
+  MAX_CONFIGURABLE_TICKETS_PER_USER,
+  formatMoroccoDateTime,
+} from "@/lib/validation/catalog";
 import { AdminMutationForm } from "../AdminMutationForm";
 import { createEventAction, createVenueAction } from "../actions";
 
@@ -48,6 +52,7 @@ export default async function NewAdminEventPage() {
               <label className="admin-field-wide">Description<textarea name="description" required minLength={10} maxLength={10_000} rows={5} /></label>
               <label>Lieu<select name="venueId" required>{venues.map((venue) => <option key={venue.id} value={venue.id}>{venue.name} — {venue.city}</option>)}</select></label>
               <label>Statut<select name="status" defaultValue="draft"><option value="draft">Brouillon</option><option value="published">Publié</option><option value="on_sale">En vente</option></select></label>
+              <label>Billets max. par client<input name="maxTicketsPerUser" type="number" required min={1} max={MAX_CONFIGURABLE_TICKETS_PER_USER} defaultValue={DEFAULT_MAX_TICKETS_PER_USER} /></label>
               <label>Début (heure du Maroc)<input name="startsAt" type="datetime-local" required defaultValue={defaultLocalDate(90, 20)} /></label>
               <label>Ouverture des portes<input name="doorsOpenAt" type="datetime-local" defaultValue={defaultLocalDate(90, 18)} /></label>
               <label>Ouverture des ventes<input name="salesOpenAt" type="datetime-local" required defaultValue={defaultLocalDate(0, 10)} /></label>
