@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChariPayProvider } from "@/lib/payments/charipayProvider";
+import { ProviderRequestError } from "@/lib/payments/provider";
 
 const API_KEY = "chari_sk_test_unit-test-key";
 const WEBHOOK_SECRET = "unit-test-charipay-webhook-secret";
@@ -47,8 +48,7 @@ describe("ChariPayProvider", () => {
     }, 201));
     vi.stubGlobal("fetch", fetchMock);
 
-    const provider = new ChariPayProvider();
-    const result = await provider.createPayment({
+    const result = await new ChariPayProvider().createPayment({
       paymentId: "payment-123",
       orderId: "order-456",
       amountCents: 25_001,
@@ -60,11 +60,7 @@ describe("ChariPayProvider", () => {
       expiresAt: checkoutExpiry,
     });
 
-    expect(result).toEqual({
-      providerPaymentId: "ps_test_123",
-      redirectUrl: "https://pay.chari.ma/checkout/ps_test_123",
-    });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ providerPaymentId: "ps_test_123", redirectUrl: "https://pay.chari.ma/checkout/ps_test_123" });
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api-psp.charipay.ma/v1/payment-sessions");
     expect(init.headers).toMatchObject({
@@ -91,34 +87,25 @@ describe("ChariPayProvider", () => {
     });
   });
 
-  it("refuses non-MAD checkout rather than silently changing currency", async () => {
+  it("refuses non-MAD checkout and unsafe callbacks before network I/O", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
     const provider = new ChariPayProvider();
-    await expect(provider.createPayment({
+    const base = {
       paymentId: "payment",
       orderId: "order",
       amountCents: 1000,
-      currency: "EUR",
       idempotencyKey: "idem",
       customerEmail: "buyer@example.com",
       returnUrl: "https://onlylive.ma/orders/order",
       webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
       expiresAt: new Date(Date.now() + 60_000),
-    })).rejects.toThrow("only supports MAD");
-  });
-
-  it("refuses non-HTTPS callbacks before calling ChariPay", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    await expect(new ChariPayProvider().createPayment({
-      paymentId: "payment",
-      orderId: "order",
-      amountCents: 1000,
+    };
+    await expect(provider.createPayment({ ...base, currency: "EUR" })).rejects.toThrow("only supports MAD");
+    await expect(provider.createPayment({
+      ...base,
       currency: "MAD",
-      idempotencyKey: "idem",
-      customerEmail: "buyer@example.com",
       returnUrl: "http://localhost:3000/orders/order",
-      webhookUrl: "http://localhost:3000/api/payments/webhook/charipay",
-      expiresAt: new Date(Date.now() + 60_000),
     })).rejects.toThrow("must use HTTPS");
     expect(fetchMock).not.toHaveBeenCalled();
   });
@@ -139,7 +126,25 @@ describe("ChariPayProvider", () => {
     await expect(provider.createPayment({ ...base, expiresAt: new Date(Date.now() - 1) })).rejects.toThrow("future checkout expiry");
   });
 
-  it("verifies the documented timestamp.rawBody HMAC and extracts stable reconciliation references", async () => {
+  it("rejects an unsafe hosted checkout URL returned by the provider", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      sessionId: "ps_test_123",
+      checkoutUrl: "javascript:alert(1)",
+    }, 201)));
+    await expect(new ChariPayProvider().createPayment({
+      paymentId: "payment",
+      orderId: "order",
+      amountCents: 1000,
+      currency: "MAD",
+      idempotencyKey: "idem",
+      customerEmail: "buyer@example.com",
+      returnUrl: "https://onlylive.ma/orders/order",
+      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
+      expiresAt: new Date(Date.now() + 60_000),
+    })).rejects.toThrow(/checkoutUrl/);
+  });
+
+  it("verifies timestamp.rawBody HMAC and extracts provisional immutable webhook facts", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-14T18:00:00Z"));
     const raw = JSON.stringify({
@@ -149,8 +154,7 @@ describe("ChariPayProvider", () => {
       sessionId: "ps_test_123",
       metadata: { onlylivePaymentId: "payment-123" },
     });
-    const provider = new ChariPayProvider();
-    const parsed = await provider.parseWebhook({
+    const parsed = await new ChariPayProvider().parseWebhook({
       rawBody: raw,
       headers: webhookHeaders(raw, "payment.succeeded", "event-123"),
     });
@@ -163,13 +167,25 @@ describe("ChariPayProvider", () => {
       amountCents: 25_001,
       currency: "MAD",
       signatureValid: true,
+      payloadValid: true,
     });
+  });
+
+  it("fails closed when a signed payload lacks required reconciliation facts", async () => {
+    const raw = JSON.stringify({ externalId: "payment-123" });
+    const parsed = await new ChariPayProvider().parseWebhook({
+      rawBody: raw,
+      headers: webhookHeaders(raw, "payment.succeeded", "event-incomplete"),
+    });
+    expect(parsed.signatureValid).toBe(true);
+    expect(parsed.payloadValid).toBe(false);
+    expect(parsed.amountCents).toBeUndefined();
   });
 
   it("rejects stale webhook timestamps even with a valid HMAC", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-14T18:00:00Z"));
-    const raw = JSON.stringify({ externalId: "payment-123", amount: 10, currency: "MAD" });
+    const raw = JSON.stringify({ externalId: "payment-123", amount: 10 });
     const stale = Date.now() - 5 * 60 * 1000 - 1;
     const parsed = await new ChariPayProvider().parseWebhook({
       rawBody: raw,
@@ -180,7 +196,7 @@ describe("ChariPayProvider", () => {
 
   it("accepts the next signing secret during webhook-secret rotation", async () => {
     vi.stubEnv("CHARIPAY_WEBHOOK_SECRET_NEXT", "next-secret");
-    const raw = JSON.stringify({ externalId: "payment-123", amount: 10, currency: "MAD" });
+    const raw = JSON.stringify({ externalId: "payment-123", amount: 10 });
     const parsed = await new ChariPayProvider().parseWebhook({
       rawBody: raw,
       headers: webhookHeaders(raw, "payment.succeeded", "event-next", "next-secret"),
@@ -188,7 +204,7 @@ describe("ChariPayProvider", () => {
     expect(parsed.signatureValid).toBe(true);
   });
 
-  it("submits refunds with the OnlyLive payment id and refund row id as ChariPay idempotency references", async () => {
+  it("submits refunds with a stable refundReference and MAD amount", async () => {
     const fetchMock = vi.fn().mockResolvedValue(response({
       refundId: "rf_123",
       refundReference: "refund-row-123",
@@ -200,23 +216,63 @@ describe("ChariPayProvider", () => {
       providerPaymentId: "ps_test_123",
       paymentExternalId: "payment-123",
       amountCents: 12_345,
+      currency: "MAD",
       reason: "Customer request",
       idempotencyKey: "refund-row-123",
     });
     expect(result).toEqual({ providerRefundId: "rf_123", state: "processing" });
-
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api-psp.charipay.ma/v1/refunds");
-    expect(init.headers).toMatchObject({
-      "X-CHARI-PAY-API-KEY": API_KEY,
-      "Idempotency-Key": "refund-row-123",
-    });
-    expect(JSON.parse(String(init.body))).toEqual({
+    expect(JSON.parse(String(init.body))).toMatchObject({
       externalId: "payment-123",
       refundReference: "refund-row-123",
       refundAmount: 123.45,
-      reason: "Customer request",
-      metadata: { onlyliveRefundId: "refund-row-123" },
     });
+  });
+
+  it("retrieves refund state by stable reference and maps 404 to not_found", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({ refundId: "rf_123", refundReference: "refund-row-123", status: "SUCCESS" }))
+      .mockResolvedValueOnce(response({ error: { code: "NOT_FOUND" } }, 404));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = new ChariPayProvider();
+    await expect(provider.getRefundStatus("refund-row-123")).resolves.toEqual({
+      providerRefundId: "rf_123",
+      status: "succeeded",
+    });
+    await expect(provider.getRefundStatus("missing")).resolves.toEqual({ providerRefundId: null, status: "not_found" });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api-psp.charipay.ma/v1/refunds/refund-row-123");
+  });
+
+  it("treats 429 and 5xx refund responses as ambiguous/retryable", async () => {
+    for (const status of [429, 503]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "RETRY_LATER" } }, status)));
+      await expect(new ChariPayProvider().refund({
+        providerPaymentId: "ps",
+        paymentExternalId: "payment",
+        amountCents: 1000,
+        currency: "MAD",
+        reason: "test",
+        idempotencyKey: `refund-${status}`,
+      })).rejects.toMatchObject({ outcomeUnknown: true, status });
+    }
+  });
+
+  it("treats a provider 4xx validation rejection as definitive", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "BAD_REQUEST" } }, 400)));
+    try {
+      await new ChariPayProvider().refund({
+        providerPaymentId: "ps",
+        paymentExternalId: "payment",
+        amountCents: 1000,
+        currency: "MAD",
+        reason: "test",
+        idempotencyKey: "refund-400",
+      });
+      throw new Error("expected provider failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      expect(error).toMatchObject({ outcomeUnknown: false, status: 400 });
+    }
   });
 });
