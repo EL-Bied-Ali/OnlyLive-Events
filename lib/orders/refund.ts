@@ -376,130 +376,13 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   return submitPreparedRefund(await prepareRefund(input));
 }
 
-const REFUND_RECONCILIATION_MIN_AGE_MS = 30_000;
-
 /**
- * Reconciles asynchronous/ambiguous refunds without ever creating a new
- * business reference. A missing provider record is replayed with the exact
- * same Refund.id/refundReference, which ChariPay documents as idempotent.
+ * Backward-compatible entry point for callers/tests that still import the
+ * original reconciler name. Delegate to the fair claimed scheduler so every
+ * production and compatibility path gets rotation, SKIP LOCKED worker safety,
+ * provider Retry-After deferral, and stable-reference replay semantics.
  */
-export async function reconcileProcessingRefunds(batchSize = 20): Promise<{
-  checked: number;
-  succeeded: number;
-  failed: number;
-  replayed: number;
-  pending: number;
-  errors: number;
-}> {
-  const cutoff = new Date(Date.now() - REFUND_RECONCILIATION_MIN_AGE_MS);
-  const refunds = await prisma.refund.findMany({
-    where: {
-      status: "processing",
-      createdAt: { lte: cutoff },
-    },
-    include: { payment: true },
-    orderBy: { createdAt: "asc" },
-    take: Math.max(1, Math.min(batchSize, 100)),
-  });
-
-  const stats = { checked: 0, succeeded: 0, failed: 0, replayed: 0, pending: 0, errors: 0 };
-  for (const refund of refunds) {
-    stats.checked += 1;
-    let provider;
-    try {
-      provider = getPaymentProviderByName(refund.payment.provider);
-    } catch {
-      stats.errors += 1;
-      await prisma.auditLog.create({
-        data: {
-          actorType: "system",
-          action: "refund.reconciliation_error",
-          entityType: "refund",
-          entityId: refund.id,
-          metadata: { reason: "unsupported_persisted_provider", provider: refund.payment.provider },
-        },
-      });
-      continue;
-    }
-
-    if (!refund.payment.providerPaymentId) {
-      stats.errors += 1;
-      await prisma.auditLog.create({
-        data: {
-          actorType: "system",
-          action: "refund.reconciliation_error",
-          entityType: "refund",
-          entityId: refund.id,
-          metadata: { reason: "missing_provider_payment_id", provider: provider.name },
-        },
-      });
-      continue;
-    }
-
-    try {
-      const reference = refund.providerRefundId ?? refund.id;
-      const status = await provider.getRefundStatus(reference);
-      if (status.status === "succeeded") {
-        await finalizeRefundSuccess(refund.id, status.providerRefundId ?? refund.providerRefundId);
-        stats.succeeded += 1;
-        continue;
-      }
-      if (status.status === "failed") {
-        await finalizeRefundFailure(refund.id, status.providerRefundId ?? refund.providerRefundId);
-        stats.failed += 1;
-        continue;
-      }
-      if (status.status === "pending") {
-        if (status.providerRefundId && status.providerRefundId !== refund.providerRefundId) {
-          await prisma.refund.updateMany({
-            where: { id: refund.id, status: "processing" },
-            data: { providerRefundId: status.providerRefundId },
-          });
-        }
-        stats.pending += 1;
-        continue;
-      }
-
-      // The lookup found no provider record. Replay the original intent using
-      // the SAME Refund.id/reference; never mint a fresh refundReference.
-      const replay = await provider.refund({
-        providerPaymentId: refund.payment.providerPaymentId,
-        paymentExternalId: refund.payment.id,
-        amountCents: refund.amountCents,
-        currency: refund.payment.currency,
-        reason: refund.reason,
-        idempotencyKey: refund.id,
-      });
-      stats.replayed += 1;
-      if (replay.providerRefundId) {
-        await prisma.refund.updateMany({
-          where: { id: refund.id, status: "processing" },
-          data: { providerRefundId: replay.providerRefundId },
-        });
-      }
-      if (replay.state === "succeeded") {
-        await finalizeRefundSuccess(refund.id, replay.providerRefundId);
-        stats.succeeded += 1;
-      } else {
-        stats.pending += 1;
-      }
-    } catch (error) {
-      stats.errors += 1;
-      await prisma.auditLog.create({
-        data: {
-          actorType: "system",
-          action: "refund.reconciliation_error",
-          entityType: "refund",
-          entityId: refund.id,
-          metadata: {
-            provider: provider.name,
-            providerStatus: error instanceof ProviderRequestError ? error.status : null,
-            retryAfterMs: error instanceof ProviderRequestError ? error.retryAfterMs ?? null : null,
-            correlationId: error instanceof ProviderRequestError ? error.correlationId ?? null : null,
-          },
-        },
-      });
-    }
-  }
-  return stats;
+export async function reconcileProcessingRefunds(batchSize = 20) {
+  const { reconcileProcessingRefundsFair } = await import("@/lib/orders/refundReconciliation");
+  return reconcileProcessingRefundsFair(batchSize);
 }

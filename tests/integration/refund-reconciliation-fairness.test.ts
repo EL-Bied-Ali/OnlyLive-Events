@@ -5,7 +5,7 @@ import { prisma } from "@/lib/db";
 import { signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
 import { ChariPayProvider } from "@/lib/payments/charipayProvider";
 import { POST as fakeWebhookPost } from "@/app/api/payments/webhook/fake/route";
-import { initiateRefund } from "@/lib/orders/refund";
+import { initiateRefund, reconcileProcessingRefunds } from "@/lib/orders/refund";
 import { reconcileProcessingRefundsFair } from "@/lib/orders/refundReconciliation";
 import { createOrderAwaitingPayment } from "../helpers/fixtures";
 
@@ -102,12 +102,12 @@ describe("fair refund reconciliation", () => {
     const second = await createProcessingRefund(1_000);
     const later = await createProcessingRefund(2_000);
 
-    const firstRun = await reconcileProcessingRefundsFair(2);
+    const firstRun = await reconcileProcessingRefunds(2);
     expect(firstRun).toMatchObject({ checked: 2, pending: 2, errors: 0 });
     const firstReferences = statusSpy.mock.calls.slice(0, 2).map(([reference]) => reference);
     expect(new Set(firstReferences)).toEqual(new Set([oldest, second]));
 
-    const secondRun = await reconcileProcessingRefundsFair(1);
+    const secondRun = await reconcileProcessingRefunds(1);
     expect(secondRun).toMatchObject({ checked: 1, pending: 1, errors: 0 });
     expect(statusSpy.mock.calls[2]?.[0]).toBe(later);
   });
