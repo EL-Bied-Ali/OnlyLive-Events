@@ -6,10 +6,10 @@ import {
   type AdminActionState,
 } from "@/lib/admin/actionState";
 import { ADMIN_CSRF_FORM_FIELD } from "@/lib/auth/adminCsrfShared";
+import { useAdminCsrfToken } from "../AdminCsrfContext";
 
 interface AdminMutationFormProps {
   action: (state: AdminActionState, formData: FormData) => Promise<AdminActionState>;
-  csrfToken: string;
   children: React.ReactNode;
   submitLabel: string;
   className?: string;
@@ -17,11 +17,11 @@ interface AdminMutationFormProps {
 
 export function AdminMutationForm({
   action,
-  csrfToken,
   children,
   submitLabel,
   className = "admin-edit-form",
 }: AdminMutationFormProps) {
+  const csrfToken = useAdminCsrfToken();
   const [state, formAction, pending] = useActionState(action, INITIAL_ADMIN_ACTION_STATE);
 
   return (
