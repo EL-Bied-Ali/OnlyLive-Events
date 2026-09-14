@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { classifyCheckoutNavigation } from "@/lib/payments/redirect";
 
 interface CheckoutClientProps {
   reservationId: string;
@@ -51,7 +52,12 @@ export function CheckoutClient({
         setError(data.message ?? "Impossible de démarrer le paiement");
         return;
       }
-      router.push(data.redirectUrl);
+      const navigation = classifyCheckoutNavigation(data.redirectUrl);
+      if (navigation.kind === "external") {
+        window.location.assign(navigation.url);
+        return;
+      }
+      router.push(navigation.url);
     } catch {
       setError("Erreur réseau, réessayez");
     } finally {
