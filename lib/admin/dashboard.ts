@@ -10,7 +10,17 @@ export async function getAdminMetrics() {
     prisma.ticket.count(),
     prisma.ticket.count({ where: { status: "used" } }),
     prisma.order.count({ where: { status: "pending_payment" } }),
-    prisma.order.count({ where: { status: { in: ATTENTION_STATUSES } } }),
+    // Async provider failures must remain visible even after the initiating
+    // admin leaves the page. One order is counted once even if it has both a
+    // reconciliation status and one or more failed refund attempts.
+    prisma.order.count({
+      where: {
+        OR: [
+          { status: { in: ATTENTION_STATUSES } },
+          { payments: { some: { refunds: { some: { status: "failed" } } } } },
+        ],
+      },
+    }),
   ]);
 
   return {
@@ -126,10 +136,14 @@ export async function getOrderForAdmin(orderId: string) {
     const refundedCents = payment.refunds
       .filter((refund) => refund.status === "succeeded")
       .reduce((sum, refund) => sum + refund.amountCents, 0);
+    const committedRefundCents = payment.refunds
+      .filter((refund) => refund.status === "processing" || refund.status === "succeeded")
+      .reduce((sum, refund) => sum + refund.amountCents, 0);
     return {
       ...payment,
       refundedCents,
-      remainingRefundableCents: payment.amountCents - refundedCents,
+      committedRefundCents,
+      remainingRefundableCents: Math.max(0, payment.amountCents - committedRefundCents),
     };
   });
 
