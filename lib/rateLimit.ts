@@ -31,8 +31,9 @@ function keySecret(): string {
 /**
  * Fail fast when a production deployment accidentally disables the only
  * application-level credential-abuse protection or would persist unhashed
- * identities because its HMAC key is missing. Playwright's production-mode
- * webServer must opt in explicitly; real customer deployments must not.
+ * identities because its HMAC key is missing. Any isolated test deployment
+ * that truly needs the bypass must opt in explicitly; customer deployments
+ * must not.
  */
 export function assertRateLimitingConfig(): void {
   if (process.env.NODE_ENV !== "production") return;
