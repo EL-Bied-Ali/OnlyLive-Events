@@ -43,6 +43,11 @@ async function createAdmin() {
 
 async function createProcessingRefund(ageMs: number) {
   const fixture = await createOrderAwaitingPayment({ quantity: 1, priceCents: 5_000 });
+
+  // Fixtures are created for the fake provider. Confirm the order through that
+  // provider first, then switch the persisted payment to ChariPay so the test
+  // exercises only the async-refund reconciler rather than the webhook router.
+  vi.stubEnv("PAYMENT_PROVIDER", "fake");
   const paid = await fakeWebhookPost(fakeWebhookRequest({
     eventId: crypto.randomUUID(),
     providerPaymentId: fixture.payment.providerPaymentId,
@@ -51,6 +56,8 @@ async function createProcessingRefund(ageMs: number) {
     currency: fixture.payment.currency,
   }));
   expect(paid.status).toBe(200);
+  vi.stubEnv("PAYMENT_PROVIDER", "charipay");
+
   await prisma.payment.update({
     where: { id: fixture.payment.id },
     data: { provider: "charipay", providerPaymentId: `ps_${crypto.randomUUID()}` },
