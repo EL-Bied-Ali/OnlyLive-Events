@@ -9,6 +9,7 @@ function configureBase() {
   vi.stubEnv("PAYMENT_PROVIDER", "charipay");
   vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "unit-placeholder-secret");
   vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.onlylive.example/");
+  vi.stubEnv("CRON_SECRET", "unit-cron-secret-1234567890");
 }
 
 afterEach(() => vi.unstubAllEnvs());
@@ -69,6 +70,10 @@ describe("ChariPay configuration guard", () => {
     expect(() => getPaymentProvider()).toThrow(/sandbox verification/);
 
     vi.stubEnv("CHARIPAY_PROVIDER_VERIFIED", "true");
+    vi.stubEnv("CRON_SECRET", "");
+    expect(() => getPaymentProvider()).toThrow(/CRON_SECRET/);
+
+    vi.stubEnv("CRON_SECRET", "unit-cron-secret-1234567890");
     expect(getPaymentProvider().name).toBe("charipay");
   });
 

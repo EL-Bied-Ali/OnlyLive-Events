@@ -168,16 +168,18 @@ describe("ChariPay webhook route", () => {
       refundAmount: fixture.payment.amountCents / 100,
       currency: "MAD",
     };
-    for (const payload of [
-      { ...base, refundAmount: base.refundAmount + 1 },
-      { ...base, currency: "EUR" },
-      { ...base, externalId: crypto.randomUUID() },
-      { ...base, sessionId: "ps_wrong" },
-      { ...base, refundId: "rf_wrong" },
-    ]) {
-      const response = await chariWebhookPost(signedRequest(payload, "refund.succeeded"));
-      expect(response.status).toBe(409);
-      await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "processing" });
+    for (const type of ["refund.succeeded", "refund.failed"] as const) {
+      for (const payload of [
+        { ...base, refundAmount: base.refundAmount + 1 },
+        { ...base, currency: "EUR" },
+        { ...base, externalId: crypto.randomUUID() },
+        { ...base, sessionId: "ps_wrong" },
+        { ...base, refundId: "rf_wrong" },
+      ]) {
+        const response = await chariWebhookPost(signedRequest(payload, type));
+        expect(response.status).toBe(409);
+        await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "processing" });
+      }
     }
     await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "paid" });
   });

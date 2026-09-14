@@ -52,8 +52,17 @@ The fake pay page and fake HTTP endpoints have matching guards.
 
 When `PAYMENT_PROVIDER=charipay`:
 
-- `CHARIPAY_API_KEY` and `CHARIPAY_WEBHOOK_SECRET` are mandatory;
-- production refuses a sandbox/test credential shape;
+- `CHARIPAY_API_KEY`, `CHARIPAY_WEBHOOK_SECRET`, `CHARIPAY_ENV` and
+  `ONLYLIVE_PUBLIC_URL` are mandatory;
+- `CHARIPAY_ENV=sandbox` requires a `chari_sk_test_...` key and is the only
+  allowed mode outside Vercel Production;
+- Vercel Preview/Development therefore cannot use live credentials even though
+  their Next.js build itself runs in production mode;
+- Vercel Production requires `CHARIPAY_ENV=live`, a `chari_sk_live_...` key,
+  `CHARIPAY_PROVIDER_VERIFIED=true`, and a 16+ character `CRON_SECRET` so the
+  automated refund-reconciliation fallback cannot silently be disabled;
+- `ONLYLIVE_PUBLIC_URL` is the canonical HTTPS origin for PSP return/webhook
+  URLs; request Host/Origin data is never used for ChariPay callbacks;
 - `instrumentation.ts` calls `getPaymentProvider()` at boot, so missing/unsafe
   provider configuration fails before customer traffic is served.
 
@@ -163,10 +172,12 @@ Before a payment success/failure transition, the normalized provider amount and
 currency are compared with the `payments` row. Mismatches are audit logged and
 cannot generate tickets or mutate payment/order settlement state.
 
-The same strict validation must be applied to refund webhook amounts once the
-exact ChariPay sandbox refund-event JSON has been captured and pinned. Until
-then the ChariPay parser/route remains draft/fail-closed and is not approved for
-production.
+Refund webhooks already apply the same fail-closed integrity checks before any
+financial mutation: exact Refund amount, explicit MAD currency, ownership of
+the resolved Payment, and provider/external identifiers whenever the event
+contains them. The exact ChariPay sandbox JSON shape still must be captured and
+pinned before production; fields not guaranteed by public documentation are
+never invented or defaulted into trusted financial facts.
 
 ## Late or contradictory payment success
 
@@ -232,10 +243,13 @@ value.
   `processing` and reserved. A timeout may have happened after provider
   acceptance; creating a new random refund would risk returning money twice.
 
-Ambiguous/stuck refunds require reconciliation or a safe resubmission of the
-**same** provider reference. Blind creation of another Refund is prohibited.
-This operational recovery path is tracked in `TASKS.md` while sandbox/live
-provider behavior is validated.
+Ambiguous/stuck refunds are reconciled by the authenticated housekeeping
+sweep using `GET /v1/refunds/{reference}`. `SUCCESS`/`FAILED` finalize the same
+Refund; `PENDING` stays reserved. A provider `404/not_found` replays the original
+intent with the **same Refund.id/refundReference**. Blind creation of another
+Refund reference is prohibited. `vercel.json` schedules this endpoint daily by
+default as a conservative fallback; deployments that need faster recovery may
+tighten that schedule or use the existing authenticated POST.
 
 ### `refund.succeeded`
 
@@ -247,16 +261,21 @@ confirmed refunds. It then:
 - on full refund only, cancels still-valid tickets and releases their sold
   inventory;
 - never cancels/re-sells already-used tickets;
-- writes an audit entry and triggers the idempotent refund-confirmation email
-  after commit.
+- writes an audit entry and triggers the refund-confirmation email after
+  commit. The current `EmailLog` claim prevents duplicate sends, but crash-safe
+  exactly-once delivery is a separate known gap tracked in `TASKS.md` / PR #17.
 
-Duplicate success deliveries do not repeat stock/ticket effects.
+Duplicate success deliveries do not repeat stock/ticket effects. Contradictory
+terminal refund events are not resolved by delivery order alone; a failed refund
+requires explicit provider reconciliation evidence before any later success can
+change local money state.
 
 ### `refund.failed`
 
 The idempotent failure finalizer changes only the Refund row/audit state. Its
 amount stops reserving refundable balance, allowing a later deliberate retry.
-Payment/Order/ticket/inventory state remains unchanged.
+Payment/Order/ticket/inventory state remains unchanged. A later failure can
+never downgrade a Refund that is already `succeeded`.
 
 ## Provider failure classification
 

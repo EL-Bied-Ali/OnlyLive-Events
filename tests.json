@@ -932,5 +932,93 @@
     "status": "pass",
     "testFile": "tests/e2e/purchase-flow.spec.ts",
     "note": "Configuration is enforced in playwright.config.ts and exercised by the full 17-test Playwright CI suite; auth, CSRF, scanner, catalogue, refund, reporting and purchase flows all pass on the isolated runtime."
+  },
+  {
+    "id": "charipay-webhook-invalid-signature",
+    "scenario": "The real ChariPay webhook route rejects an invalid HMAC signature before creating a PaymentEvent or mutating payment/order/ticket state",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-webhook.test.ts"
+  },
+  {
+    "id": "charipay-webhook-financial-integrity",
+    "scenario": "Signed ChariPay payment/refund events are rejected before financial mutation when amount, currency, payment reference, provider payment id or provider refund id conflicts with stored state",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-webhook.test.ts"
+  },
+  {
+    "id": "charipay-webhook-event-id-content-collision",
+    "scenario": "Reusing one Chari-Event-Id with different signed content is rejected as an event collision instead of being treated as a harmless duplicate",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-webhook.test.ts"
+  },
+  {
+    "id": "charipay-refund-reconciliation-success",
+    "scenario": "A processing ChariPay refund is finalized by provider-status reconciliation when GET /v1/refunds/{reference} reports SUCCESS, so a lost webhook cannot strand it indefinitely",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-refunds.test.ts"
+  },
+  {
+    "id": "charipay-refund-not-found-same-reference-replay",
+    "scenario": "A processing refund whose provider lookup returns not_found is replayed with exactly the same Refund.id/refundReference and never a newly minted refund reference",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-refunds.test.ts"
+  },
+  {
+    "id": "charipay-refund-provider-mismatch",
+    "scenario": "A refund cannot be created through a provider different from the provider that captured the payment",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-refunds.test.ts"
+  },
+  {
+    "id": "charipay-preview-live-credentials-forbidden",
+    "scenario": "ChariPay live credentials are forbidden on Vercel Preview/Development and outside Vercel; Vercel Production requires explicit live mode plus the provider-verification gate",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/payments/charipayConfig.test.ts"
+  },
+  {
+    "id": "charipay-canonical-public-origin",
+    "scenario": "ChariPay return/webhook URLs are built from an explicitly configured canonical HTTPS ONLYLIVE_PUBLIC_URL rather than request Host/Origin data",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/payments/charipayConfig.test.ts"
+  },
+  {
+    "id": "charipay-signed-payload-missing-currency-fails-closed",
+    "scenario": "A correctly signed ChariPay financial payload without an explicit currency is not trusted or defaulted to MAD",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/payments/charipayProvider.test.ts"
+  },
+  {
+    "id": "charipay-refund-ambiguous-network-reserved",
+    "scenario": "A ChariPay refund network/timeout ambiguity remains processing and keeps the same amount reserved so a second refund cannot over-refund",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-refunds.test.ts"
+  },
+  {
+    "id": "charipay-reconciliation-cron-config",
+    "scenario": "Vercel schedules the authenticated housekeeping endpoint and live ChariPay production requires a CRON_SECRET for refund-reconciliation fallback",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/vercelCronConfig.test.ts"
   }
 ]

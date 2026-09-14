@@ -179,7 +179,18 @@ describe("ChariPayProvider", () => {
     });
     expect(parsed.signatureValid).toBe(true);
     expect(parsed.payloadValid).toBe(false);
-    expect(parsed.amountCents).toBeUndefined();
+    expect(parsed.amountCents).toBe(0);
+  });
+
+  it("fails closed when a signed financial payload omits currency", async () => {
+    const raw = JSON.stringify({ externalId: "payment-123", amount: 10, sessionId: "ps_test_123" });
+    const parsed = await new ChariPayProvider().parseWebhook({
+      rawBody: raw,
+      headers: webhookHeaders(raw, "payment.succeeded", "event-no-currency"),
+    });
+    expect(parsed.signatureValid).toBe(true);
+    expect(parsed.currency).toBe("");
+    expect(parsed.payloadValid).toBe(false);
   });
 
   it("rejects stale webhook timestamps even with a valid HMAC", async () => {
@@ -245,7 +256,7 @@ describe("ChariPayProvider", () => {
   });
 
   it("treats 429 and 5xx refund responses as ambiguous/retryable", async () => {
-    for (const status of [429, 503]) {
+    for (const status of [408, 429, 503]) {
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "RETRY_LATER" } }, status)));
       await expect(new ChariPayProvider().refund({
         providerPaymentId: "ps",

@@ -165,6 +165,10 @@ dismissed without evidence) and fixed:
   triggers using `EmailLog` uniqueness.
 - Notifications run after the business transaction commits; email failure
   never rolls back money/ticket state.
+- Known durability gap: the current `EmailLog` claim-before-send flow prevents
+  duplicates but is not crash-safe exactly-once delivery. Durable outbox/retry
+  work is tracked separately in PR #17 and must land before production email
+  delivery is considered reliable.
 
 ## Completed (auth rate limiting — PR #8)
 
@@ -243,22 +247,24 @@ dismissed without evidence) and fixed:
   amount against concurrent refunds; tickets/payment/order/inventory change
   only after a provider-confirmed success. Ambiguous network outcomes remain
   reserved instead of risking a duplicate refund.
-- Contract/unit/integration coverage is being added for ChariPay request
-  shapes, webhook signature/timestamp/secret rotation, production config,
-  asynchronous refund settlement and historical FakeProvider compatibility.
+- Contract/unit/integration coverage now exercises ChariPay request shapes,
+  webhook signature/timestamp/secret rotation, real route dedup/collision and
+  financial-integrity checks, sandbox/live deployment guards, asynchronous
+  refund reconciliation/replay and historical FakeProvider compatibility.
 - **Not production-ready yet:** the exact signed webhook JSON mapping still
   needs to be pinned against a real sandbox delivery (the public docs expose
   the signing contract and delivery log, but say the exact signed body is read
-  from an emitted event). PR #13 stays draft until sandbox validation, full CI,
-  docs/manifests and an independent audit are complete.
+  from an emitted event). PR #13 stays draft until sandbox validation and the
+  final independent audit are complete.
 
 ## Next
 
 1. Validate PR #13 against a real ChariPay sandbox account: create the
    webhook endpoint, send a synthetic event, perform one successful/failed
    hosted checkout and one refund, then pin the exact webhook payload fixtures.
-2. Select a real email provider (Resend/Postmark/SES/...) and implement its
-   adapter from official docs; add background retry for failed sends.
+2. Finish/review the durable email-outbox work tracked in PR #17, then select
+   a real provider (Resend/Postmark/SES/...) and implement its adapter from
+   official docs.
 3. Decide the production managed-Postgres provider and document/test the
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —

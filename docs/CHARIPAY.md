@@ -14,12 +14,17 @@ contract first.
 
 - API base URL is the same in sandbox and production:
   `https://api-psp.charipay.ma`.
-- The API key selects the environment: sandbox keys use the documented test
-  prefix; production uses the live prefix.
-- `PAYMENT_PROVIDER=charipay` requires `CHARIPAY_API_KEY` and
-  `CHARIPAY_WEBHOOK_SECRET`. `instrumentation.ts` calls
-  `getPaymentProvider()` at startup, so an invalid production configuration
-  fails closed before serving customer traffic.
+- ChariPay itself selects the provider environment from the API-key prefix:
+  sandbox uses `chari_sk_test_...`, production uses `chari_sk_live_...`.
+- OnlyLive additionally requires explicit `CHARIPAY_ENV=sandbox|live` as a
+  deployment safety assertion; it must agree with the key prefix.
+- Vercel Preview/Development and non-Vercel runtimes permit sandbox only.
+  Vercel Production requires live mode, `CHARIPAY_PROVIDER_VERIFIED=true`, and
+  a 16+ character `CRON_SECRET` for the automated reconciliation fallback.
+- `PAYMENT_PROVIDER=charipay` also requires `CHARIPAY_WEBHOOK_SECRET` and a
+  canonical `ONLYLIVE_PUBLIC_URL`. `instrumentation.ts` calls
+  `getPaymentProvider()` at startup, so unsafe configuration fails closed
+  before customer traffic is served.
 - Sandbox and production webhook endpoints/secrets are separate.
 - Never commit or log API keys or webhook signing secrets.
 
@@ -49,9 +54,11 @@ not use that default: the provider session expires with the checkout hold, which
 reduces late-payment/unfulfillable-order risk. The existing late-payment
 reconciliation path remains defense in depth.
 
-All declared callback URLs must be public HTTPS on the default port. Local
-sandbox testing therefore needs a deliberate public HTTPS preview/tunnel; the
-adapter rejects HTTP/explicit-port callbacks before sending the request.
+All declared callback URLs must be public HTTPS on the default port. OnlyLive
+builds ChariPay return/notification URLs exclusively from `ONLYLIVE_PUBLIC_URL`
+— never from `request.url`, Host or Origin headers. Local sandbox testing
+therefore needs a deliberate public HTTPS preview/tunnel; invalid origins are
+rejected before sending the request.
 
 ## Webhook verification and idempotency
 
@@ -75,8 +82,10 @@ Only subscribe the production endpoint to event types OnlyLive handles. The
 current integration needs `payment.succeeded`, `payment.failed`,
 `refund.succeeded`, and `refund.failed`.
 
-Payment events still pass the existing OnlyLive amount/currency check before
-any ticket/order transition. A valid signature by itself is never enough.
+Payment and refund events must carry an explicit MAD currency and a parseable
+provider amount before any financial mutation. Refund events additionally must
+match the stored Refund amount and resolved Payment, plus any external/provider
+identifiers supplied by ChariPay. A valid signature by itself is never enough.
 
 ### Exact JSON payload gate
 
@@ -116,16 +125,23 @@ runs refunds in two phases:
 5. On signed `refund.failed`, mark only that Refund failed and free its amount
    for a later attempt.
 
-A provider 4xx response is a definitive rejection and the Refund is marked
-failed. A network exception or 5xx has ambiguous outcome: the same Refund stays
+A provider 4xx response is treated as a definitive rejection; 408/429/5xx and
+network failures are treated conservatively as ambiguous. The same Refund stays
 `processing` and keeps its reference/amount reserved so a second random refund
-cannot accidentally return the money twice. This ambiguous state needs provider
-webhook/reconciliation rather than blind creation of another Refund row.
+cannot accidentally return the money twice. The housekeeping sweep queries
+`GET /v1/refunds/{reference}`; `SUCCESS`/`FAILED` settle locally, `PENDING`
+remains reserved, and `404/not_found` replays the exact same Refund.id as
+`refundReference`, which ChariPay documents as idempotent. The repository's
+`vercel.json` invokes the authenticated housekeeping GET once daily as a
+conservative default; an external or differently configured scheduler may call
+the same endpoint more frequently without changing refund semantics.
 
 Refund webhook event claims keep `PaymentEvent.processedAt = null` until the
 refund finalizer succeeds. If the server crashes between claim and business
 update, provider retry re-enters the idempotent finalizer instead of silently
-losing a money event.
+losing a money event. A failed local refund is not later promoted to success
+from webhook ordering alone; contradictory terminal states require explicit
+provider reconciliation evidence. A failure never downgrades a succeeded refund.
 
 ## Required sandbox acceptance before merge/go-live
 

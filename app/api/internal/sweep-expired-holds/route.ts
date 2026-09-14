@@ -6,18 +6,21 @@ import { reconcileProcessingRefunds } from "@/lib/orders/refund";
 
 export const runtime = "nodejs";
 
-/**
- * Invoked by a scheduled trigger (Vercel Cron or an external cron hitting
- * this route) roughly every minute. Hold correctness never depends on this
- * running (createHold releases lazily), while refund reconciliation uses it
- * as a fallback when a provider webhook or refund POST response is lost.
- */
-export async function POST(request: NextRequest) {
+function isAuthorized(request: NextRequest): boolean {
+  const internalSecret = process.env.INTERNAL_API_SECRET;
+  const cronSecret = process.env.CRON_SECRET;
+  const internalHeader = request.headers.get("x-internal-secret");
+  const authorization = request.headers.get("authorization");
+  return Boolean(
+    (internalSecret && internalHeader === internalSecret)
+    || (cronSecret && authorization === `Bearer ${cronSecret}`),
+  );
+}
+
+async function runHousekeeping(request: NextRequest) {
   try {
-    const secret = process.env.INTERNAL_API_SECRET;
-    const provided = request.headers.get("x-internal-secret");
-    if (!secret || provided !== secret) {
-      throw new ApiError(401, "UNAUTHENTICATED", "Invalid internal secret");
+    if (!isAuthorized(request)) {
+      throw new ApiError(401, "UNAUTHENTICATED", "Invalid housekeeping credentials");
     }
 
     const [holds, rateLimits, refunds] = await Promise.all([
@@ -34,3 +37,12 @@ export async function POST(request: NextRequest) {
     return apiErrorResponse(error);
   }
 }
+
+/**
+ * Vercel Cron invokes GET and sends CRON_SECRET as Authorization: Bearer.
+ * POST remains available for an explicitly configured external scheduler via
+ * X-Internal-Secret. Refund reconciliation is correctness fallback for lost
+ * webhooks/ambiguous refund submissions; hold expiry also has lazy release.
+ */
+export const GET = runHousekeeping;
+export const POST = runHousekeeping;

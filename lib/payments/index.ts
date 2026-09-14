@@ -63,6 +63,10 @@ function assertChariPayConfig(): void {
     if (process.env.CHARIPAY_PROVIDER_VERIFIED !== "true") {
       throw new Error("Live ChariPay is gated until sandbox verification: set CHARIPAY_PROVIDER_VERIFIED=true only after provider verification");
     }
+    const cronSecret = process.env.CRON_SECRET?.trim();
+    if (!cronSecret || cronSecret.length < 16) {
+      throw new Error("Vercel Production ChariPay requires CRON_SECRET (16+ chars) for refund reconciliation");
+    }
   } else if (providerEnv !== "sandbox") {
     throw new Error("ChariPay live credentials are forbidden outside Vercel Production");
   }

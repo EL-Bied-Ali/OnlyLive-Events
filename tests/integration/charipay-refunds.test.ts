@@ -150,6 +150,29 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     });
   });
 
+  it("keeps an ambiguous network failure processing and reserves the same refund reference", async () => {
+    const fixture = await createPaidOrderForChariPay({ priceCents: 10_000 });
+    const admin = await createAdmin();
+    enableChariPay();
+    vi.spyOn(ChariPayProvider.prototype, "refund").mockRejectedValue(new TypeError("simulated network timeout"));
+
+    await expect(initiateRefund({
+      paymentId: fixture.payment.id,
+      amountCents: 7_000,
+      reason: "Ambiguous network outcome",
+      actorId: admin.id,
+    })).rejects.toMatchObject({ code: "PROVIDER_REFUND_STATUS_UNKNOWN", status: 502 });
+
+    const processing = await prisma.refund.findFirstOrThrow({ where: { paymentId: fixture.payment.id } });
+    expect(processing.status).toBe("processing");
+    await expect(initiateRefund({
+      paymentId: fixture.payment.id,
+      amountCents: 4_000,
+      reason: "Must remain reserved",
+      actorId: admin.id,
+    })).rejects.toMatchObject({ code: "REFUND_EXCEEDS_REMAINING", status: 409 });
+  });
+
   it("leaves a pending provider refund processing without replaying it", async () => {
     const fixture = await createPaidOrderForChariPay({ priceCents: 10_000 });
     const admin = await createAdmin();
@@ -167,6 +190,21 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     const summary = await reconcileProcessingRefunds();
     expect(summary).toMatchObject({ checked: 1, pending: 1, replayed: 0, errors: 0 });
     expect(refundSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses to refund a payment through a different configured provider", async () => {
+    const fixture = await createPaidOrderForChariPay({ priceCents: 10_000 });
+    const admin = await createAdmin();
+    await prisma.payment.update({ where: { id: fixture.payment.id }, data: { provider: "fake" } });
+    enableChariPay();
+
+    await expect(initiateRefund({
+      paymentId: fixture.payment.id,
+      amountCents: fixture.payment.amountCents,
+      reason: "Wrong provider must fail closed",
+      actorId: admin.id,
+    })).rejects.toMatchObject({ code: "PAYMENT_PROVIDER_MISMATCH", status: 409 });
+    expect(await prisma.refund.count({ where: { paymentId: fixture.payment.id } })).toBe(0);
   });
 
   it("keeps used tickets used and never restocks them on a full refund", async () => {

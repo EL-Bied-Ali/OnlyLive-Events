@@ -235,7 +235,7 @@ export class ChariPayProvider implements PaymentProvider {
     const normalizedAmount = eventType.startsWith("refund.")
       ? madToCents(payload.refundAmount)
       : madToCents(payload.amount);
-    const currency = typeof payload.currency === "string" ? payload.currency : "MAD";
+    const currency = typeof payload.currency === "string" ? payload.currency : "";
     const providerPaymentId = typeof payload.sessionId === "string" ? payload.sessionId : "";
     const providerRefundId = typeof payload.refundId === "string" ? payload.refundId : undefined;
 

@@ -30,16 +30,19 @@ interface PreparedRefund {
   reason: string;
 }
 
-async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund> {
+async function prepareRefund(input: InitiateRefundInput, expectedProvider: string): Promise<PreparedRefund> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<
-      { id: string; order_id: string; provider_payment_id: string | null; amount_cents: number; currency: string; status: string }[]
+      { id: string; order_id: string; provider: string; provider_payment_id: string | null; amount_cents: number; currency: string; status: string }[]
     >`
-      SELECT id, order_id, provider_payment_id, amount_cents, currency, status
+      SELECT id, order_id, provider, provider_payment_id, amount_cents, currency, status
       FROM payments WHERE id = ${input.paymentId} FOR UPDATE
     `;
     const payment = paymentRows[0];
     if (!payment) throw new ApiError(404, "PAYMENT_NOT_FOUND", "Payment not found");
+    if (payment.provider !== expectedProvider) {
+      throw new ApiError(409, "PAYMENT_PROVIDER_MISMATCH", "Payment belongs to a different payment provider");
+    }
     if (payment.status !== "paid" && payment.status !== "partially_refunded") {
       throw new ApiError(409, "PAYMENT_NOT_REFUNDABLE", `Cannot refund a payment with status "${payment.status}"`);
     }
@@ -319,7 +322,8 @@ export async function initiateRefund(input: InitiateRefundInput): Promise<Initia
   if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
     throw new ApiError(400, "INVALID_AMOUNT", "Refund amount must be a positive number of cents");
   }
-  return submitPreparedRefund(await prepareRefund(input));
+  const provider = getPaymentProvider();
+  return submitPreparedRefund(await prepareRefund(input, provider.name));
 }
 
 const REFUND_RECONCILIATION_MIN_AGE_MS = 30_000;
