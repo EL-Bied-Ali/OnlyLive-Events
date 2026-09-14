@@ -90,8 +90,17 @@ function currentWindow(options: RateLimitOptions): {
   };
 }
 
-function resultForCount(count: number, options: RateLimitOptions, now: number, resetAt: Date): RateLimitResult {
-  const allowed = count <= options.limit;
+function resultForCount(
+  count: number,
+  options: RateLimitOptions,
+  now: number,
+  resetAt: Date,
+  blockAtLimit = false,
+): RateLimitResult {
+  // consumeRateLimit allows the first `limit` attempts and rejects attempt
+  // limit+1. inspectRateLimit is used before password verification and must
+  // block once `limit` failed attempts have already been recorded.
+  const allowed = blockAtLimit ? count < options.limit : count <= options.limit;
   return {
     allowed,
     limit: options.limit,
@@ -117,7 +126,7 @@ export async function inspectRateLimit(key: string, options: RateLimitOptions): 
     where: { key, windowStart },
     select: { count: true },
   });
-  return resultForCount(bucket?.count ?? 0, options, now, resetAt);
+  return resultForCount(bucket?.count ?? 0, options, now, resetAt, true);
 }
 
 /**
