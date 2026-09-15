@@ -18,32 +18,36 @@ export interface RefundReconciliationStats {
 }
 
 /**
- * Atomically claims due refunds and rotates each claimed row to the back of
- * the queue. SKIP LOCKED lets concurrent workers take different batches.
- * Because every provider call is bounded by the adapter timeout, the 30s
- * claim window also acts as a short lease without adding another schema field.
+ * Atomically claim one due refund and rotate only that row to the back of the
+ * queue. Provider work is intentionally done before another row is claimed.
+ * A batch can otherwise take much longer than the 30s eligibility window, so
+ * pre-claiming the whole batch would let a second worker reclaim later rows
+ * while the first worker was still processing earlier provider calls.
+ *
+ * SKIP LOCKED still lets concurrent workers take different refunds, while the
+ * one-at-a-time claim keeps the short updated_at lease attached to work that is
+ * actually about to start.
  */
-async function claimDueRefundIds(batchSize: number): Promise<string[]> {
-  const limit = Math.max(1, Math.min(batchSize, MAX_BATCH_SIZE));
+async function claimNextDueRefundId(): Promise<string | null> {
   const cutoff = new Date(Date.now() - MIN_RECONCILE_AGE_MS);
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<{ id: string }[]>`
-      WITH candidates AS (
+      WITH candidate AS (
         SELECT id
         FROM refunds
         WHERE status = 'processing'
           AND updated_at <= ${cutoff}
         ORDER BY updated_at ASC, created_at ASC
         FOR UPDATE SKIP LOCKED
-        LIMIT ${limit}
+        LIMIT 1
       )
       UPDATE refunds AS r
       SET updated_at = now()
-      FROM candidates AS c
+      FROM candidate AS c
       WHERE r.id = c.id
       RETURNING r.id
     `;
-    return rows.map((row) => row.id);
+    return rows[0]?.id ?? null;
   });
 }
 
@@ -61,16 +65,7 @@ async function deferRefund(refundId: string, retryAfterMs?: number): Promise<voi
 export async function reconcileProcessingRefundsFair(
   batchSize = DEFAULT_BATCH_SIZE,
 ): Promise<RefundReconciliationStats> {
-  const claimedIds = await claimDueRefundIds(batchSize);
-  if (claimedIds.length === 0) {
-    return { checked: 0, succeeded: 0, failed: 0, replayed: 0, pending: 0, errors: 0 };
-  }
-
-  const refunds = await prisma.refund.findMany({
-    where: { id: { in: claimedIds }, status: "processing" },
-    include: { payment: true },
-  });
-  const byId = new Map(refunds.map((refund) => [refund.id, refund]));
+  const limit = Math.max(1, Math.min(batchSize, MAX_BATCH_SIZE));
   const stats: RefundReconciliationStats = {
     checked: 0,
     succeeded: 0,
@@ -80,8 +75,16 @@ export async function reconcileProcessingRefundsFair(
     errors: 0,
   };
 
-  for (const refundId of claimedIds) {
-    const refund = byId.get(refundId);
+  for (let index = 0; index < limit; index += 1) {
+    const refundId = await claimNextDueRefundId();
+    if (!refundId) break;
+
+    // A signed webhook may finalize the refund immediately after the claim.
+    // In that race there is no provider work left for this worker to do.
+    const refund = await prisma.refund.findFirst({
+      where: { id: refundId, status: "processing" },
+      include: { payment: true },
+    });
     if (!refund) continue;
     stats.checked += 1;
 
