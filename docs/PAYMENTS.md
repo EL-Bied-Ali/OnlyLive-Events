@@ -98,15 +98,19 @@ cannot eliminate this race. When it happens, the customer's money was
 captured (`Payment.status = 'paid'`) but no tickets are generated; this is
 intentional (never oversell), and resolution is still a manual admin
 action from the order detail page (fulfil manually if stock frees up, or
-refund). Every admin/super_admin active at that moment is also emailed
-(`lib/email/notifications.ts::sendReconciliationAlertEmail`, triggered
-right after the webhook transaction commits), as a best-effort push
-alongside — not a replacement for — the dashboard's attention metrics:
-the alert is sent exactly once and isn't retried if the email provider
-fails, and an admin added afterward isn't retroactively notified for an
-already-settled order (tracked for the `fix/email-delivery-audit-1`
-durable-outbox refactor). The dashboard remains the reliable source of
-truth for these orders regardless of email delivery.
+refund). Every admin/super_admin active at that moment is also alerted
+(`lib/email/notifications.ts::enqueueReconciliationAlertEmail`, enqueued
+in the same webhook transaction, delivered out-of-band by
+`lib/email/dispatcher.ts` like every other transactional email — see
+docs/ARCHITECTURE.md's outbox/dispatcher section), as a best-effort push
+alongside — not a
+replacement for — the dashboard's attention metrics: a send failure is
+retried with backoff like any other outbox row, and the reason text is
+re-derived from the order's live status at dispatch time rather than
+trusted from enqueue time. An admin added *after* the order already
+settled still isn't retroactively notified for that order — the fan-out
+list is fixed at enqueue time. The dashboard remains the reliable source
+of truth for these orders regardless of email delivery.
 
 ## Reconciliation: a contradictory payment.succeeded after failed/cancelled
 

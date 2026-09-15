@@ -598,6 +598,7 @@ describe("reconciliation alert — enqueue fan-out and delivery", () => {
     // depend on.
     const fixture = await createOrderAwaitingPayment({ quantity: 1 });
     const fakeTx = {
+      order: { findUnique: vi.fn().mockResolvedValue({ id: fixture.order.id }) },
       adminUser: { findMany: vi.fn().mockResolvedValue([]) },
       emailOutbox: { createMany: vi.fn() },
     } as unknown as Parameters<typeof enqueueReconciliationAlertEmail>[0];
@@ -621,13 +622,24 @@ describe("reconciliation alert — enqueue fan-out and delivery", () => {
     const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
     expect(order.status).toBe("paid_but_unfulfillable");
 
+    const enqueuedRows = await prisma.emailOutbox.findMany({
+      where: { type: "reconciliation_alert", entityType: "order", entityId: { startsWith: `${order.id}:` } },
+    });
+    expect(enqueuedRows.length).toBeGreaterThan(0);
+    // Scoped by this fixture's own outbox row ids (passed as
+    // idempotencyKey), never by recipient email: the shared, persistent
+    // test database accumulates admin accounts across runs, and the same
+    // admin may legitimately have an unrelated, still-valid alert pending
+    // from a different order in the same dispatch batch.
+    const enqueuedRowIds = new Set(enqueuedRows.map((row) => row.id));
+
     // An admin resolves it (e.g. manually refunds) before the dispatcher
     // gets to the already-enqueued alert row.
     await prisma.order.update({ where: { id: fixture.order.id }, data: { status: "refunded" } });
 
     const sendSpy = vi.spyOn(ConsoleEmailProvider.prototype, "send");
     await dispatchPendingEmails();
-    expect(sendSpy).not.toHaveBeenCalled();
+    expect(sendSpy.mock.calls.some((args) => enqueuedRowIds.has(args[0].idempotencyKey))).toBe(false);
 
     const rows = await prisma.emailOutbox.findMany({
       where: { type: "reconciliation_alert", entityType: "order", entityId: { startsWith: `${order.id}:` } },

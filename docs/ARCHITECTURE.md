@@ -238,15 +238,18 @@ integrated yet (see Known scope limitations below).
    `idempotencyKey` (mirroring `RefundInput`'s), so a retried send of the
    same outbox row can never double-send at a real provider's own layer.
 2. `lib/email/notifications.ts::enqueue*` (`enqueueOrderConfirmationEmail`,
-   `enqueuePaymentFailedEmail`, `enqueueRefundConfirmationEmail`) each take
-   a `Prisma.TransactionClient` and insert one `EmailOutbox` row via
+   `enqueuePaymentFailedEmail`, `enqueueRefundConfirmationEmail`,
+   `enqueueReconciliationAlertEmail`) each take a `Prisma.TransactionClient`
+   and insert one or more `EmailOutbox` rows via
    `createMany({ skipDuplicates: true })`, keyed by the same
    `UNIQUE(type, entity_type, entity_id)` idempotency pattern `PaymentEvent`
    uses. Callers enqueue **inside the same transaction as the business
    fact** — the payment webhook route enqueues right after
    `tx.payment.update(...)` (based on the fulfillment outcome: `paid` →
-   confirmation, `failed`/`cancelled` → failure notice), and
-   `lib/orders/refund.ts::initiateRefund` enqueues right after its
+   confirmation, `failed`/`cancelled` → failure notice,
+   `paid_but_unfulfillable`/`reconciliation_required` → one row per active
+   admin/super_admin, keyed by `entityId = "${orderId}:${adminUserId}"`),
+   and `lib/orders/refund.ts::initiateRefund` enqueues right after its
    `refund.succeeded` audit log write, all before the transaction commits.
    This closes the gap in the previous after-commit design: once the
    business fact is durable, so is the obligation to notify about it — a

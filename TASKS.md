@@ -348,29 +348,26 @@ running this migration — not a concern for the app's current state.
 
 ## Completed (reconciliation admin alert)
 
-- `lib/email/notifications.ts::sendReconciliationAlertEmail` fires as soon
-  as an order becomes `paid_but_unfulfillable` or `reconciliation_required`
-  (webhook route, right after the transaction commits) — money was
-  captured but no ticket was issued, and this no longer depends on an
-  admin happening to check the dashboard's attention metrics.
-- Every active `admin`/`super_admin` at the moment the order transitions
-  is notified independently (`support`/`scanner` are excluded — they
-  can't act on a refund); each gets its own idempotent `email_logs` claim
-  (`entityId = "${orderId}:${adminUserId}"`), so a redelivered webhook
-  event can't double-alert any one admin.
+- `lib/email/notifications.ts::enqueueReconciliationAlertEmail` enqueues a
+  durable `EmailOutbox` row, inside the SAME webhook transaction that
+  transitions an order to `paid_but_unfulfillable` or
+  `reconciliation_required` — money was captured but no ticket was issued,
+  and this no longer depends on an admin happening to check the
+  dashboard's attention metrics.
+- Every active `admin`/`super_admin` at enqueue time gets its own row
+  (`support`/`scanner` are excluded — they can't act on a refund), keyed
+  by the same idempotent `entityId = "${orderId}:${adminUserId}"` claim as
+  before, so a redelivered webhook event can't double-enqueue any one
+  admin's alert. Rebased onto the durable email outbox refactor
+  (`fix/email-outbox-durable`): the enqueue call never builds email
+  content itself — `lib/email/dispatcher.ts::renderReconciliationAlert`
+  re-derives the reason from the order's live status at send time, and a
+  provider send failure for one recipient is retried by the dispatcher
+  exactly like any other outbox row, closing the two gaps the original
+  one-shot `sendReconciliationAlertEmail` design had.
 - Resolution itself (fulfil manually or refund) remains a manual admin
   action from the order detail page — only detection/notification is
   automatic now (see docs/PAYMENTS.md's Open decisions).
-- **Known limitation, not fixed here** (tracked for the
-  `fix/email-delivery-audit-1` durable-outbox refactor): the alert is
-  one-shot, sent exactly once from the webhook route on the transition
-  into one of these two statuses. An admin created/activated *after* that
-  one call already ran is never retroactively notified for that order,
-  and a provider send failure for one recipient is not retried (same
-  caveat as every other transactional email in this app — see the
-  background-retry item in "Next" below). The per-admin claim only prevents
-  double-alerting one admin; it does not guarantee every eventual admin
-  is alerted.
 
 ## In progress
 
@@ -396,7 +393,7 @@ running this migration — not a concern for the app's current state.
    real traffic, then tune/enforce without replacing account-level limiting.
 7. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
-9. Before ChariPay go-live: a customer who registered before phone became
+8. Before ChariPay go-live: a customer who registered before phone became
    required (PR #18) has `phone: null` and cannot pay — ChariPay's adapter
    rejects cleanly (`PAYMENT_CUSTOMER_DETAILS_REQUIRED`), no crash/financial
    risk, but there's currently no profile page or endpoint letting an

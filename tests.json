@@ -1023,7 +1023,7 @@
   },
   {
     "id": "reconciliation-alert-paid-but-unfulfillable",
-    "scenario": "Every active admin/super_admin is emailed exactly once when an order becomes paid_but_unfulfillable; support and scanner accounts are never notified",
+    "scenario": "Every active admin/super_admin gets a durable outbox row enqueued exactly once when an order becomes paid_but_unfulfillable, and it is delivered on dispatch; support and scanner accounts are never enqueued",
     "category": "notifications",
     "implemented": true,
     "status": "pass",
@@ -1031,7 +1031,7 @@
   },
   {
     "id": "reconciliation-alert-reconciliation-required",
-    "scenario": "An active admin is alerted exactly once when an order becomes reconciliation_required, a redelivered webhook event does not send a second alert, and an inactive admin is never notified",
+    "scenario": "An active admin is enqueued exactly once when an order becomes reconciliation_required, a redelivered webhook event does not enqueue a second alert row, and an inactive admin is never enqueued",
     "category": "notifications",
     "implemented": true,
     "status": "pass",
@@ -1039,7 +1039,7 @@
   },
   {
     "id": "reconciliation-alert-unknown-order-noop",
-    "scenario": "sendReconciliationAlertEmail is a silent no-op for an unknown order id rather than throwing",
+    "scenario": "enqueueReconciliationAlertEmail is a silent no-op for an unknown order id rather than throwing, and enqueues nothing",
     "category": "notifications",
     "implemented": true,
     "status": "pass",
@@ -1047,7 +1047,7 @@
   },
   {
     "id": "reconciliation-alert-direct-idempotency",
-    "scenario": "Calling sendReconciliationAlertEmail directly twice in a row for the same order sends exactly one email per admin, exercising the entityId claim itself rather than the webhook layer's already_handled short-circuit",
+    "scenario": "Calling enqueueReconciliationAlertEmail directly twice in a row for the same order enqueues exactly one outbox row per admin, exercising the entityId claim itself rather than the webhook layer's already_handled short-circuit",
     "category": "notifications",
     "implemented": true,
     "status": "pass",
@@ -1055,7 +1055,15 @@
   },
   {
     "id": "reconciliation-alert-no-active-admins-noop",
-    "scenario": "sendReconciliationAlertEmail is a silent no-op when no active admin/super_admin exists",
+    "scenario": "enqueueReconciliationAlertEmail is a silent no-op when no active admin/super_admin exists",
+    "category": "notifications",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "reconciliation-alert-stale-content-guard",
+    "scenario": "A reconciliation alert row for an order that got resolved before dispatch time is never sent, and is marked failed with entity_state_no_longer_valid",
     "category": "notifications",
     "implemented": true,
     "status": "pass",

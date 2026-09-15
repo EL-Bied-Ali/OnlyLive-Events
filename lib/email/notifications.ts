@@ -97,6 +97,9 @@ export async function enqueueRefundConfirmationEmail(tx: Tx, refundId: string): 
  * called again for an order that's already enqueued its alerts.
  */
 export async function enqueueReconciliationAlertEmail(tx: Tx, orderId: string): Promise<void> {
+  const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true } });
+  if (!order) return;
+
   const recipients = await tx.adminUser.findMany({
     where: { role: { in: ["admin", "super_admin"] }, isActive: true },
     select: { id: true, email: true },
