@@ -22,6 +22,8 @@ interface PaymentProvider {
   createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult>;
   parseWebhook(input: ParseWebhookInput): Promise<ParsedWebhookEvent>;
   refund(input: RefundInput): Promise<RefundResult>;
+  getRefundStatus(refundReference: string): Promise<RefundStatusResult>;
+  closePaymentSession(providerPaymentId: string, requestId: string): Promise<ClosePaymentSessionResult>;
 }
 ```
 
@@ -39,7 +41,7 @@ integrity checks.
 
 `RefundResult.state` is either `succeeded` or `processing`. The fake provider
 settles immediately; ChariPay returns an asynchronous pending result and final
-state arrives by signed webhook.
+state arrives by signed webhook or authenticated provider-status reconciliation.
 
 ## Provider selection and production guards
 
@@ -180,9 +182,10 @@ Refund webhooks already apply the same fail-closed integrity checks before any
 financial mutation: exact Refund amount, explicit MAD currency, ownership of
 the resolved Payment, and provider/external identifiers whenever the event
 contains them. The same evidence is revalidated under Refund/Payment row locks
-inside the finalizer transaction before status, ticket or inventory mutation. The exact ChariPay sandbox JSON shape still must be captured and
-pinned before production; fields not guaranteed by public documentation are
-never invented or defaulted into trusted financial facts.
+inside the finalizer transaction before status, ticket or inventory mutation.
+The exact ChariPay sandbox JSON shape still must be captured and pinned before
+production; fields not guaranteed by public documentation are never invented
+or defaulted into trusted financial facts.
 
 ## Late or contradictory payment success
 
@@ -242,21 +245,26 @@ value.
 - Immediate `succeeded` (FakeProvider): finalize directly.
 - Accepted asynchronous request (ChariPay): keep `processing`; do not alter
   tickets, Payment, Order or inventory.
-- Definitive provider rejection (ordinary validation/business-rule 4xx): mark
-  that Refund failed so its reserved amount becomes available for a later
-  business attempt. `409 IDEMPOTENCY_CONFLICT` is the exception: preserve the
-  original refund reference and reconcile it instead of guessing.
-- Ambiguous outcome (network exception, 408, 429, or provider 5xx): keep the Refund
-  `processing` and reserved. A timeout may have happened after provider
-  acceptance; creating a new random refund would risk returning money twice.
+- Definitive provider rejection (ordinary validation/business-rule 4xx other
+  than 409): mark that Refund failed so its reserved amount becomes available
+  for a later business attempt.
+- Any HTTP `409` is treated conservatively as ambiguous for a money-moving
+  request. Preserve the original refund reference and reconcile it instead of
+  guessing from a provider-specific conflict code.
+- Ambiguous outcome (network exception, 408, 409, 429, or provider 5xx): keep
+  the Refund `processing` and reserved. A timeout or conflict may happen after
+  provider acceptance; creating a new random refund would risk returning money
+  twice.
 
 Ambiguous/stuck refunds are reconciled by the authenticated housekeeping
 sweep using `GET /v1/refunds/{reference}`. `SUCCESS`/`FAILED` finalize the same
 Refund; `PENDING` stays reserved. A provider `404/not_found` replays the original
 intent with the **same Refund.id/refundReference**. Blind creation of another
-Refund reference is prohibited. `vercel.json` schedules this endpoint daily by
-default as a conservative fallback; deployments that need faster recovery may
-tighten that schedule or use the existing authenticated POST.
+Refund reference is prohibited. `vercel.json` schedules this endpoint daily on
+the current Hobby deployment as a conservative fallback. A commercial go-live
+must use a materially faster scheduler cadence, with the provider's real rate
+limits/backoff budget verified first; the daily fallback alone is not adequate
+for operational recovery.
 
 ### `refund.succeeded`
 
@@ -272,10 +280,11 @@ confirmed refunds. It then:
   commit. The current `EmailLog` claim prevents duplicate sends, but crash-safe
   exactly-once delivery is a separate known gap tracked in `TASKS.md` / PR #17.
 
-Duplicate success deliveries do not repeat stock/ticket effects. Contradictory
-terminal refund events are not resolved by delivery order alone; a failed refund
-requires explicit provider reconciliation evidence before any later success can
-change local money state.
+Duplicate success deliveries do not repeat stock/ticket effects. A Refund that
+has already been finalized `failed` is terminal locally: a later contradictory
+success webhook is not allowed to mutate money/ticket state automatically. It
+remains a reconciliation anomaly requiring provider evidence/manual handling;
+failed refunds are surfaced in admin attention.
 
 ### `refund.failed`
 
@@ -291,14 +300,17 @@ unknown money-moving outcome.
 
 For ChariPay HTTP responses:
 
-- ordinary validation/business-rule 4xx: definitive rejection;
-- `409 IDEMPOTENCY_CONFLICT`: preserve/reconcile the original intent;
+- ordinary validation/business-rule 4xx other than 409: definitive rejection;
+- any 409 response: preserve/reconcile the original intent rather than risk
+  freeing a refund amount whose provider outcome may already exist;
 - 408/429/5xx: ambiguous outcome because provider acceptance cannot safely be
-  ruled out (`Retry-After` is preserved for 429);
+  ruled out (`Retry-After` is preserved when supplied);
 - transport/network exception or timeout: ambiguous.
 
 This distinction matters most for refunds. Checkout creation also remains
-provider-idempotent through the stable Payment idempotency key.
+provider-idempotent through the stable Payment idempotency key. Provider-specific
+checkout-session cancellation interprets its documented terminal response
+separately and remains fail-closed on ambiguous 404/409 states.
 
 ## Auditability
 
@@ -328,6 +340,7 @@ PR #13 additionally covers:
 - asynchronous refund pending state without premature ticket/stock mutation;
 - pending-refund balance reservation against over-refund;
 - idempotent refund success/failure finalization;
+- fair concurrent checkout/refund reconciliation claims;
 - legacy FakeProvider/browser flows.
 
 A real sandbox run is still mandatory before production because provider unit
