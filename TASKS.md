@@ -346,6 +346,29 @@ running this migration — not a concern for the app's current state.
   cross-category/concurrent enforcement, converted/expired reservation
   semantics, exact-bound decreases and rejected unsafe decreases.
 
+## Completed (reconciliation admin alert)
+
+- `lib/email/notifications.ts::enqueueReconciliationAlertEmail` enqueues a
+  durable `EmailOutbox` row, inside the SAME webhook transaction that
+  transitions an order to `paid_but_unfulfillable` or
+  `reconciliation_required` — money was captured but no ticket was issued,
+  and this no longer depends on an admin happening to check the
+  dashboard's attention metrics.
+- Every active `admin`/`super_admin` at enqueue time gets its own row
+  (`support`/`scanner` are excluded — they can't act on a refund), keyed
+  by the same idempotent `entityId = "${orderId}:${adminUserId}"` claim as
+  before, so a redelivered webhook event can't double-enqueue any one
+  admin's alert. Rebased onto the durable email outbox refactor
+  (`fix/email-outbox-durable`): the enqueue call never builds email
+  content itself — `lib/email/dispatcher.ts::renderReconciliationAlert`
+  re-derives the reason from the order's live status at send time, and a
+  provider send failure for one recipient is retried by the dispatcher
+  exactly like any other outbox row, closing the two gaps the original
+  one-shot `sendReconciliationAlertEmail` design had.
+- Resolution itself (fulfil manually or refund) remains a manual admin
+  action from the order detail page — only detection/notification is
+  automatic now (see docs/PAYMENTS.md's Open decisions).
+
 ## In progress
 
 - None.
@@ -366,14 +389,11 @@ running this migration — not a concern for the app's current state.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
    requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
 5. Paginate the orders CSV export beyond its current most-recent-20,000 cap.
-6. Add an automatic trigger/alert path for
-   `paid_but_unfulfillable`/`reconciliation_required` orders rather than
-   relying only on dashboard attention metrics.
-7. Stage Vercel WAF rate-limit rules in log mode before production, observe
+6. Stage Vercel WAF rate-limit rules in log mode before production, observe
    real traffic, then tune/enforce without replacing account-level limiting.
-8. Before production rollout, smoke-test admin login/logout, catalogue
+7. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
-9. Before ChariPay go-live: a customer who registered before phone became
+8. Before ChariPay go-live: a customer who registered before phone became
    required (PR #18) has `phone: null` and cannot pay — ChariPay's adapter
    rejects cleanly (`PAYMENT_CUSTOMER_DETAILS_REQUIRED`), no crash/financial
    risk, but there's currently no profile page or endpoint letting an

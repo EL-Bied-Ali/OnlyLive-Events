@@ -3,7 +3,11 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getPaymentProvider, isFakePaymentsAllowed } from "@/lib/payments";
 import { confirmOrderPayment, failOrderPayment } from "@/lib/orders/fulfillment";
-import { enqueueOrderConfirmationEmail, enqueuePaymentFailedEmail } from "@/lib/email/notifications";
+import {
+  enqueueOrderConfirmationEmail,
+  enqueuePaymentFailedEmail,
+  enqueueReconciliationAlertEmail,
+} from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -211,6 +215,8 @@ export async function POST(request: NextRequest) {
           // lib/email/dispatcher.ts.
           if (outcome === "paid") {
             await enqueueOrderConfirmationEmail(tx, payment.orderId);
+          } else if (outcome === "paid_but_unfulfillable" || outcome === "reconciliation_required") {
+            await enqueueReconciliationAlertEmail(tx, payment.orderId);
           }
           break;
         }
