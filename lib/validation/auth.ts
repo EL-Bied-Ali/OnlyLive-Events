@@ -4,7 +4,11 @@ export const registerSchema = z.object({
   email: z.string().trim().toLowerCase().email().max(254),
   password: z.string().min(10).max(200),
   name: z.string().trim().min(1).max(120),
-  phone: z.string().trim().max(30).optional(),
+  // Required: a real PSP (ChariPay's hosted checkout) rejects a payment
+  // session whose customer has no phone number. Only loosely validated here
+  // (plausible phone-like characters) — the provider adapter is responsible
+  // for its own stricter format/country normalization at checkout time.
+  phone: z.string().trim().min(8).max(30).regex(/^[0-9+()\-.\s]+$/, "Numéro de téléphone invalide"),
 });
 
 export type RegisterInput = z.infer<typeof registerSchema>;

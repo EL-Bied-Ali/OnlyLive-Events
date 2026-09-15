@@ -7,7 +7,7 @@ import Link from "next/link";
 
 export default function RegisterPage() {
   const router = useRouter();
-  const [form, setForm] = useState({ name: "", email: "", password: "" });
+  const [form, setForm] = useState({ name: "", email: "", password: "", phone: "" });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -61,6 +61,15 @@ export default function RegisterPage() {
           onChange={(event) => setForm({ ...form, password: event.target.value })}
           required
           minLength={10}
+          style={{ padding: 10 }}
+        />
+        <input
+          type="tel"
+          placeholder="Téléphone (ex. 06 12 34 56 78)"
+          value={form.phone}
+          onChange={(event) => setForm({ ...form, phone: event.target.value })}
+          required
+          minLength={8}
           style={{ padding: 10 }}
         />
         {error && <p style={{ color: "#ff6b6b", margin: 0 }}>{error}</p>}

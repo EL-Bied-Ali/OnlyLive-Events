@@ -18,6 +18,7 @@ test("customer can browse, reserve, pay, and receive a ticket", async ({ page })
   await page.getByPlaceholder("Nom").fill("E2E Test Buyer");
   await page.getByPlaceholder("Email").fill(email);
   await page.getByPlaceholder(/Mot de passe/).fill(password);
+  await page.getByPlaceholder(/Téléphone/).fill("0612345678");
   await page.getByRole("button", { name: "Créer mon compte" }).click();
 
   await page.waitForURL("/");

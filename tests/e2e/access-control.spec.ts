@@ -23,6 +23,7 @@ test("a customer cannot fetch another customer's order", async ({ browser }) => 
   await pageA.getByPlaceholder("Nom").fill("Customer A");
   await pageA.getByPlaceholder("Email").fill(`access-a-${suffix}@test.onlylive.ma`);
   await pageA.getByPlaceholder(/Mot de passe/).fill("CustomerAPassword123!");
+  await pageA.getByPlaceholder(/Téléphone/).fill("0612345678");
   await pageA.getByRole("button", { name: "Créer mon compte" }).click();
   await pageA.waitForURL("/");
 
@@ -47,6 +48,7 @@ test("a customer cannot fetch another customer's order", async ({ browser }) => 
   await pageB.getByPlaceholder("Nom").fill("Customer B");
   await pageB.getByPlaceholder("Email").fill(`access-b-${suffix}@test.onlylive.ma`);
   await pageB.getByPlaceholder(/Mot de passe/).fill("CustomerBPassword123!");
+  await pageB.getByPlaceholder(/Téléphone/).fill("0612345679");
   await pageB.getByRole("button", { name: "Créer mon compte" }).click();
   await pageB.waitForURL("/");
 
