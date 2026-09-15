@@ -17,6 +17,15 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function providerWebhookUrl(baseUrl: string, providerName: string): string {
+  const url = new URL(`/api/payments/webhook/${providerName}`, baseUrl);
+  if (providerName === "charipay" && process.env.VERCEL_ENV === "preview") {
+    const bypass = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
+    if (bypass) url.searchParams.set("x-vercel-protection-bypass", bypass);
+  }
+  return url.toString();
+}
+
 export interface StartCheckoutResult {
   orderId: string;
   redirectUrl: string;
@@ -189,7 +198,7 @@ async function claimAndInitializeProvider(
         customerName: user.name,
         customerPhone: user.phone,
         returnUrl: `${callbackBaseUrl}/orders/${order.id}`,
-        webhookUrl: `${callbackBaseUrl}/api/payments/webhook/${provider.name}`,
+        webhookUrl: providerWebhookUrl(callbackBaseUrl, provider.name),
         expiresAt: providerExpiresAt,
       });
 
