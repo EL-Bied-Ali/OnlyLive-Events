@@ -38,6 +38,19 @@ describe("FakeProvider", () => {
     expect(parsed.type).toBe("payment.succeeded");
   });
 
+  it("requires an exact 64-character hexadecimal webhook signature", async () => {
+    const provider = new FakeProvider();
+    const payload = JSON.stringify({ eventId: "evt_strict_hex", providerPaymentId: "fake_strict_hex", type: "payment.succeeded", amountCents: 1000 });
+    const exact = signFakeWebhookPayload(payload);
+    expect(exact).toHaveLength(64);
+    const parseWith = (signature: string) => provider.parseWebhook({ rawBody: payload, headers: { "x-onlylive-fake-signature": signature } });
+    await expect(parseWith(exact)).resolves.toMatchObject({ signatureValid: true });
+    await expect(parseWith(exact.toUpperCase())).resolves.toMatchObject({ signatureValid: true });
+    await expect(parseWith(`${exact}a`)).resolves.toMatchObject({ signatureValid: false });
+    await expect(parseWith(`${exact}aa`)).resolves.toMatchObject({ signatureValid: false });
+    await expect(parseWith(`${exact.slice(0, 63)}z`)).resolves.toMatchObject({ signatureValid: false });
+  });
+
   it("rejects a tampered payload / wrong signature", async () => {
     const provider = new FakeProvider();
     const payload = JSON.stringify({
@@ -46,14 +59,11 @@ describe("FakeProvider", () => {
       type: "payment.succeeded",
       amountCents: 1000,
     });
-    // Signed for a different payload than the one actually sent.
     const wrongSignature = signFakeWebhookPayload(payload + "tampered");
-
     const parsed = await provider.parseWebhook({
       rawBody: payload,
       headers: { "x-onlylive-fake-signature": wrongSignature },
     });
-
     expect(parsed.signatureValid).toBe(false);
   });
 
@@ -65,7 +75,6 @@ describe("FakeProvider", () => {
       type: "payment.succeeded",
       amountCents: 1000,
     });
-
     const parsed = await provider.parseWebhook({ rawBody: payload, headers: {} });
     expect(parsed.signatureValid).toBe(false);
   });

@@ -1,13 +1,20 @@
 # Payments
 
-**No Moroccan payment provider has been selected yet.** Everything below
-describes the abstraction and the fake/sandbox implementation used for
-development — never a real PSP's API. When a provider is chosen, its
-adapter is implemented from its official documentation and registered in
-`lib/payments/index.ts::getPaymentProvider()`; nothing else in the app
-should need to change.
+OnlyLive keeps provider-independent money/ticket invariants in this document.
+ChariPay is the selected real PSP candidate and is being integrated from its
+official v1 documentation in draft PR #13. Provider-specific request fields,
+HMAC headers, refund semantics, sandbox acceptance steps and remaining go-live
+gates are documented in `docs/CHARIPAY.md`.
 
-## `PaymentProvider` interface (`lib/payments/provider.ts`)
+The `FakeProvider` remains the local/CI provider. Production ChariPay traffic is
+not approved until the exact signed webhook JSON has been validated against a
+real sandbox delivery, the sandbox payment/refund lifecycle has been exercised,
+full CI is green and an independent audit has been triaged.
+
+## `PaymentProvider` interface
+
+`lib/payments/provider.ts` is the only provider contract used by checkout,
+webhook processing and refunds:
 
 ```ts
 interface PaymentProvider {
@@ -15,348 +22,327 @@ interface PaymentProvider {
   createPayment(input: CreatePaymentInput): Promise<CreatePaymentResult>;
   parseWebhook(input: ParseWebhookInput): Promise<ParsedWebhookEvent>;
   refund(input: RefundInput): Promise<RefundResult>;
+  getRefundStatus(refundReference: string): Promise<RefundStatusResult>;
+  closePaymentSession(providerPaymentId: string, requestId: string): Promise<ClosePaymentSessionResult>;
 }
 ```
 
-- `createPayment` starts a payment and returns a `redirectUrl` (a real PSP:
-  its hosted checkout URL) plus a `providerPaymentId`.
-- `parseWebhook` takes the raw request body and headers, verifies the
-  provider's signature, and returns a normalized event
-  (`payment.succeeded` / `payment.failed` / `payment.cancelled` /
-  `refund.succeeded`) with `amountCents`, `currency`, and
-  `signatureValid: boolean` — the webhook route never trusts
-  `amountCents`/`currency` without comparing them against the `Payment`
-  row first (see Amount/currency verification below).
-- `refund` is wired into the admin dashboard — see Refunds below.
+The normalized webhook types currently needed by the application are:
 
-## Fake payments are blocked outside deliberate dev/test use
+- `payment.succeeded`
+- `payment.failed`
+- `payment.cancelled`
+- `refund.succeeded`
+- `refund.failed`
 
-`lib/payments/index.ts::isFakePaymentsAllowed()` returns `false` whenever
-`NODE_ENV=production` unless `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION=true` is
-also set. This is enforced in four places:
+A browser redirect is never proof of payment. Tickets become valid only after a
+server-side provider event has passed authentication, idempotency and business
+integrity checks.
 
-1. `getPaymentProvider()` throws if `PAYMENT_PROVIDER=fake` and fake
-   payments aren't allowed.
-2. `instrumentation.ts` calls `getPaymentProvider()` once at server boot,
-   so a misconfigured production deployment **fails to start** instead of
-   only failing on the first webhook.
-3. `/pay/fake/[paymentId]` (the sandbox checkout page) calls `notFound()`
-   when disabled.
-4. `POST /api/pay/fake/[paymentId]/simulate` and
-   `POST /api/payments/webhook/fake` both return 404 immediately when
-   disabled, before doing anything else (including before requiring a
-   session).
+`RefundResult.state` is either `succeeded` or `processing`. The fake provider
+settles immediately; ChariPay returns an asynchronous pending result and final
+state arrives by signed webhook or authenticated provider-status reconciliation.
 
-`ALLOW_FAKE_PAYMENTS_IN_PRODUCTION=true` is only ever set for a
-deliberate non-production-traffic run — e.g. the Playwright e2e suite,
-which drives a real `next start` (always `NODE_ENV=production`) and sets
-this in `playwright.config.ts`'s `webServer.env`. It must never be set for
-a real deployment. See `tests/unit/payments/productionGuard.test.ts`.
+## Provider selection and production guards
 
-## Order/payment state machine and event-transition policy
+`getPaymentProvider()` supports `fake` and `charipay`.
 
-`Order.status`: `pending_payment → paid | failed | cancelled |
-paid_but_unfulfillable`; `paid | paid_but_unfulfillable → refunded |
-partially_refunded`; `failed | cancelled → paid | reconciliation_required`
-(see Reconciliation below); `reconciliation_required → refunded`. See
-`lib/orders/stateMachine.ts` for the full, independently unit-tested
-transition table — that module is a pure documentation/validation layer;
-the actual concurrency-safe enforcement is the guarded SQL
-`UPDATE ... WHERE status = 'pending_payment'` in
-`lib/orders/fulfillment.ts`, which is both the row lock and the guard.
+Fake payments are refused whenever `NODE_ENV=production` unless
+`ALLOW_FAKE_PAYMENTS_IN_PRODUCTION=true` is deliberately set for an isolated
+non-customer environment such as Playwright's production-mode test server.
+The fake pay page and fake HTTP endpoints have matching guards.
 
-`Payment.status`: `pending → awaiting_payment → paid | failed |
-cancelled`; `paid → refunded | partially_refunded`.
+When `PAYMENT_PROVIDER=charipay`:
 
-**Policy: `Payment.status` only changes on a real transition, and never
-hides evidence that money was captured.** The webhook route
-(`app/api/payments/webhook/fake/route.ts`) only writes `Payment.status`
-when `confirmOrderPayment`/`failOrderPayment` return an outcome that
-actually applied (`paid`, `paid_but_unfulfillable`,
-`reconciliation_required`, `failed`, `cancelled`) — never when they
-return `already_handled` (the order had already left `pending_payment`
-via a *different, non-contradictory* path) or `order_not_found`. This is
-what makes these all safe, in any order or concurrently:
+- `CHARIPAY_API_KEY`, `CHARIPAY_WEBHOOK_SECRET`, `CHARIPAY_ENV` and
+  `ONLYLIVE_PUBLIC_URL` are mandatory;
+- `CHARIPAY_ENV=sandbox` requires a `chari_sk_test_...` key and is the only
+  allowed mode outside Vercel Production;
+- Vercel Preview/Development therefore cannot use live credentials even though
+  their Next.js build itself runs in production mode;
+- Vercel Production requires `CHARIPAY_ENV=live`, a `chari_sk_live_...` key,
+  `CHARIPAY_PROVIDER_VERIFIED=true`, and a 16+ character `CRON_SECRET` so the
+  automated refund-reconciliation fallback cannot silently be disabled;
+- `ONLYLIVE_PUBLIC_URL` is the canonical HTTPS origin for PSP return/webhook
+  URLs; request Host/Origin data is never used for ChariPay callbacks;
+- `instrumentation.ts` calls `getPaymentProvider()` at boot, so missing/unsafe
+  provider configuration fails before customer traffic is served.
 
-- `payment.succeeded` then `payment.failed` (or vice versa) for the same
-  payment — whichever arrives first wins. If `succeeded` wins, a later
-  `failed` is acknowledged (200) but is a no-op. If `failed` wins
-  first, a later `succeeded` is **not** treated as a no-op — see
-  Reconciliation below, since that specific ordering is exactly the
-  "customer charged, order marked failed" risk this policy exists to
-  close.
-- Two differently-IDed events for the same logical payment.
-- Simultaneous `succeeded`/`failed` deliveries — the Payment row lock
-  (see Atomicity below) serializes them; exactly one final outcome is
-  reached deterministically (see Reconciliation).
+Never commit or log payment credentials or webhook secrets.
 
-`paid_but_unfulfillable` exists because a hold can expire (and its stock
-get resold) in the window between "customer clicks pay" and "provider
-confirms payment" while the order was still `pending_payment` — see
-`lib/orders/checkout.ts`'s checkout-expiry extension, which shrinks but
-cannot eliminate this race. When it happens, the customer's money was
-captured (`Payment.status = 'paid'`) but no tickets are generated; this is
-intentional (never oversell) but currently has **no automated
-resolution** — an admin must notice it (surfaced in the dashboard's
-attention metrics) and manually issue a full refund from the order
-detail page; there is no automatic trigger yet (tracked in TASKS.md).
+## Order/payment state machine
 
-## Reconciliation: a contradictory payment.succeeded after failed/cancelled
+`Order.status` includes:
 
-**The real payment provider has not been selected yet.** The policy below
-is a conservative stopgap based on "never assume a payment lifecycle
-transition is impossible" and "never silently drop evidence that money
-was captured" — it is **not** derived from any real PSP's documented
-event guarantees. Once a provider is chosen, revisit this against its
-actual official lifecycle documentation (can a `succeeded` event really
-follow a `failed`/`cancelled` one for that provider? is a later event
-authoritative? is there a dispute/chargeback flow that interacts with
-this?) rather than assuming this heuristic still applies.
+- `pending_payment`
+- `paid`
+- `failed`
+- `cancelled`
+- `paid_but_unfulfillable`
+- `reconciliation_required`
+- `partially_refunded`
+- `refunded`
 
-If a validly-signed, amount/currency-matching `payment.succeeded` event
-arrives for an order the app had already settled as `failed` or
-`cancelled`, `confirmOrderPayment` routes it to
-`reconcileContradictorySuccess` (`lib/orders/fulfillment.ts`) instead of
-treating it as `already_handled`:
+`Payment.status` includes:
 
-1. It re-checks, atomically (locking each affected `TicketCategory`'s
-   `Inventory` row, same pattern as `createHold`), whether the order's
-   original items can still be fulfilled from current stock. The
-   original `Reservation` stays `cancelled` (it accurately was, at the
-   time of the earlier failure) — fulfillment here consumes fresh
-   inventory directly into `sold_quantity`, it does not reuse the old
-   hold.
-2. **If fulfillable**: tickets are generated and the order becomes
-   `paid` — a captured payment is never left stranded on a dead order
-   when avoidable.
-3. **If not** (the stock was resold in the meantime): the order becomes
-   `reconciliation_required` — no ticket is generated (never oversell),
-   and a human must resolve it (manually fulfil if stock frees up, or
-   refund). This is a terminal, human-only state: it is never
-   re-attempted automatically by a later event.
-4. Either way, `Payment.status` is set to `paid` (money was captured —
-   this is a fact, independent of whether the order could be fulfilled)
-   and an `AuditLog` entry is written
-   (`payment.contradictory_success_reconciled_and_fulfilled` or
-   `payment.contradictory_success_requires_reconciliation`).
+- `pending`
+- `awaiting_payment`
+- `paid`
+- `failed`
+- `cancelled`
+- `partially_refunded`
+- `refunded`
 
-See `tests/integration/payment-webhook.test.ts` for: failed→succeeded
-while still fulfillable, failed→succeeded after the stock was resold,
-cancelled→succeeded, and the audit records both paths create.
+The pure transition graph is in `lib/orders/stateMachine.ts`; concurrency-safe
+money/ticket transitions are enforced by row locks and guarded database writes
+in fulfillment/refund code.
 
-## Atomicity: claiming and processing a webhook event
-
-The entire webhook handler — locking the `Payment` row, claiming the
-event, the amount/currency check, the order-row-locked fulfillment
-transition, and marking the event `processedAt` — runs inside **one**
-database transaction (`prisma.$transaction`). This matters specifically
-because "claim the event" (the `payment_events` insert) and "apply it"
-(the order/payment state change) must succeed or fail together: if they
-were separate transactions, a crash between them would leave a
-claimed-but-unprocessed event that a provider retry would see as
-`ON CONFLICT` and skip — silently losing the payment confirmation.
-
-As defense in depth against a `payment_events` row that predates this
-atomicity guarantee (or any other anomaly) existing with `processedAt`
-still `null`, the handler checks that column on a conflict: a `null`
-means the prior attempt never finished, and the event is reprocessed
-rather than silently acknowledged as a duplicate. See
-`tests/integration/payment-webhook.test.ts`'s "reprocesses a
-payment_events row that was claimed but never marked processed" test.
-
-Locking the `Payment` row itself (`SELECT ... FOR UPDATE`) at the top of
-the transaction is additional defense in depth alongside the
-`payment_events` unique constraint and the order-row lock inside
-`confirmOrderPayment`/`failOrderPayment`: it fully serializes concurrent
-webhook deliveries for the *same* payment even when they carry different
-event ids.
-
-### Reclaim consistency
-
-Reclaiming a `payment_events` row (existing row, `processedAt` still
-null) only reprocesses it if the current request agrees with what was
-originally claimed on every immutable fact:
-`existing.paymentId === payment.id` (the currently-resolved Payment
-matches), `existing.eventType === event.type`, the original attempt's
-`signatureValid` was **not** `false` (an event id once seen with an
-invalid signature can never be "upgraded" to valid processing by a later
-attempt — that would let a forgery attempt succeed just by resending the
-same id once the secret is guessed/leaked), and the original raw
-payload's `amountCents`/`currency` (if present) match the current event's.
-Any mismatch is rejected (`409 EVENT_COLLISION`), audited
-(`payment.webhook_event_collision`), and — critically — the existing
-row's `rawPayload`/`signatureValid` are left untouched, so the historical
-record of the anomaly is never overwritten by whatever the colliding
-attempt claims. See `tests/integration/payment-webhook.test.ts`.
-
-## Amount/currency verification
-
-Before any fulfillment logic runs, the webhook handler compares the
-event's `amountCents`/`currency` against the `Payment` row's own values.
-A mismatch — even with a validly-signed event — is logged to `AuditLog`
-(`action: "payment.amount_mismatch"`), the `payment_events` row is marked
-processed (so it isn't retried forever), and the handler returns
-`409 AMOUNT_MISMATCH` without generating any ticket or changing
-`Order`/`Payment` status. See `tests/integration/payment-webhook.test.ts`.
+Policy: `Payment.status` changes only when a real transition is applied and must
+never hide evidence that money was captured. A late/conflicting failure cannot
+overwrite a payment already known to be paid.
 
 ## Checkout idempotency
 
-`lib/orders/checkout.ts::startCheckout` guarantees **at most one** Order
-per Reservation, **and** at most one call to `provider.createPayment` per
-Payment — two distinct guarantees, both needed:
+`lib/orders/checkout.ts::startCheckout` provides two separate guarantees.
 
-**One Order per Reservation** (`ensurePendingOrderAndPayment`):
-- Locks the `Reservation` row (`FOR UPDATE`) first, so concurrent
-  checkout requests for the *same* reservation fully serialize — only
-  the first creates an Order/Payment; every other one (sequential retry
-  or concurrent race) takes the "already checked out" branch.
-- `order_items.reservation_id` carries a database `UNIQUE` constraint as
-  defense in depth, independent of the application-level lock.
-- **Expiry guard**: if provider initialization never completed for the
-  existing Payment (no `redirectUrl` yet) and the reservation has since
-  expired — checked directly against `expires_at`, the same lazy-expiry
-  idiom as `lib/inventory.ts`, so this doesn't depend on the background
-  sweep having run — this throws `409 HOLD_EXPIRED` rather than letting
-  the caller start a brand-new provider payment for stock that may no
-  longer be reserved. If initialization *did* already complete, the
-  stored redirect is still returned regardless of expiry (the customer
-  may already have a real PSP session open).
+### One Order per Reservation
 
-**One provider call per Payment** (`claimAndInitializeProvider`): a
-locked database row alone doesn't stop this — two concurrent callers can
-both pass "no redirectUrl yet" and both call the provider before either
-one writes back. `payments.provider_init_at` is a durable claim:
-- A caller atomically claims it with a guarded
-  `UPDATE ... WHERE provider_payment_id IS NULL AND (provider_init_at IS
-  NULL OR provider_init_at < now() - <timeout>)`. Only the winner calls
-  `provider.createPayment`; every other concurrent caller polls briefly
-  (checking whether the winner has since stored a `redirectUrl`) instead
-  of calling the provider itself.
-- The claim and the provider call are separate statements — no database
-  transaction spans the network I/O.
-- A stale claim (the claimant crashed or the request timed out) expires
-  after the timeout window and can be reclaimed by the next caller,
-  instead of blocking that Payment forever.
-- `idempotencyKey` is generated once when the Payment row is created and
-  is never regenerated across claims/retries — every attempt presents
-  the provider the same key.
-- On failure, the claim is released immediately (not left to expire) so
-  the very next retry can attempt again right away, and the
-  already-committed Order/Payment are left exactly as they were
-  (`pending_payment` / `awaiting_payment`, no `providerPaymentId`) — a
-  second Order is never created because of a provider failure.
+The reservation row is locked with `FOR UPDATE`. The first caller creates the
+Order/Payment; sequential/concurrent retries reuse them. The database unique
+constraint on `order_items.reservation_id` is defense in depth.
 
-See `tests/integration/checkout-idempotency.test.ts` for sequential
-retry, concurrent retry (asserting `provider.createPayment` is called
-exactly once, not merely that one database Order exists),
-provider-failure-then-retry, and expired-retry-after-provider-failure
-scenarios.
+If provider initialization has not completed and the reservation has already
+expired, retry fails with `HOLD_EXPIRED`. If a provider session was already
+created, an expired local reservation does **not** blindly return the stored
+redirect: checkout returns `CHECKOUT_RECONCILIATION_REQUIRED` and inventory
+stays reserved until provider-aware reconciliation proves the session
+terminal/non-payable or confirms payment.
 
-## Refunds
+### At most one provider initialization in flight
 
-`lib/orders/refund.ts::initiateRefund` — admin-initiated (`admin`/
-`super_admin` only; `support` is read-only), full or partial:
+`payments.provider_init_at` is a durable claim. Only the caller winning the
+atomic guarded update invokes `provider.createPayment`; other callers poll for
+the stored provider result. A stale claim can be reclaimed after the recovery
+window.
 
-1. Locks the `Payment` and `Order` rows (`FOR UPDATE`) for the entire
-   operation, provider call included. This differs from checkout's
-   `provider_init_at` claim-then-verify split: it's safe here because
-   `FakeProvider.refund()` is synchronous local work with no real network
-   I/O, and refunds are a low-frequency, human-driven action rather than
-   high-concurrency checkout traffic. Holding the lock across a real PSP's
-   HTTP call would block other work against that payment for the
-   round-trip — if that matters once a real provider is integrated,
-   switch this to the same claim-then-verify split as
-   `lib/orders/checkout.ts`.
-2. Rejects (`409 PAYMENT_NOT_REFUNDABLE`) unless `Payment.status` is
-   `paid` or `partially_refunded`. Rejects (`409
-   REFUND_EXCEEDS_REMAINING`) an amount greater than `amountCents` minus
-   the sum of that payment's already-`succeeded` refunds.
-3. A partial refund (amount less than the full remaining balance) is only
-   a legal transition from `paid`/`partially_refunded` — see
-   `lib/orders/stateMachine.ts`. An order in `paid_but_unfulfillable` or
-   `reconciliation_required` has no fulfilled tickets to partially
-   retain, so only a full refund is accepted there (`409
-   PARTIAL_REFUND_NOT_ALLOWED` otherwise).
-4. On a full refund, every ticket still `valid` is cancelled and its
-   category's `sold_quantity` is released for resale. A ticket already
-   `used` is left untouched — the seat was consumed and is never resold
-   regardless of refund. A partial refund never touches tickets or
-   inventory, since which specific tickets a partial amount corresponds
-   to isn't specified by the current (order/payment-level, not
-   per-ticket) admin UI.
-5. **The provider call is never allowed to `throw` out of the transaction
-   callback.** Doing so would roll back this function's own bookkeeping
-   (marking the `Refund` row `failed`, writing the audit log) along with
-   everything else — the transaction would commit as if the attempt never
-   happened, silently discarding evidence of it. Failure is instead
-   returned as a value from the transaction and turned into a `502
-   PROVIDER_REFUND_FAILED` only after that transaction has committed with
-   the `Refund` row correctly left `failed`. A later retry attempt is not
-   blocked by the earlier failure.
-6. `RefundInput.idempotencyKey` (the `Refund` row's own id) is passed to
-   `provider.refund()` — `FakeProvider` ignores it, but a real adapter
-   must forward it to the PSP so a retried refund request can never
-   double-refund.
+The Payment's idempotency key is created once and reused for every provider
+retry. A provider/network failure never creates a second Order.
 
-See `tests/integration/refunds.test.ts`: full refund, partial refund
-(tickets/inventory untouched), a second partial refund completing the
-balance (only then are tickets cancelled), exceeding the remaining
-balance, refunding a never-paid or already-fully-refunded payment,
-partial refund rejected on `paid_but_unfulfillable`, an already-`used`
-ticket never cancelled/double-released, a provider failure leaving
-state unchanged and auditable followed by a successful retry, and
-concurrent refund attempts on the same payment serializing so their
-total never exceeds the paid amount.
+For ChariPay the provider session receives an `expiresAt` one minute before
+the local Order/Reservation deadline. That guard window gives webhook/provider
+reconciliation time before local expiry; local expiry alone still never
+authorizes releasing order-linked inventory.
 
-A successful refund also triggers `lib/email/notifications.ts::sendRefundConfirmationEmail`,
-after the transaction commits — see docs/ARCHITECTURE.md's transactional
-email section.
+## Payment webhook authentication and idempotency
 
-## Hold cancellation vs. checkout
+Provider adapters authenticate raw HTTP data before business state is changed.
+FakeProvider uses its test HMAC scheme. ChariPay uses the exact raw-body
+HMAC/timestamp/event-id contract documented in `docs/CHARIPAY.md`.
 
-Once a reservation's checkout has started (`reservation.order_id` is
-set), `lib/inventory.ts::releaseHold` refuses to cancel it
-(`409 CHECKOUT_IN_PROGRESS`) — a payment may still be in flight, and
-releasing the stock could let it be resold to someone else while the
-original payment still succeeds (exactly the race `paid_but_unfulfillable`
-exists to catch; better to prevent it here than rely on that fallback).
-Order-level cancellation (with any refund a started payment would need)
-is a separate, not-yet-built flow. See
-`tests/integration/hold-cancellation.test.ts`.
+A provider-specific route normalizes the event, then OnlyLive applies the same
+business rules:
 
-## FakeProvider (`lib/payments/fakeProvider.ts`)
+1. signature/authentication must be valid;
+2. the Payment must resolve to the intended provider reference/external id;
+3. the provider logical event id is claimed in `payment_events` under the
+   unique `(provider, external_event_id)` constraint;
+4. payment amount/currency must equal the stored Payment values before any
+   ticket/order transition;
+5. the Payment row serializes different logical events for the same payment;
+6. fulfillment/failure runs under its existing Order/inventory locks;
+7. `processedAt` is written only when the intended business transition has
+   completed safely.
 
-Simulates a hosted-checkout PSP without inventing a real API:
+Deliveries are assumed to be at-least-once and potentially out of order.
+Duplicate events therefore must always be harmless.
 
-1. `createPayment` never makes an external call — it points `redirectUrl`
-   at the app's own `/pay/fake/[paymentId]` page.
-2. That page's "Simulate success/failure" buttons call
-   `POST /api/pay/fake/[paymentId]/simulate` (customer-session-gated, a
-   dev/sandbox convenience — a real PSP's webhook has no such gate).
-3. That route builds the exact webhook payload a provider would send
-   (`{eventId, providerPaymentId, type, amountCents, currency}`), signs it
-   with HMAC-SHA256 using `FAKE_PSP_WEBHOOK_SECRET` (a server-only secret,
-   never sent to the browser), and **actually POSTs it** to the real
-   `POST /api/payments/webhook/fake` route over HTTP.
-4. That route is the genuine verification path described above:
-   signature check → amount/currency check → idempotent atomic claim →
-   order-row-locked transition → ticket generation.
+### Interrupted event reclaim
 
-Because step 4 is real code exercised end-to-end (not stubbed), swapping
-in a real PSP later means implementing steps 1–3 against that PSP's actual
-API/webhook format — step 4's logic is reused unchanged.
+If a `PaymentEvent` exists but `processedAt` is still null, a retry is not
+blindly acknowledged as a duplicate. Reprocessing is allowed only when the
+incoming request is consistent with the immutable facts already claimed
+(payment, event type and original signature state, plus comparable payload
+facts). A collision is rejected/audited and never overwrites historical raw
+payload evidence.
 
-## Card data
+For ChariPay asynchronous refund events the event-claim transaction and refund
+finalizer are deliberately separate, but `processedAt` remains null until the
+idempotent finalizer succeeds. A process crash therefore causes provider retry
+to re-enter finalization instead of losing a money event.
 
-OnlyLive's app **never** collects or stores raw payment card data and
-never implements a custom card-processing system. Card entry happens
-entirely on the eventual PSP's PCI-DSS-compliant hosted checkout or
-equivalent secure element — this repo only ever sees a `redirectUrl` and,
-later, a webhook confirmation.
+## Amount/currency verification
 
-## Open decisions
+A valid provider signature does not prove the amount is correct.
 
-- Which Moroccan PSP to integrate (CMI, HPS/Onepay, or another —
-  **undecided**, do not build against any of them speculatively).
-- Automated (rather than admin-triggered) handling of
-  `paid_but_unfulfillable`/`reconciliation_required` orders.
+Before a payment success/failure transition, the normalized provider amount and
+currency are compared with the `payments` row. Mismatches are audit logged and
+cannot generate tickets or mutate payment/order settlement state.
+
+Refund webhooks already apply the same fail-closed integrity checks before any
+financial mutation: exact Refund amount, explicit MAD currency, ownership of
+the resolved Payment, and provider/external identifiers whenever the event
+contains them. The same evidence is revalidated under Refund/Payment row locks
+inside the finalizer transaction before status, ticket or inventory mutation.
+The exact ChariPay sandbox JSON shape still must be captured and pinned before
+production; fields not guaranteed by public documentation are never invented
+or defaulted into trusted financial facts.
+
+## Late or contradictory payment success
+
+A payment can theoretically be confirmed after the original hold has expired or
+a prior failure/cancellation has already released inventory. Overselling is
+never allowed just because money arrived.
+
+### Pending order, expired/unavailable inventory
+
+If a success arrives for `pending_payment` but the original hold can no longer
+be fulfilled, the order becomes `paid_but_unfulfillable`. Payment remains
+`paid`; no ticket is invented and a human must reconcile/refund.
+
+### Success after `failed`/`cancelled`
+
+`reconcileContradictorySuccess` tries to fulfill fresh inventory under the
+normal inventory locks:
+
+- if stock still exists, generate tickets and move the order to `paid`;
+- otherwise move it to `reconciliation_required`, with Payment still `paid`.
+
+Both outcomes are audit logged. This policy intentionally prefers visible human
+reconciliation over silently dropping evidence of captured money. It remains a
+conservative defense even when a provider documents such event orderings as
+unlikely/impossible.
+
+## Refunds: two-phase asynchronous-safe design
+
+`lib/orders/refund.ts::initiateRefund` is admin/super-admin only; the Server
+Action also keeps the admin CSRF protection.
+
+A real PSP refund must not be treated as complete merely because an HTTP submit
+call returned successfully. ChariPay explicitly settles refunds asynchronously,
+so the generic flow is now two-phase.
+
+### Phase 1 — reserve refundable balance
+
+Inside a database transaction:
+
+1. lock Payment then Order;
+2. require a refundable payment status and provider reference;
+3. calculate remaining refundable balance using both `processing` and
+   `succeeded` Refund rows;
+4. reject any amount that would over-refund;
+5. validate partial/full transition policy;
+6. create one durable Refund row in `processing` and an audit entry.
+
+The transaction commits **before network I/O**. A pending refund therefore
+reserves its amount so concurrent admins cannot each submit a refund whose
+combined total exceeds the captured payment.
+
+### Phase 2 — provider submission and settlement
+
+The provider call uses the durable Refund id as its stable idempotency/reference
+value.
+
+- Immediate `succeeded` (FakeProvider): finalize directly.
+- Accepted asynchronous request (ChariPay): keep `processing`; do not alter
+  tickets, Payment, Order or inventory.
+- Definitive provider rejection (ordinary validation/business-rule 4xx other
+  than 409): mark that Refund failed so its reserved amount becomes available
+  for a later business attempt.
+- Any HTTP `409` is treated conservatively as ambiguous for a money-moving
+  request. Preserve the original refund reference and reconcile it instead of
+  guessing from a provider-specific conflict code.
+- Ambiguous outcome (network exception, 408, 409, 429, or provider 5xx): keep
+  the Refund `processing` and reserved. A timeout or conflict may happen after
+  provider acceptance; creating a new random refund would risk returning money
+  twice.
+
+Ambiguous/stuck refunds are reconciled by the authenticated housekeeping
+sweep using `GET /v1/refunds/{reference}`. `SUCCESS`/`FAILED` finalize the same
+Refund; `PENDING` stays reserved. A provider `404/not_found` replays the original
+intent with the **same Refund.id/refundReference**. Blind creation of another
+Refund reference is prohibited. `vercel.json` schedules this endpoint daily on
+the current Hobby deployment as a conservative fallback. A commercial go-live
+must use a materially faster scheduler cadence, with the provider's real rate
+limits/backoff budget verified first; the daily fallback alone is not adequate
+for operational recovery.
+
+### `refund.succeeded`
+
+The idempotent finalizer locks Refund → Payment → Order and computes total
+confirmed refunds. It then:
+
+- marks the Refund `succeeded`;
+- moves Payment/Order to `partially_refunded` or `refunded`;
+- on full refund only, cancels still-valid tickets and releases their sold
+  inventory;
+- never cancels/re-sells already-used tickets;
+- writes an audit entry and triggers the refund-confirmation email after
+  commit. The current `EmailLog` claim prevents duplicate sends, but crash-safe
+  exactly-once delivery is a separate known gap tracked in `TASKS.md` / PR #17.
+
+Duplicate success deliveries do not repeat stock/ticket effects. A Refund that
+has already been finalized `failed` is terminal locally: a later contradictory
+success webhook is not allowed to mutate money/ticket state automatically. It
+remains a reconciliation anomaly requiring provider evidence/manual handling;
+failed refunds are surfaced in admin attention.
+
+### `refund.failed`
+
+The idempotent failure finalizer changes only the Refund row/audit state. Its
+amount stops reserving refundable balance, allowing a later deliberate retry.
+Payment/Order/ticket/inventory state remains unchanged. A later failure can
+never downgrade a Refund that is already `succeeded`.
+
+## Provider failure classification
+
+`ProviderRequestError` distinguishes a definitive provider rejection from an
+unknown money-moving outcome.
+
+For ChariPay HTTP responses:
+
+- ordinary validation/business-rule 4xx other than 409: definitive rejection;
+- any 409 response: preserve/reconcile the original intent rather than risk
+  freeing a refund amount whose provider outcome may already exist;
+- 408/429/5xx: ambiguous outcome because provider acceptance cannot safely be
+  ruled out (`Retry-After` is preserved when supplied);
+- transport/network exception or timeout: ambiguous.
+
+This distinction matters most for refunds. Checkout creation also remains
+provider-idempotent through the stable Payment idempotency key. Provider-specific
+checkout-session cancellation interprets its documented terminal response
+separately and remains fail-closed on ambiguous 404/409 states.
+
+## Auditability
+
+Money-state anomalies and transitions are written to `AuditLog`, including:
+
+- payment amount/currency mismatches;
+- webhook event collisions;
+- contradictory payment-success reconciliation;
+- refund requested/submitted/succeeded/failed;
+- ambiguous refund submission outcome.
+
+Do not log raw card data, credentials, auth tokens or webhook secrets.
+
+## Testing
+
+Dangerous provider-independent cases are covered by integration/E2E tests,
+including inventory races, checkout idempotency, duplicate/out-of-order payment
+callbacks, wrong amount/currency, late payment, refund concurrency, partial/full
+refund transitions, used-ticket behavior and access control.
+
+PR #13 additionally covers:
+
+- ChariPay hosted-session request shape and idempotency fields;
+- MAD major-unit conversion and HTTPS/expiry guards;
+- raw-body HMAC verification, timestamp replay window and secret rotation;
+- production sandbox/live configuration guard;
+- asynchronous refund pending state without premature ticket/stock mutation;
+- pending-refund balance reservation against over-refund;
+- idempotent refund success/failure finalization;
+- fair concurrent checkout/refund reconciliation claims;
+- legacy FakeProvider/browser flows.
+
+A real sandbox run is still mandatory before production because provider unit
+fixtures cannot substitute for capturing the exact signed JSON emitted by the
+external system. See `docs/CHARIPAY.md` and `TASKS.md`.

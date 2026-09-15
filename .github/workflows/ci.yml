@@ -77,6 +77,11 @@ jobs:
       - name: Unit + integration tests
         run: npm test
 
+      - name: Repeat unit + integration tests twice on the same DB
+        run: |
+          npm test
+          npm test
+
       - name: Install Playwright browser
         run: npx playwright install --with-deps chromium
 

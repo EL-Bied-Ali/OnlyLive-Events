@@ -165,6 +165,10 @@ dismissed without evidence) and fixed:
   triggers using `EmailLog` uniqueness.
 - Notifications run after the business transaction commits; email failure
   never rolls back money/ticket state.
+- Known durability gap: the current `EmailLog` claim-before-send flow prevents
+  duplicates but is not crash-safe exactly-once delivery. Durable outbox/retry
+  work is tracked separately in PR #17 and must land before production email
+  delivery is considered reliable.
 
 ## Completed (auth rate limiting — PR #8)
 
@@ -232,16 +236,36 @@ dismissed without evidence) and fixed:
 
 ## In progress
 
-- None.
+- **ChariPay real PSP integration — draft PR #13**, now based on current `main`
+  including the PR #15 purchase-limit concurrency follow-up. The adapter is derived from ChariPay's
+  published v1 API reference, not guessed endpoints: hosted checkout sessions,
+  stable `externalId` + idempotency keys, HMAC/timestamp webhook validation,
+  `Chari-Event-Id` deduplication, checkout expiry aligned to the OnlyLive hold,
+  and asynchronous refunds.
+- Real refunds are now designed as a two-phase flow: submitting a refund
+  creates a durable `processing` row before network I/O and reserves that
+  amount against concurrent refunds; tickets/payment/order/inventory change
+  only after a provider-confirmed success. Ambiguous network outcomes remain
+  reserved instead of risking a duplicate refund.
+- Contract/unit/integration coverage now exercises ChariPay request shapes,
+  webhook signature/timestamp/secret rotation, real route dedup/collision and
+  financial-integrity checks, sandbox/live deployment guards, asynchronous
+  refund reconciliation/replay and historical FakeProvider compatibility.
+- ChariPay reconciliation tests avoid pristine-database assumptions; CI runs the complete Vitest suite three times total (one fresh pass plus two additional passes on the same populated database) to catch pollution/order flakes.
+- **Not production-ready yet:** the exact signed webhook JSON mapping still
+  needs to be pinned against a real sandbox delivery (the public docs expose
+  the signing contract and delivery log, but say the exact signed body is read
+  from an emitted event). PR #13 stays draft until sandbox validation and the
+  final independent audit are complete.
 
 ## Next
 
-1. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
-   from official docs (never speculatively). Re-derive contradictory-event
-   reconciliation from that provider's real lifecycle and revisit holding a
-   database row lock across the real network refund call.
-2. Select a real email provider (Resend/Postmark/SES/...) and implement its
-   adapter from official docs; add background retry for failed sends.
+1. Validate PR #13 against a real ChariPay sandbox account: create the
+   webhook endpoint, send a synthetic event, perform one successful/failed
+   hosted checkout and one refund, then pin the exact webhook payload fixtures.
+2. Finish/review the durable email-outbox work tracked in PR #17, then select
+   a real provider (Resend/Postmark/SES/...) and implement its adapter from
+   official docs.
 3. Decide the production managed-Postgres provider and document/test the
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
@@ -257,10 +281,13 @@ dismissed without evidence) and fixed:
 
 ## Blocked
 
-- Real PSP integration is blocked on OnlyLive selecting a provider.
+- ChariPay sandbox end-to-end validation is blocked on a sandbox API key,
+  webhook signing secret and a deliberate public HTTPS test/preview URL. Real
+  production go-live additionally requires OnlyLive merchant/KYB approval and
+  live credentials; no production secret should be committed or pasted here.
 - Real email delivery is blocked on OnlyLive selecting a provider.
-- Legal document drafting is blocked on legal/accountant review and the
-  eventual PSP's requirements.
+- Legal document drafting is blocked on legal/accountant review and ChariPay's
+  final merchant/go-live requirements.
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 

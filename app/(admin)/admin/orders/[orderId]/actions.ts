@@ -13,9 +13,6 @@ export async function refundPaymentAction(
   formData: FormData,
 ): Promise<AdminActionState> {
   try {
-    // Refunds move money: admin/super_admin only, never support. Keep both
-    // authorization and the session-bound CSRF token check inside the
-    // action because Server Actions are directly invocable POST endpoints.
     const admin = await requireAdminRole(["super_admin", "admin"]);
     await assertAdminServerActionCsrf(formData);
 
@@ -32,6 +29,12 @@ export async function refundPaymentAction(
     });
 
     revalidatePath("/admin", "layout");
+    if (result.state === "processing") {
+      return {
+        status: "success",
+        message: "Remboursement envoyé au prestataire — confirmation en attente",
+      };
+    }
     return {
       status: "success",
       message:

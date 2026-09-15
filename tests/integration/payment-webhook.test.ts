@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { NextRequest } from "next/server";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
 import { POST as webhookPost } from "@/app/api/payments/webhook/fake/route";
@@ -39,6 +39,25 @@ async function post(payload: object, badSignature?: string) {
 }
 
 describe("payment webhook — verification, idempotency, and fulfillment", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("processes a fake Payment even when PAYMENT_PROVIDER defaults to ChariPay", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    vi.stubEnv("PAYMENT_PROVIDER", "charipay");
+
+    const response = await post(makePayload(fixture, "payment.succeeded"));
+    expect(response.status).toBe(200);
+
+    const [order, event] = await Promise.all([
+      prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } }),
+      prisma.paymentEvent.findFirstOrThrow({ where: { paymentId: fixture.payment.id } }),
+    ]);
+    expect(order.status).toBe("paid");
+    expect(event.provider).toBe("fake");
+  });
+
   it("confirms payment and generates exactly one ticket per unit for a qty=3 order", async () => {
     const fixture = await createOrderAwaitingPayment({ quantity: 3 });
     const response = await post(makePayload(fixture, "payment.succeeded"));
