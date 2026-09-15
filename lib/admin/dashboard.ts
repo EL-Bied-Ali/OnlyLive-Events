@@ -11,15 +11,17 @@ export async function getAdminMetrics() {
     prisma.ticket.count(),
     prisma.ticket.count({ where: { status: "used" } }),
     prisma.order.count({ where: { status: "pending_payment" } }),
-    // Async provider failures and expired-but-unresolved hosted checkouts must
-    // remain visible even after the initiating admin/customer leaves the page.
+    // Unresolved provider-backed financial work must remain visible even after
+    // the initiating admin/customer leaves the page. A processing refund is a
+    // reserved money operation whose final outcome is not known yet; failed
+    // refunds and expired-but-unresolved hosted checkouts also require review.
     // One order is counted once even if several attention conditions apply.
     prisma.order.count({
       where: {
         OR: [
           { status: { in: ATTENTION_STATUSES } },
           { status: "pending_payment", expiresAt: { lt: now } },
-          { payments: { some: { refunds: { some: { status: "failed" } } } } },
+          { payments: { some: { refunds: { some: { status: { in: ["processing", "failed"] } } } } } },
         ],
       },
     }),
