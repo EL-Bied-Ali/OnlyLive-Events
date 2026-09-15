@@ -237,14 +237,20 @@ async function claimAndInitializeProvider(
     try {
       const provider = getPaymentProvider();
       const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true } });
+      const origin = baseUrl.replace(/\/+$/, "");
+      const orderUrl = `${origin}/orders/${order.id}`;
       const created = await provider.createPayment({
         paymentId: payment.id,
         orderId: order.id,
+        orderNumber: order.orderNumber,
         amountCents: payment.amountCents,
         currency: payment.currency,
         idempotencyKey: payment.idempotencyKey,
         customerEmail: user.email,
-        returnUrl: `${baseUrl}/orders/${order.id}`,
+        returnUrl: orderUrl,
+        declineUrl: orderUrl,
+        notificationUrl: `${origin}/api/payments/webhook/${provider.name}`,
+        expiresAt: order.expiresAt ?? undefined,
       });
 
       const updated = await prisma.payment.update({

@@ -32,6 +32,13 @@ export async function refundPaymentAction(
     });
 
     revalidatePath("/admin", "layout");
+    if (result.status === "processing") {
+      return {
+        status: "success",
+        message: "Demande de remboursement envoyée — confirmation bancaire en attente",
+      };
+    }
+
     return {
       status: "success",
       message:

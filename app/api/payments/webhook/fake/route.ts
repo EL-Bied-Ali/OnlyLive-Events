@@ -91,6 +91,12 @@ export async function POST(request: NextRequest) {
 
     const provider = getPaymentProvider();
     const event = await provider.parseWebhook({ rawBody, headers });
+    // The fake provider always identifies a Payment by its provider-side
+    // reference. Real providers may reconcile through our own externalId,
+    // so the shared interface intentionally makes this field optional.
+    if (!event.providerPaymentId) {
+      return NextResponse.json({ error: "PAYMENT_REFERENCE_MISSING" }, { status: 400 });
+    }
 
     const payment = await prisma.payment.findUnique({
       where: { provider_providerPaymentId: { provider: provider.name, providerPaymentId: event.providerPaymentId } },
@@ -223,8 +229,8 @@ export async function POST(request: NextRequest) {
         }
         default:
           // refund.succeeded etc. — refunds are admin-initiated
-          // (lib/orders/refund.ts), not driven by an inbound PSP webhook
-          // event, so there's nothing to apply here yet.
+          // (lib/orders/refund.ts), not driven by an inbound fake PSP
+          // webhook event, so there's nothing to apply here.
           outcome = "ignored";
       }
 

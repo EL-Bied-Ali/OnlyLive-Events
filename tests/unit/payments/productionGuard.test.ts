@@ -40,6 +40,54 @@ describe("fake payments are impossible to enable accidentally in production", ()
   });
 });
 
+describe("ChariPay configuration fails closed", () => {
+  it("requires both the API key and webhook signing secret", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("PAYMENT_PROVIDER", "charipay");
+    vi.stubEnv("CHARIPAY_API_KEY", "");
+    vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "");
+    expect(() => getPaymentProvider()).toThrow(/CHARIPAY_API_KEY/);
+
+    vi.stubEnv("CHARIPAY_API_KEY", "chari_sk_test_onlylive_unit");
+    expect(() => getPaymentProvider()).toThrow(/CHARIPAY_WEBHOOK_SECRET/);
+  });
+
+  it("rejects undocumented API-key prefixes", () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("PAYMENT_PROVIDER", "charipay");
+    vi.stubEnv("CHARIPAY_API_KEY", "some_other_psp_key");
+    vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "webhook-secret");
+    expect(() => getPaymentProvider()).toThrow(/documented ChariPay test or live secret key/);
+  });
+
+  it("rejects a sandbox key in production unless staging explicitly opts in", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PAYMENT_PROVIDER", "charipay");
+    vi.stubEnv("CHARIPAY_API_KEY", "chari_sk_test_onlylive_staging");
+    vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "webhook-secret");
+    vi.stubEnv("ALLOW_CHARIPAY_TEST_KEY_IN_PRODUCTION", "");
+    expect(() => getPaymentProvider()).toThrow(/sandbox key cannot be used in production/);
+  });
+
+  it("allows an explicit production-runtime sandbox opt-in for non-customer staging", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PAYMENT_PROVIDER", "charipay");
+    vi.stubEnv("CHARIPAY_API_KEY", "chari_sk_test_onlylive_staging");
+    vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "webhook-secret");
+    vi.stubEnv("ALLOW_CHARIPAY_TEST_KEY_IN_PRODUCTION", "true");
+    expect(() => getPaymentProvider()).not.toThrow();
+  });
+
+  it("accepts a documented live key in production", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("PAYMENT_PROVIDER", "charipay");
+    vi.stubEnv("CHARIPAY_API_KEY", "chari_sk_live_onlylive_production");
+    vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "webhook-secret");
+    vi.stubEnv("ALLOW_CHARIPAY_TEST_KEY_IN_PRODUCTION", "");
+    expect(() => getPaymentProvider()).not.toThrow();
+  });
+});
+
 describe("fake payment routes/pages refuse to operate in production", () => {
   it("the fake webhook route returns 404 in production without the opt-in, before doing anything else", async () => {
     vi.stubEnv("NODE_ENV", "production");

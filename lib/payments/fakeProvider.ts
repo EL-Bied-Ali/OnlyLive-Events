@@ -8,6 +8,7 @@ import type {
   PaymentWebhookEventType,
   RefundInput,
   RefundResult,
+  RefundStatusResult,
 } from "@/lib/payments/provider";
 
 function getWebhookSecret(): string {
@@ -45,8 +46,7 @@ interface FakeWebhookPayload {
  * the app's own /pay/fake/[paymentId] page, whose "simulate" buttons POST
  * a genuinely HMAC-signed payload to the real webhook route, so the actual
  * verification path (signature check -> idempotent PaymentEvent insert ->
- * order-row-locked transition -> ticket generation) is exercised
- * end-to-end and gets reused unchanged once a real PSP is chosen.
+ * order-row-locked transition -> ticket generation) is exercised.
  */
 export class FakeProvider implements PaymentProvider {
   readonly name = "fake";
@@ -90,6 +90,12 @@ export class FakeProvider implements PaymentProvider {
   }
 
   async refund(_input: RefundInput): Promise<RefundResult> {
-    return { providerRefundId: `fake_refund_${crypto.randomUUID()}` };
+    return { providerRefundId: `fake_refund_${crypto.randomUUID()}`, status: "succeeded" };
+  }
+
+  async getRefundStatus(refundReference: string): Promise<RefundStatusResult> {
+    // FakeProvider refunds are synchronous; any reference that reached this
+    // fallback path is already successful from the application's point of view.
+    return { providerRefundId: refundReference, status: "succeeded" };
   }
 }
