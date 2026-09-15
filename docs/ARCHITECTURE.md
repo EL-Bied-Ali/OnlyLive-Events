@@ -262,10 +262,15 @@ integrated yet (see Known scope limitations below).
      overlapping/concurrent invocations get disjoint batches, never double-
      sending the same row.
    - Re-renders each row's content fresh from current data and re-validates
-     the business state it depends on (e.g. the order must still be `paid`
-     for a confirmation email) before sending — a row whose underlying
-     entity moved on since it was enqueued is marked `failed` with
+     the business state it depends on (e.g. an order confirmation still
+     sends for `paid` or `partially_refunded` — a partial refund never
+     cancels tickets, only a full one does — but not for `refunded` or any
+     other status) before sending — a row whose underlying entity moved on
+     since it was enqueued is marked `failed` with
      `entity_state_no_longer_valid` rather than sending stale/wrong content.
+     A row-level try/catch means a rendering exception (not just a provider
+     send failure) is retried on its own and never aborts the rest of the
+     claimed batch.
    - On a provider failure, retries with bounded exponential backoff plus
      jitter, up to 8 attempts, before marking the row permanently `failed`.
    - Never logs a raw recipient address (a truncated SHA-256 hash only) or

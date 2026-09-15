@@ -213,6 +213,53 @@ real email provider integration, which remains selected-provider work in
   `ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=true` is explicitly set; validated at
   server boot (`instrumentation.ts`).
 
+## Completed (email outbox audit fixes — same branch)
+
+An independent audit (GPT) at `2ec4dd4` found two functional defects in the
+outbox foundation above and several non-blocking go-live gates. Both
+defects fixed, verified against actual code (none dismissed):
+
+1. **HIGH — a partial refund permanently discarded the queued order
+   confirmation.** `renderOrderConfirmation()` only accepted `order.status
+   === "paid"`, but `lib/orders/refund.ts` moves a partially refunded
+   order to `partially_refunded` while only a *full* refund cancels
+   tickets. A partial refund landing before the dispatcher ran would mark
+   the still-valid confirmation `failed`/`entity_state_no_longer_valid`
+   and the customer would never receive it. Fixed: `partially_refunded` is
+   now accepted alongside `paid`; `refunded` (and everything else) still
+   is not. New test: a partial refund before dispatch still gets both the
+   order and refund confirmation sent, each exactly once.
+2. **MEDIUM — a single row's rendering exception poisoned the whole
+   claimed batch.** `dispatchPendingEmails()` called `renderEmail(row)`
+   *before* the per-row `try/catch`, so a transient DB error or a
+   misconfigured `absoluteAppUrl()` while rendering one row threw out of
+   the loop entirely, stranding every other already-claimed row in
+   `processing` until the 5-minute lease timeout. Fixed: rendering now
+   runs inside the same per-row try/catch as the provider send, so a
+   render exception is retried on its own like a send failure and never
+   blocks the rest of the batch. New test: one row's simulated render
+   failure doesn't stop a second row in the same batch from sending.
+3. Also corrected `renderPaymentFailed()`'s wording, which asserted
+   `"Aucun montant n'a été débité"` (no amount was debited) — a fact this
+   provider-neutral foundation cannot universally guarantee once a real
+   PSP is behind it. Now matches the safer wording already established
+   during the ChariPay integration audit: payment not confirmed, don't
+   pay again if a debit appears until it's verified.
+
+Tracked as pre-real-provider/deployment gates, not fixed here (agreed
+non-blocking while only the instant `ConsoleEmailProvider` exists):
+claiming releases the row before `send()` completes, so a real provider
+call exceeding the 5-minute lease could let a second worker reclaim and
+double-send, and a stale worker could then overwrite the second worker's
+result — needs a request timeout shorter than the lease plus a fencing/
+conditional-finalization mechanism before a real provider is wired in.
+`errorCode()`'s stored/logged error message isn't guaranteed free of
+provider-specific sensitive data — needs a typed provider error with a
+safe machine code before a real provider is wired in. Native Vercel Cron
+needs `vercel.json` + `CRON_SECRET`, not this route's custom header
+contract — an external scheduler works today but must actually be
+provisioned before dispatch can be relied on to run.
+
 ## Completed (auth rate limiting — PR #8)
 
 - Atomic Postgres fixed-window limiter shared across serverless instances.

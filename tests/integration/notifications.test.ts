@@ -179,6 +179,48 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     expect(row.lastErrorCode).toBe("entity_state_no_longer_valid");
   });
 
+  it("still sends the order confirmation after a partial refund, since valid tickets survive it", async () => {
+    // A partial refund moves the order to "partially_refunded" but only a
+    // *full* refund cancels tickets (lib/orders/refund.ts) — the queued
+    // order confirmation (and its ticket links) is still correct content
+    // and must not be discarded as stale.
+    const fixture = await createOrderAwaitingPayment({ quantity: 2, priceCents: 10_000 });
+    await postWebhook(fixture, "payment.succeeded");
+
+    const admin = await prisma.adminUser.create({
+      data: {
+        email: `notif-partial-refund-${crypto.randomUUID()}@test.onlylive.ma`,
+        passwordHash: "not-used-in-tests",
+        name: "Notif Admin",
+        role: "admin",
+      },
+    });
+    const refundResult = await initiateRefund({
+      paymentId: fixture.payment.id,
+      amountCents: 10_000, // half of the 20,000-cent total: a genuine partial refund
+      reason: "Customer no-show for one ticket",
+      actorId: admin.id,
+    });
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
+    expect(order.status).toBe("partially_refunded");
+
+    const sendSpy = vi.spyOn(ConsoleEmailProvider.prototype, "send");
+    await dispatchPendingEmails();
+
+    const ownCalls = sendSpy.mock.calls.filter((args) => args[0].to === fixture.user.email);
+    expect(ownCalls).toHaveLength(2); // order_confirmation + refund_confirmation, each exactly once
+
+    const confirmationRow = await prisma.emailOutbox.findFirstOrThrow({
+      where: { type: "order_confirmation", entityType: "order", entityId: fixture.order.id },
+    });
+    expect(confirmationRow.status).toBe("sent");
+
+    const refundRow = await prisma.emailOutbox.findFirstOrThrow({
+      where: { type: "refund_confirmation", entityType: "refund", entityId: refundResult.refundId },
+    });
+    expect(refundRow.status).toBe("sent");
+  });
+
   it("never includes the admin-entered refund reason in the rendered customer-facing text", async () => {
     const fixture = await createOrderAwaitingPayment({ quantity: 1, priceCents: 10_000 });
     await postWebhook(fixture, "payment.succeeded");
@@ -240,6 +282,41 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     sendSpy.mockClear();
     await dispatchPendingEmails();
     expect(sendSpy.mock.calls.some((args) => args[0].to === fixture.user.email)).toBe(false);
+  });
+
+  it("a rendering exception for one row is retried on its own and never blocks another row in the same batch", async () => {
+    const throwingFixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await postWebhook(throwingFixture, "payment.succeeded");
+    const healthyFixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await postWebhook(healthyFixture, "payment.succeeded");
+
+    // Fail only this fixture's own render — a blind mockImplementationOnce
+    // would land on whichever row the batch happens to render first, not
+    // necessarily this test's own row (see the identical note on the
+    // provider-failure tests above).
+    const originalFindUnique = prisma.order.findUnique.bind(prisma.order);
+    vi.spyOn(prisma.order, "findUnique").mockImplementation((args: Parameters<typeof prisma.order.findUnique>[0]) => {
+      if (args?.where?.id === throwingFixture.order.id) {
+        throw new Error("simulated transient render failure");
+      }
+      return originalFindUnique(args);
+    });
+
+    const sendSpy = vi.spyOn(ConsoleEmailProvider.prototype, "send");
+    await dispatchPendingEmails();
+
+    // The healthy row in the same batch still got sent — one row's render
+    // exception never aborted the whole dispatchPendingEmails() call.
+    expect(sendSpy.mock.calls.some((args) => args[0].to === healthyFixture.user.email)).toBe(true);
+
+    const throwingRow = await prisma.emailOutbox.findFirstOrThrow({
+      where: { type: "order_confirmation", entityType: "order", entityId: throwingFixture.order.id },
+    });
+    // Retried like a send failure, not silently discarded as stale content
+    // and not stuck in "processing" for the full lease window.
+    expect(throwingRow.status).toBe("pending");
+    expect(throwingRow.attemptCount).toBe(1);
+    expect(throwingRow.lastErrorCode).toContain("simulated transient render failure");
   });
 
   it("never logs the raw recipient address or full error object on a send failure", async () => {

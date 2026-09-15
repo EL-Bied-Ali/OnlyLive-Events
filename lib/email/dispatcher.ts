@@ -60,7 +60,13 @@ async function renderOrderConfirmation(orderId: string): Promise<RenderedEmail |
       items: { include: { ticketCategory: { select: { name: true } }, tickets: { select: { id: true } } } },
     },
   });
-  if (!order || order.status !== "paid") return null;
+  // A partial refund moves the order to "partially_refunded" but leaves
+  // every still-valid ticket untouched (lib/orders/refund.ts only cancels
+  // tickets on a *full* refund) — the customer still needs this
+  // confirmation and its ticket links, so partially_refunded must count
+  // as valid here too. Only a full "refunded" order (or any other
+  // non-paid state) means this confirmation is genuinely stale.
+  if (!order || (order.status !== "paid" && order.status !== "partially_refunded")) return null;
 
   const ticketLines = order.items.flatMap((item) =>
     item.tickets.map(
@@ -93,8 +99,8 @@ async function renderPaymentFailed(orderId: string): Promise<RenderedEmail | nul
   const text = [
     `Bonjour ${order.user.name ?? ""},`.trim(),
     "",
-    `Le paiement de votre commande ${order.orderNumber} pour ${order.event.title} n'a pas abouti.`,
-    "Aucun montant n'a été débité. Vous pouvez réessayer depuis votre compte.",
+    `Le paiement de votre commande ${order.orderNumber} pour ${order.event.title} n'a pas été confirmé.`,
+    "Si un débit apparaît malgré tout sur votre moyen de paiement, ne payez pas une seconde fois et contactez-nous afin que nous vérifiions son statut.",
     "",
     "— OnlyLive",
   ].join("\n");
@@ -192,17 +198,23 @@ export async function dispatchPendingEmails(): Promise<DispatchSummary> {
   const summary: DispatchSummary = { claimed: rows.length, sent: 0, retried: 0, permanentlyFailed: 0, skipped: 0 };
 
   for (const row of rows) {
-    const rendered = await renderEmail(row);
-    if (!rendered) {
-      await prisma.emailOutbox.update({
-        where: { id: row.id },
-        data: { status: "failed", lastErrorCode: "entity_state_no_longer_valid" },
-      });
-      summary.skipped += 1;
-      continue;
-    }
-
     try {
+      // Rendering runs inside this row's own try/catch, not before it: a
+      // transient DB error, a misconfigured absoluteAppUrl(), or any other
+      // exception while rendering this one row must never abort the whole
+      // batch and strand every other already-claimed row in `processing`
+      // until lease expiry — it should retry only this row, exactly like a
+      // provider send failure below.
+      const rendered = await renderEmail(row);
+      if (!rendered) {
+        await prisma.emailOutbox.update({
+          where: { id: row.id },
+          data: { status: "failed", lastErrorCode: "entity_state_no_longer_valid" },
+        });
+        summary.skipped += 1;
+        continue;
+      }
+
       const result = await getEmailProvider().send({
         to: row.recipientEmail,
         subject: rendered.subject,
@@ -218,7 +230,7 @@ export async function dispatchPendingEmails(): Promise<DispatchSummary> {
       const nextAttemptCount = row.attemptCount + 1;
       const code = errorCode(error);
       console.error(
-        `[email:dispatch] send failed type=${row.type} outboxId=${row.id} recipientHash=${hashRecipient(row.recipientEmail)} attempt=${nextAttemptCount} error=${code}`,
+        `[email:dispatch] processing failed type=${row.type} outboxId=${row.id} recipientHash=${hashRecipient(row.recipientEmail)} attempt=${nextAttemptCount} error=${code}`,
       );
 
       if (nextAttemptCount >= MAX_ATTEMPTS) {
