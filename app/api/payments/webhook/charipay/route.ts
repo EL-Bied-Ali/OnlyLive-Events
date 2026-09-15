@@ -70,6 +70,13 @@ export async function POST(request: NextRequest) {
 
     const event = await provider.parseWebhook({ rawBody, headers });
     if (!event.signatureValid) {
+      console.info("charipay webhook rejected: invalid signature", {
+        hasSignature: Boolean(headers["x-chari-signature"]),
+        hasTimestamp: Boolean(headers["x-chari-timestamp"]),
+        hasEventId: Boolean(headers["chari-event-id"]),
+        eventType: headers["chari-event-type"] ?? null,
+        bodyLength: rawBody.length,
+      });
       return NextResponse.json({ error: "INVALID_SIGNATURE" }, { status: 401 });
     }
 
@@ -89,6 +96,18 @@ export async function POST(request: NextRequest) {
     }
 
     if (!event.payloadValid) {
+      const rawKeys = event.raw && typeof event.raw === "object" && !Array.isArray(event.raw)
+        ? Object.keys(event.raw as Record<string, unknown>).sort()
+        : [];
+      console.info("charipay webhook rejected: invalid payload", {
+        externalEventIdPresent: Boolean(event.externalEventId),
+        eventType: headers["chari-event-type"] ?? null,
+        providerPaymentIdPresent: Boolean(event.providerPaymentId),
+        paymentExternalIdPresent: Boolean(event.paymentExternalId),
+        amountCents: event.amountCents,
+        currency: event.currency,
+        rawKeys,
+      });
       return NextResponse.json({ error: "INVALID_PROVIDER_PAYLOAD" }, { status: 400 });
     }
 
