@@ -230,6 +230,27 @@ dismissed without evidence) and fixed:
   cross-category/concurrent enforcement, converted/expired reservation
   semantics, exact-bound decreases and rejected unsafe decreases.
 
+## Completed (mandatory phone at registration — PR #18)
+
+- `registerSchema` requires `phone` (loose, provider-neutral format check),
+  matching ChariPay's hard `CheckoutSessionCustomer.required` constraint
+  found during the PR #13 audit; the DB column stays nullable so existing
+  rows are unaffected.
+- Register page, and every test that creates a customer account, updated
+  accordingly.
+
+## Completed (unbounded orders CSV export)
+
+- `lib/admin/dashboard.ts::iterateOrdersForExport` replaces the old
+  `getOrdersForExport` single-query, 20,000-row-capped export with a
+  keyset-paginated async generator (1,000-row batches, `(createdAt, id)`
+  cursor, configurable batch size for tests).
+- `/api/admin/orders/export` streams each batch to the response as it's
+  fetched instead of building the whole CSV in memory first, so the export
+  has no row-count ceiling.
+- Regression coverage verifies pagination doesn't duplicate or drop rows
+  across batch boundaries, including orders created in the same millisecond.
+
 ## In progress
 
 - None.
@@ -246,15 +267,14 @@ dismissed without evidence) and fixed:
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
    requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
-5. Paginate the orders CSV export beyond its current most-recent-20,000 cap.
-6. Add an automatic trigger/alert path for
+5. Add an automatic trigger/alert path for
    `paid_but_unfulfillable`/`reconciliation_required` orders rather than
    relying only on dashboard attention metrics.
-7. Stage Vercel WAF rate-limit rules in log mode before production, observe
+6. Stage Vercel WAF rate-limit rules in log mode before production, observe
    real traffic, then tune/enforce without replacing account-level limiting.
-8. Before production rollout, smoke-test admin login/logout, catalogue
+7. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
-9. Before ChariPay go-live: a customer who registered before phone became
+8. Before ChariPay go-live: a customer who registered before phone became
    required (PR #18) has `phone: null` and cannot pay — ChariPay's adapter
    rejects cleanly (`PAYMENT_CUSTOMER_DETAILS_REQUIRED`), no crash/financial
    risk, but there's currently no profile page or endpoint letting an

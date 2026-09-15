@@ -1,9 +1,16 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type { OrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getAuditLog, getAuditLogEntityTypes } from "@/lib/admin/audit";
-import { getOrdersForExport } from "@/lib/admin/dashboard";
+import { iterateOrdersForExport } from "@/lib/admin/dashboard";
 import { createOrderAwaitingPayment } from "../helpers/fixtures";
+
+async function collectExportedOrders(status?: OrderStatus, batchSize?: number) {
+  const rows = [];
+  for await (const batch of iterateOrdersForExport(status, batchSize)) rows.push(...batch);
+  return rows;
+}
 
 async function createAdmin(name = "Reporting Admin") {
   return prisma.adminUser.create({
@@ -89,14 +96,31 @@ describe("admin orders CSV export data", () => {
   it("includes the fields needed for the export and respects a status filter", async () => {
     const { order } = await createOrderAwaitingPayment({ quantity: 2, priceCents: 15_000 });
 
-    const pending = await getOrdersForExport("pending_payment");
+    const pending = await collectExportedOrders("pending_payment");
     const exported = pending.find((o) => o.id === order.id);
     expect(exported).toBeTruthy();
     expect(exported!.totalAmountCents).toBe(30_000);
     expect(exported!.items[0]!.ticketCategory.name).toBeTruthy();
     expect(exported!.user.email).toContain("@");
 
-    const paidOnly = await getOrdersForExport("paid");
+    const paidOnly = await collectExportedOrders("paid");
     expect(paidOnly.some((o) => o.id === order.id)).toBe(false);
+  });
+
+  it("keyset-paginates across many small batches without duplicating or dropping a row", async () => {
+    // Several orders created back-to-back can share the same createdAt down
+    // to millisecond precision, which would break a naive createdAt-only
+    // cursor — this is what the (createdAt, id) tiebreaker in
+    // iterateOrdersForExport is actually for.
+    const orderIds: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const { order } = await createOrderAwaitingPayment({ quantity: 1, priceCents: 5_000 });
+      orderIds.push(order.id);
+    }
+
+    const rows = await collectExportedOrders("pending_payment", 2);
+    const seenIds = rows.map((r) => r.id);
+    expect(new Set(seenIds).size).toBe(seenIds.length);
+    for (const id of orderIds) expect(seenIds).toContain(id);
   });
 });
