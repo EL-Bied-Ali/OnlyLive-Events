@@ -13,6 +13,7 @@ The public reference is generated from ChariPay's OpenAPI contract. Re-check tha
 - Vercel Production requires `CHARIPAY_ENV=live`, `CHARIPAY_PROVIDER_VERIFIED=true`, a canonical `ONLYLIVE_PUBLIC_URL`, webhook secret, and a 16+ char `CRON_SECRET`.
 - Never log API keys or webhook secrets.
 - Historical Payment rows are routed by their persisted `Payment.provider`; `PAYMENT_PROVIDER` selects only the provider for newly-created payments.
+- Preview/staging and Production must use separate databases. `Payment.provider=charipay` does not encode sandbox vs live; environment separation is therefore an infrastructure invariant, not something a historical Payment row can reconstruct later.
 
 ## Hosted checkout
 
@@ -37,7 +38,7 @@ After local expiry:
 - OnlyLive returns `CHECKOUT_RECONCILIATION_REQUIRED` when a provider session already exists;
 - pre-checkout holds (`orderId IS NULL`) still expire/release normally.
 
-This is intentionally fail-safe. The exact response/status contract for retrieving an expired Payment Session must be captured in sandbox before OnlyLive automatically closes/reopens one of these stuck checkouts. Until then the system prefers temporarily-held inventory over selling stock that may already have been paid for.
+The reconciler calls the documented `POST /v1/payment-sessions/{sessionId}/cancel` endpoint. ChariPay documents a successful cancel as expiring the session so it can no longer be paid; that definitive success allows local cancellation/release. The explicit `410 SESSION_EXPIRED` state is also treated as non-payable. Ambiguous `404`/`409`, transport failures, unknown codes and malformed provider responses remain fail-closed: inventory stays reserved and the order is surfaced for attention. Sandbox must still pin the exact observed response/status bodies before provider verification.
 
 Browser return is display/navigation only, never proof of payment. The customer order page refreshes boundedly while payment/reconciliation is non-terminal.
 
@@ -47,7 +48,7 @@ Browser return is display/navigation only, never proof of payment. The customer 
 - `X-CHARI-TIMESTAMP` is epoch milliseconds; reject more than ±5 min skew.
 - Signature input must be **exactly 64 hexadecimal characters** before `Buffer.from(..., "hex")`; malformed odd-nibble strings are rejected.
 - Compare in constant time.
-- Deduplicate on `Chari-Event-Id`.
+- Deduplicate on `Chari-Event-Id`, not a delivery-attempt id.
 - Delivery is at-least-once and may be out of order.
 - A correctly signed payload is still schema/integrity-validated before mutation.
 
@@ -70,7 +71,7 @@ Register a dedicated HTTPS endpoint on port 443 with an explicit allowlist only:
 
 Pin the webhook `apiVersion` to the provider's published payload contract version (the public API reference is currently v1.0.0) and verify the exact accepted literal in sandbox before final provider verification. Never leave `enabledEvents` null/empty, because that subscribes to all current and future events.
 
-The registration secret is returned only once. Store it as a secret. Secret rotation behavior and `X-CHARI-SIGNATURE-NEXT` must be exercised in sandbox and fixtures pinned to observed deliveries.
+The registration secret is returned only once. Store it as a secret. The current public endpoint contract says `rotate-secret` **immediately invalidates the previous secret** and returns the replacement once, so rotation must be coordinated atomically. OnlyLive can also accept an optional `CHARIPAY_WEBHOOK_SECRET_NEXT`/`X-CHARI-SIGNATURE-NEXT` path defensively, but production must not assume a dual-signature grace period unless sandbox/provider evidence confirms one.
 
 ## Refund lifecycle
 
@@ -85,10 +86,10 @@ Refunds are asynchronous. `Refund.id` is the stable `refundReference` and must n
 
 Conservative response classification:
 
-- network/timeout, 408, 429, 5xx => unknown / remain `processing`;
-- `409 IDEMPOTENCY_CONFLICT` => unknown / remain `processing` and reconcile the same reference;
+- network/timeout, 408, 409, 429, 5xx => unknown / remain `processing`;
+- any 409 remains ambiguous for the refund POST, including `IDEMPOTENCY_CONFLICT`; reconcile the same reference rather than freeing balance;
 - malformed/empty/non-JSON/incomplete 2xx => unknown / remain `processing`;
-- only a clearly definitive provider rejection may transition the local Refund to `failed`.
+- only a clearly definitive non-409 provider rejection may transition the local Refund to `failed`.
 
 Provider HTTP calls have a bounded timeout. `Retry-After` and response correlation/request ids are captured for safe diagnostics/backoff without logging secrets.
 
@@ -96,23 +97,25 @@ Provider HTTP calls have a bounded timeout. `Retry-After` and response correlati
 
 Housekeeping uses a fair claimed reconciler:
 
-- due rows are claimed with `FOR UPDATE SKIP LOCKED`;
-- claimed rows rotate via `updated_at`, preventing the oldest pending batch from starving newer refunds;
-- concurrent workers claim different rows;
+- each due row is claimed immediately before its provider work with `FOR UPDATE SKIP LOCKED`;
+- a short claim age/lease keeps concurrent workers from processing the same row while the bounded provider request is in flight;
+- pending rows rotate via `updated_at`, preventing an old pending batch from starving newer refunds;
 - provider `Retry-After` defers the row;
 - lookup `SUCCESS`/`FAILED` finalizes locally;
 - `PENDING` remains reserved;
 - `not_found` replays **the same** Refund id/reference.
 
-The repository's Vercel cron currently runs housekeeping once daily, matching Hobby-plan constraints. Webhooks remain the primary mechanism. A commercial deployment should choose a scheduler cadence together with ChariPay's real rate-limit/quota; do not increase frequency without backoff/budgeting.
+The repository's Vercel cron currently runs housekeeping once daily, matching Hobby-plan constraints. Webhooks remain the primary mechanism. A commercial go-live requires a materially faster reconciliation schedule (or equivalent external scheduler) after measuring ChariPay's real rate-limit/Retry-After behavior; the daily Hobby fallback alone is not an acceptable recovery window for ticket inventory or stuck refunds.
 
 A full refund in `processing` also blocks any **new** ticket scan for that order. Used tickets stay used, but once a full refund is durably committed a still-valid ticket cannot be admitted until the refund fails or resolves. Scanner/refund paths serialize through the Order lock.
 
 Failed async refunds are included in the admin attention metric, and the admin refundable balance subtracts both `processing` and `succeeded` refunds.
 
+A refund already finalized `failed` is terminal locally. A later contradictory success event is intentionally not applied automatically; it remains a provider-reconciliation anomaly and the failed refund keeps the order visible for admin attention until a supported/manual reconciliation policy resolves it.
+
 ## Payment reconciliation after lost webhooks — sandbox gate
 
-ChariPay explicitly recommends `GET /v1/transactions` after webhook retries are exhausted. OnlyLive does **not** yet auto-finalize a payment from that API because the public page available during implementation does not expose enough response-object detail to write a money-moving parser without guessing.
+ChariPay recommends reconciling with `GET /v1/transactions` after a longer outage rather than waiting for an exhausted webhook delivery to return. OnlyLive does **not** yet auto-finalize a payment from that API because the public page available during implementation does not expose enough response-object detail to write a money-moving parser without guessing.
 
 Before implementing this fallback, capture the real sandbox response/fixture. Any automatic payment recovery must require all of:
 
@@ -127,17 +130,17 @@ Anything else creates AuditLog/admin attention and issues no ticket. Until this 
 
 ## Cash gate
 
-ChariPay supports cash payments in its product. The Payment Session request schema does not expose a per-session method selector in the public reference. Before production, verify in the merchant account/support that CASH is disabled for OnlyLive hosted checkout. A short ticket hold is not compatible with a customer travelling to an agency; do not invent a cash flow in this PR.
+ChariPay's hosted checkout explicitly offers card **or cash at an agency**. The Payment Session request schema does not expose a per-session method selector in the current public contract. Before production, verify in the merchant account/support that CASH can be disabled for OnlyLive hosted checkout. A roughly ten-minute ticket checkout hold is not compatible with a customer travelling to an agency; do not invent a cash flow in this PR.
 
 ## Required sandbox acceptance before provider verification
 
 Before setting `CHARIPAY_PROVIDER_VERIFIED=true`:
 
 1. create/use the sandbox API key with least-privilege runtime permissions;
-2. deploy a deliberate public HTTPS OnlyLive preview;
+2. deploy a deliberate public HTTPS OnlyLive preview with its own non-production database;
 3. register the webhook endpoint with explicit allowlist and pinned `apiVersion`;
 4. store the signing secret outside Git;
-5. send the real synthetic signed test event and retrieve the delivery body;
+5. send the real synthetic signed test event, then fetch its delivery record/body from the ChariPay event log;
 6. complete real sandbox hosted checkout + 3-D Secure success;
 7. exercise a real payment failure;
 8. exercise full and partial refund success/failure;
@@ -147,6 +150,8 @@ Before setting `CHARIPAY_PROVIDER_VERIFIED=true`:
 12. confirm CASH is disabled or explicitly redesign the hold flow;
 13. capture `GET /v1/transactions` responses needed for payment-loss reconciliation;
 14. capture Payment Session lookup/cancel responses and exact status values needed to release an expired checkout safely;
-15. replace/pin test fixtures to the exact signed provider bodies observed.
+15. verify the provider's actual secret-rotation behavior and perform one coordinated rotation test;
+16. replace/pin test fixtures to the exact signed provider bodies observed;
+17. configure a commercial reconciliation cadence materially faster than the current daily Hobby cron without exceeding the measured provider budget.
 
 Production also requires ChariPay KYB/live enablement. No code path may enable live credentials outside Vercel Production.
