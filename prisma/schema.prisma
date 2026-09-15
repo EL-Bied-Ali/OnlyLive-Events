@@ -507,7 +507,7 @@ model AuditLog {
 }
 
 // ─────────────────────────────────────────────────────────────────────────
-// Transactional email — idempotency ledger
+// Transactional email — durable outbox
 // ─────────────────────────────────────────────────────────────────────────
 
 enum EmailType {
@@ -516,23 +516,52 @@ enum EmailType {
   refund_confirmation
 }
 
-/// One row per email actually sent. The unique (type, entityType, entityId)
-/// constraint is the idempotency guarantee — a retried trigger (e.g. a
-/// redelivered webhook that reaches the send step again) claims via
-/// `INSERT ... ON CONFLICT DO NOTHING`, exactly like `PaymentEvent`'s
-/// (provider, external_event_id), so the same order/refund can never
-/// receive the same email twice.
-model EmailLog {
-  id                String    @id @default(uuid())
-  type              EmailType
-  entityType        String    @map("entity_type")
-  entityId          String    @map("entity_id")
-  recipientEmail    String    @map("recipient_email")
-  providerMessageId String?   @map("provider_message_id")
-  createdAt         DateTime  @default(now()) @map("created_at")
+enum EmailOutboxStatus {
+  pending
+  processing
+  sent
+  failed
+}
+
+/// Transactional outbox, not a send log. A row is enqueued inside the SAME
+/// database transaction that confirms the underlying business fact
+/// (payment success + ticket generation, a failed/cancelled payment, or a
+/// succeeded refund) — see lib/email/notifications.ts's enqueue* functions
+/// and their callers in the payment webhook route and lib/orders/refund.ts.
+/// Actual delivery happens later, out-of-band, via
+/// lib/email/dispatcher.ts::dispatchPendingEmails, so a crash between the
+/// business transaction committing and the email being sent leaves a
+/// durable `pending` row instead of silently losing the notification.
+/// `status` moves pending -> processing -> sent, or back to pending with a
+/// backed-off `nextAttemptAt` on a retryable failure, or to `failed` once
+/// `attemptCount` exhausts the dispatcher's retry budget.
+///
+/// The unique (type, entityType, entityId) constraint is the same
+/// idempotent-insert idiom as PaymentEvent's (provider, externalEventId):
+/// a retriggering caller (e.g. the same business transition reached again)
+/// is a safe no-op — it can never enqueue a second job for the same
+/// logical notification. Eligibility to actually send is re-checked
+/// against live state at dispatch time (see the dispatcher), never assumed
+/// from the fact that a row exists.
+model EmailOutbox {
+  id                  String            @id @default(uuid())
+  type                EmailType
+  entityType          String            @map("entity_type")
+  entityId            String            @map("entity_id")
+  recipientEmail      String            @map("recipient_email")
+  status              EmailOutboxStatus @default(pending)
+  attemptCount        Int               @default(0) @map("attempt_count")
+  nextAttemptAt       DateTime          @default(now()) @map("next_attempt_at")
+  processingStartedAt DateTime?         @map("processing_started_at")
+  sentAt              DateTime?         @map("sent_at")
+  lastErrorCode       String?           @map("last_error_code")
+  providerMessageId   String?           @map("provider_message_id")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
 
   @@unique([type, entityType, entityId])
-  @@map("email_logs")
+  @@index([status, nextAttemptAt])
+  @@map("email_outbox")
 }
 
 // ─────────────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
 import { getPaymentProvider, isFakePaymentsAllowed } from "@/lib/payments";
 import { confirmOrderPayment, failOrderPayment } from "@/lib/orders/fulfillment";
-import { sendOrderConfirmationEmail, sendPaymentFailedEmail } from "@/lib/email/notifications";
+import { enqueueOrderConfirmationEmail, enqueuePaymentFailedEmail } from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -205,12 +205,20 @@ export async function POST(request: NextRequest) {
           if (outcome === "paid" || outcome === "paid_but_unfulfillable" || outcome === "reconciliation_required") {
             await tx.payment.update({ where: { id: payment.id }, data: { status: "paid" } });
           }
+          // Enqueued in this same transaction, not sent after commit: a
+          // crash between commit and send can no longer lose the
+          // notification — see lib/email/notifications.ts and
+          // lib/email/dispatcher.ts.
+          if (outcome === "paid") {
+            await enqueueOrderConfirmationEmail(tx, payment.orderId);
+          }
           break;
         }
         case "payment.failed": {
           outcome = await failOrderPayment(payment.orderId, "failed", tx);
           if (outcome === "failed") {
             await tx.payment.update({ where: { id: payment.id }, data: { status: "failed" } });
+            await enqueuePaymentFailedEmail(tx, payment.orderId);
           }
           break;
         }
@@ -218,6 +226,7 @@ export async function POST(request: NextRequest) {
           outcome = await failOrderPayment(payment.orderId, "cancelled", tx);
           if (outcome === "cancelled") {
             await tx.payment.update({ where: { id: payment.id }, data: { status: "cancelled" } });
+            await enqueuePaymentFailedEmail(tx, payment.orderId);
           }
           break;
         }
@@ -243,15 +252,6 @@ export async function POST(request: NextRequest) {
       case "event_collision":
         return NextResponse.json({ error: "EVENT_COLLISION" }, { status: 409 });
       case "processed":
-        // Sent after the transaction has committed, never inside it — an
-        // email provider is external I/O and its own idempotency (see
-        // lib/email/notifications.ts) means a redelivered webhook that
-        // reaches this point again is a safe no-op, not a duplicate send.
-        if (result.outcome === "paid") {
-          await sendOrderConfirmationEmail(payment.orderId);
-        } else if (result.outcome === "failed" || result.outcome === "cancelled") {
-          await sendPaymentFailedEmail(payment.orderId);
-        }
         return NextResponse.json({ ok: true, outcome: result.outcome });
     }
   } catch (error) {

@@ -693,7 +693,7 @@
   },
   {
     "id": "email-order-confirmation-idempotent",
-    "scenario": "Calling the order-confirmation email trigger twice for the same order sends exactly one email",
+    "scenario": "Enqueuing the order-confirmation outbox row twice for the same order (even across two separate transactions) results in exactly one row",
     "category": "email",
     "implemented": true,
     "status": "pass",
@@ -701,15 +701,7 @@
   },
   {
     "id": "email-payment-failed-idempotent",
-    "scenario": "Calling the payment-failed email trigger twice for the same order sends exactly one email",
-    "category": "email",
-    "implemented": true,
-    "status": "pass",
-    "testFile": "tests/integration/notifications.test.ts"
-  },
-  {
-    "id": "email-send-failure-recorded-not-thrown",
-    "scenario": "An email provider send failure is recorded (no providerMessageId) without throwing out of the trigger or blocking unrelated sends",
+    "scenario": "Enqueuing the payment-failed outbox row twice for the same order results in exactly one row",
     "category": "email",
     "implemented": true,
     "status": "pass",
@@ -717,7 +709,7 @@
   },
   {
     "id": "email-webhook-order-confirmation-once",
-    "scenario": "The payment webhook sends an order-confirmation email exactly once, even when a second (differently-IDed) succeeded event arrives for the same already-settled order",
+    "scenario": "The payment webhook enqueues an order-confirmation outbox row exactly once, even when a second (differently-IDed) succeeded event arrives for the same already-settled order",
     "category": "email",
     "implemented": true,
     "status": "pass",
@@ -725,7 +717,7 @@
   },
   {
     "id": "email-webhook-payment-failed",
-    "scenario": "The payment webhook sends a payment-failed email when the payment fails",
+    "scenario": "The payment webhook enqueues a payment-failed outbox row when the payment fails",
     "category": "email",
     "implemented": true,
     "status": "pass",
@@ -733,7 +725,7 @@
   },
   {
     "id": "email-refund-confirmation",
-    "scenario": "A successful refund sends exactly one refund-confirmation email",
+    "scenario": "A successful refund enqueues exactly one refund-confirmation outbox row",
     "category": "email",
     "implemented": true,
     "status": "pass",
@@ -741,11 +733,107 @@
   },
   {
     "id": "email-unknown-entity-silent-noop",
-    "scenario": "Every email trigger is a silent no-op for an unknown order/refund id rather than throwing",
+    "scenario": "Every enqueue function is a silent no-op for an unknown order/refund id rather than throwing",
     "category": "email",
     "implemented": true,
     "status": "pass",
     "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-dispatch-sent",
+    "scenario": "The dispatcher sends a pending outbox row and marks it sent with a provider message id",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-idempotency-key",
+    "scenario": "The dispatcher passes the outbox row's own id as the provider's idempotencyKey",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-business-state-revalidation",
+    "scenario": "A row whose order left the state that justified it (e.g. refunded before its confirmation email went out) is never sent and is marked failed with entity_state_no_longer_valid",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-refund-reason-omitted",
+    "scenario": "The admin-entered internal refund reason is never included in the rendered customer-facing refund confirmation text",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-retry-backoff",
+    "scenario": "A transient provider failure is retried with a backed-off nextAttemptAt and is not marked permanently failed nor immediately reclaimed",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-sanitized-logging",
+    "scenario": "A dispatch failure is logged with a hashed recipient and a bounded error code, never the raw recipient address or a full error object",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-permanent-failure",
+    "scenario": "A row that exhausts its retry budget is marked permanently failed and is never picked up again even once due",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-lease-reclaim",
+    "scenario": "A row stuck in processing past the dispatcher's lease timeout (a crashed worker never finished it) is reclaimed and sent rather than left stuck forever",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-lease-not-expired",
+    "scenario": "A row still within its processing lease window is not reclaimed by a concurrent dispatch call",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-outbox-concurrent-claim-atomic",
+    "scenario": "Two concurrent dispatcher invocations claiming from the same batch never send the same row twice",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "email-console-provider-production-guard",
+    "scenario": "The console email provider is refused in production unless ALLOW_CONSOLE_EMAIL_IN_PRODUCTION is explicitly set",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/email/fakeProvider.test.ts"
+  },
+  {
+    "id": "app-url-https-required-production",
+    "scenario": "absoluteAppUrl/getAppBaseUrl require NEXTAUTH_URL to be a valid https URL in production, except for local-loopback hosts (exempted for the Playwright/CI next start run)",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/appUrl.test.ts"
   },
   {
     "id": "rate-limit-window-enforcement",
