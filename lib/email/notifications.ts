@@ -108,8 +108,8 @@ export async function sendPaymentFailedEmail(orderId: string): Promise<void> {
   const text = [
     `Bonjour ${order.user.name ?? ""},`.trim(),
     "",
-    `Le paiement de votre commande ${order.orderNumber} pour ${order.event.title} n'a pas abouti.`,
-    "Aucun montant n'a été débité. Vous pouvez réessayer depuis votre compte.",
+    `Le paiement de votre commande ${order.orderNumber} pour ${order.event.title} n'a pas été confirmé.`,
+    "Si un débit apparaît malgré tout sur votre moyen de paiement, ne payez pas une seconde fois et contactez-nous afin que nous vérifiions son statut.",
     "",
     "— OnlyLive",
   ].join("\n");
@@ -119,7 +119,7 @@ export async function sendPaymentFailedEmail(orderId: string): Promise<void> {
     "order",
     order.id,
     order.user.email,
-    `Échec du paiement — commande ${order.orderNumber}`,
+    `Paiement non confirmé — commande ${order.orderNumber}`,
     text,
   );
 }
