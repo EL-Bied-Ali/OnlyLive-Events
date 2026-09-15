@@ -112,6 +112,29 @@ describe("fair refund reconciliation", () => {
     expect(statusSpy.mock.calls[2]?.[0]).toBe(later);
   });
 
+  it("claims later batch rows only when their provider work is about to begin", async () => {
+    enableChariPay();
+    vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({ providerRefundId: null, state: "processing" });
+
+    const first = await createProcessingRefund(0);
+    const second = await createProcessingRefund(1_000);
+    let observedSecondUpdatedAtMs: number | undefined;
+    vi.spyOn(ChariPayProvider.prototype, "getRefundStatus").mockImplementation(async (reference) => {
+      if (reference === first) {
+        const secondRow = await prisma.refund.findUniqueOrThrow({
+          where: { id: second },
+          select: { updatedAt: true },
+        });
+        observedSecondUpdatedAtMs = secondRow.updatedAt.getTime();
+      }
+      return { providerRefundId: null, status: "pending" };
+    });
+
+    const result = await reconcileProcessingRefundsFair(2);
+    expect(result).toMatchObject({ checked: 2, pending: 2, errors: 0 });
+    expect(observedSecondUpdatedAtMs).toBe(Date.UTC(2000, 0, 1) + 1_000);
+  });
+
   it("lets concurrent workers claim different refunds instead of processing one row twice", async () => {
     enableChariPay();
     vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({ providerRefundId: null, state: "processing" });
