@@ -50,6 +50,26 @@ describe("admin async-refund visibility", () => {
     });
   });
 
+  it("keeps an order with an unresolved processing refund in the admin attention count", async () => {
+    const before = await getAdminMetrics();
+    const fixture = await createOrderAwaitingPayment({ quantity: 1, priceCents: 8_000 });
+    const admin = await createAdmin();
+    await prisma.order.update({ where: { id: fixture.order.id }, data: { status: "paid" } });
+    await prisma.payment.update({ where: { id: fixture.payment.id }, data: { status: "paid" } });
+    await prisma.refund.create({
+      data: {
+        paymentId: fixture.payment.id,
+        amountCents: 8_000,
+        reason: "Provider outcome unresolved",
+        status: "processing",
+        initiatedByAdminUserId: admin.id,
+      },
+    });
+
+    const after = await getAdminMetrics();
+    expect(after.attentionOrders).toBe(before.attentionOrders + 1);
+  });
+
   it("keeps an order with a failed async refund in the admin attention count", async () => {
     const before = await getAdminMetrics();
     const fixture = await createOrderAwaitingPayment({ quantity: 1, priceCents: 9_000 });
