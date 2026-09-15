@@ -29,6 +29,7 @@ async function purchaseTicket(page: import("@playwright/test").Page) {
   await page.getByPlaceholder("Nom").fill("Refund E2E Buyer");
   await page.getByPlaceholder("Email").fill(`refund-buyer-${suffix}@test.onlylive.ma`);
   await page.getByPlaceholder(/Mot de passe/).fill("RefundBuyerPassword123!");
+  await page.getByPlaceholder(/Téléphone/).fill("0612345678");
   await page.getByRole("button", { name: "Créer mon compte" }).click();
   await page.waitForURL("/");
 

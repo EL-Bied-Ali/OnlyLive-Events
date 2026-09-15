@@ -116,9 +116,16 @@ administrator's existing sessions.
 
 ## Privacy
 
-Registration collects only email, password, name, and an optional phone
-number — the minimum needed to sell and deliver a ticket. QR codes carry
-no personal data (see above). Placeholders for Privacy Policy, Terms &
+Registration collects only email, password, name, and a phone number — the
+minimum needed to sell and deliver a ticket. Phone is required (not just
+collected) because ChariPay's hosted checkout session customer object
+mandates it (`CheckoutSessionCustomer.required` includes `phone` per its
+published API schema) — a customer who could register without one would
+be unable to pay once a real provider is live. Validation is intentionally
+provider-neutral (loose format check, no Moroccan-specific normalization)
+since `lib/validation/auth.ts` is shared with the fake provider; ChariPay's
+own E.164 normalization happens inside its adapter. QR codes carry no
+personal data (see above). Placeholders for Privacy Policy, Terms &
 Conditions, Refund Policy, and Legal Notice have **not** been drafted this
 session — CLAUDE.md is explicit that Moroccan legal requirements must not
 be invented; these need OnlyLive's accountant/lawyer and the eventual
