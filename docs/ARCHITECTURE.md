@@ -222,8 +222,12 @@ TASKS.md, tests.json
    spreadsheet formula injection (a cell opened by Excel/Sheets starting
    with `=`, `+`, `-`, or `@` can execute as a formula) and RFC4180
    quoting, and prefixes the file with a UTF-8 BOM so Excel on Windows
-   renders accented names correctly. It is bounded to the most recent
-   20,000 orders — there is no pagination UI for the export yet.
+   renders accented names correctly. `lib/admin/dashboard.ts`'s
+   `iterateOrdersForExport` keyset-paginates the query (1,000-row batches,
+   `(createdAt, id)` cursor) and the route streams each batch straight to
+   the response as it's fetched — no upper bound on order count, and no
+   need to buffer the whole export in memory. (Previously hard-capped at
+   the most recent 20,000 orders, silently dropping older ones.)
 
 ## Request/data flow: transactional email
 
