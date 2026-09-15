@@ -102,6 +102,21 @@ describe("ChariPayProvider hardening", () => {
     }
   });
 
+  it("treats an opaque HTTP 409 as ambiguous instead of freeing reserved refund balance", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("conflict", {
+      status: 409,
+      headers: { "content-type": "text/plain", "x-correlation-id": "corr-opaque-409" },
+    })));
+
+    try {
+      await new ChariPayProvider().refund(refundInput("refund-opaque-conflict"));
+      throw new Error("expected provider ambiguity");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      expect(error).toMatchObject({ outcomeUnknown: true, status: 409, correlationId: "corr-opaque-409" });
+    }
+  });
+
   it("treats a malformed successful checkout response as an unknown provider outcome", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ unexpected: true }), {
       status: 201,
