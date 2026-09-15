@@ -134,7 +134,7 @@ interface ChariPayWebhookBody {
 }
 
 function isRetryableOrAmbiguousStatus(status: number): boolean {
-  return status === 408 || status === 429 || status >= 500;
+  return status === 408 || status === 409 || status === 429 || status >= 500;
 }
 
 function parseRetryAfterMs(value: string | null): number | undefined {
