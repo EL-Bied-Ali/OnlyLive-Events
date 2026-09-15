@@ -258,7 +258,29 @@ provider-specific sensitive data — needs a typed provider error with a
 safe machine code before a real provider is wired in. Native Vercel Cron
 needs `vercel.json` + `CRON_SECRET`, not this route's custom header
 contract — an external scheduler works today but must actually be
-provisioned before dispatch can be relied on to run.
+provisioned before dispatch can be relied on to run. The HTTP-loopback
+exemption in `lib/appUrl.ts` (`NODE_ENV=production` still permits `http://`
+when the hostname is `localhost`/`127.0.0.1`/`::1`, for the Playwright/CI
+`next start` run) would also silently accept a genuine production
+deployment accidentally misconfigured with a loopback `NEXTAUTH_URL` —
+low-impact (broken email links, not a public HTTP origin) but should gain
+an explicit e2e-only override rather than relying on the hostname alone
+before going further.
+
+A second independent audit (GPT) flagged the `email_outbox` migration's
+`DROP TABLE "email_logs"` as an irreversible loss of historical send
+records rather than a routine follow-up, and asked that this be verified
+rather than assumed. Confirmed: `ConsoleEmailProvider`
+(`lib/email/fakeProvider.ts`) is the only `EmailProvider` implementation
+that has ever existed in this codebase (`lib/email/index.ts`'s factory has
+no other case) — `email_logs` could only ever have been populated by
+local dev/test/e2e runs against that sandbox, never a real customer
+communication, and no environment with a working database existed before
+today's build fix (see the lazy-Prisma-client fix above). There is
+nothing meaningful in that table to migrate. If a real `EmailProvider` is
+ever added retroactively to a version of this app that already has actual
+`email_logs` history, that data would need to be migrated forward before
+running this migration — not a concern for the app's current state.
 
 ## Completed (auth rate limiting — PR #8)
 
