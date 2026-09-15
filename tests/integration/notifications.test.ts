@@ -62,6 +62,19 @@ describe("transactional email idempotency", () => {
     expect(logs).toHaveLength(1);
   });
 
+  it("failed-payment messaging never promises that no debit occurred", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    const send = vi.spyOn(ConsoleEmailProvider.prototype, "send");
+
+    await sendPaymentFailedEmail(fixture.order.id);
+
+    expect(send).toHaveBeenCalledTimes(1);
+    const message = send.mock.calls[0]![0];
+    expect(message.subject).toContain("Paiement non confirmé");
+    expect(message.text).toContain("ne payez pas une seconde fois");
+    expect(message.text).not.toContain("Aucun montant n'a été débité");
+  });
+
   it("records a failed send attempt without throwing, and never blocks a later successful call for a DIFFERENT order", async () => {
     const fixture = await createOrderAwaitingPayment({ quantity: 1 });
     vi.spyOn(ConsoleEmailProvider.prototype, "send").mockRejectedValueOnce(new Error("simulated email provider outage"));
