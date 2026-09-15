@@ -102,6 +102,30 @@ describe("expired hosted checkout reconciliation", () => {
     expect(attention).not.toBeNull();
   });
 
+  it("leases provider work so a concurrent worker cannot close the same checkout twice", async () => {
+    const fixture = await setupExpiredCheckout();
+    let resolveClose!: (value: { state: "unknown"; providerStatus: string }) => void;
+    const closeSpy = vi.spyOn(FakeProvider.prototype, "closePaymentSession").mockImplementation(
+      () => new Promise((resolve) => {
+        resolveClose = resolve;
+      }),
+    );
+
+    const firstWorker = reconcileExpiredCheckouts(1);
+    await vi.waitFor(() => expect(closeSpy).toHaveBeenCalledTimes(1));
+
+    const secondWorker = await reconcileExpiredCheckouts(1);
+    expect(secondWorker).toMatchObject({ checked: 0, closed: 0, unresolved: 0, errors: 0 });
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+
+    resolveClose({ state: "unknown", providerStatus: "SESSION_ALREADY_CONSUMED" });
+    const firstResult = await firstWorker;
+    expect(firstResult).toMatchObject({ checked: 1, closed: 0, unresolved: 1, errors: 0 });
+
+    const payment = await prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } });
+    expect(payment.status).toBe("awaiting_payment");
+  });
+
   it("never releases inventory when a captured-payment webhook wins before local finalization", async () => {
     const fixture = await setupExpiredCheckout();
     let resolveClose!: (value: { state: "non_payable"; providerStatus: string }) => void;
