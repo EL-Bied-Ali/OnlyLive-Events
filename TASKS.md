@@ -274,7 +274,7 @@ dismissed without evidence) and fixed:
    real traffic, then tune/enforce without replacing account-level limiting.
 7. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
-9. Before ChariPay go-live: a customer who registered before phone became
+8. Before ChariPay go-live: a customer who registered before phone became
    required (PR #18) has `phone: null` and cannot pay — ChariPay's adapter
    rejects cleanly (`PAYMENT_CUSTOMER_DETAILS_REQUIRED`), no crash/financial
    risk, but there's currently no profile page or endpoint letting an
