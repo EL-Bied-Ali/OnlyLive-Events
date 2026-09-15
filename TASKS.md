@@ -236,8 +236,8 @@ dismissed without evidence) and fixed:
 
 ## In progress
 
-- **ChariPay real PSP integration — draft PR #13**, stacked on PR #11 so
-  Claude can audit #11 independently. The adapter is derived from ChariPay's
+- **ChariPay real PSP integration — draft PR #13**, now based on current `main`
+  including the PR #15 purchase-limit concurrency follow-up. The adapter is derived from ChariPay's
   published v1 API reference, not guessed endpoints: hosted checkout sessions,
   stable `externalId` + idempotency keys, HMAC/timestamp webhook validation,
   `Chari-Event-Id` deduplication, checkout expiry aligned to the OnlyLive hold,
