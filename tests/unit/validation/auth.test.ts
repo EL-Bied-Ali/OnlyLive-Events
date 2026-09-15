@@ -44,6 +44,22 @@ describe("registerSchema", () => {
     expect(result.success).toBe(false);
   });
 
+  it("rejects punctuation-only input that merely satisfies the character-count minimum", () => {
+    expect(registerSchema.safeParse(validPayload({ phone: "++++++++" })).success).toBe(false);
+    expect(registerSchema.safeParse(validPayload({ phone: "()()()()" })).success).toBe(false);
+    expect(registerSchema.safeParse(validPayload({ phone: "........" })).success).toBe(false);
+  });
+
+  it("rejects a formatted string with too few actual digits", () => {
+    const result = registerSchema.safeParse(validPayload({ phone: "12 34 56" }));
+    expect(result.success).toBe(false);
+  });
+
+  it("accepts a spaced local Moroccan number", () => {
+    const result = registerSchema.safeParse(validPayload({ phone: "06 12 34 56 78" }));
+    expect(result.success).toBe(true);
+  });
+
   it("still enforces the pre-existing email/password/name rules unchanged", () => {
     expect(registerSchema.safeParse(validPayload({ email: "not-an-email" })).success).toBe(false);
     expect(registerSchema.safeParse(validPayload({ password: "short" })).success).toBe(false);
