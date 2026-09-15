@@ -7,6 +7,7 @@ import { failOrderPayment } from "@/lib/orders/fulfillment";
 const DEFAULT_BATCH_SIZE = 10;
 const MAX_BATCH_SIZE = 50;
 const DEFAULT_RETRY_DELAY_MS = 15 * 60 * 1000;
+const CLAIM_LEASE_MS = 30_000;
 
 interface CheckoutCandidate {
   payment_id: string;
@@ -29,40 +30,48 @@ function assertBatchSize(limit: number): void {
 }
 
 /**
- * Claim a fair batch of expired, order-linked checkout payments. Updating
- * Payment.updatedAt is the durable lease/backoff cursor: concurrent workers
- * use SKIP LOCKED, and unresolved old rows rotate behind later work instead of
- * starving every newer checkout forever.
+ * Claim exactly one due checkout immediately before its provider work starts.
+ * `updated_at` is the durable lease/backoff cursor. Moving it into the future
+ * matters: a value of `now()` is already eligible for another worker as soon
+ * as this short claim transaction commits, so SKIP LOCKED alone would not
+ * protect the external provider call.
+ *
+ * Claiming one row at a time also avoids pre-leasing a large batch whose later
+ * entries could sit idle while earlier provider requests consume most of the
+ * lease window.
  */
-async function claimExpiredCheckoutPayments(limit: number): Promise<CheckoutCandidate[]> {
-  assertBatchSize(limit);
-  return prisma.$transaction(async (tx) => tx.$queryRaw<CheckoutCandidate[]>`
-    WITH due AS (
-      SELECT p.id
-      FROM payments p
-      JOIN orders o ON o.id = p.order_id
-      WHERE o.status = 'pending_payment'
-        AND o.expires_at IS NOT NULL
-        AND o.expires_at < now()
-        AND p.status IN ('pending', 'awaiting_payment')
-        AND p.updated_at <= now()
-        AND EXISTS (
-          SELECT 1 FROM reservations r
-          WHERE r.order_id = o.id AND r.status = 'active'
-        )
-      ORDER BY p.updated_at ASC, p.created_at ASC
-      FOR UPDATE OF p SKIP LOCKED
-      LIMIT ${limit}
-    )
-    UPDATE payments p
-    SET updated_at = now()
-    FROM due
-    WHERE p.id = due.id
-    RETURNING p.id AS payment_id,
-              p.order_id,
-              p.provider,
-              p.provider_payment_id
-  `);
+async function claimNextExpiredCheckoutPayment(): Promise<CheckoutCandidate | null> {
+  const leaseUntil = new Date(Date.now() + CLAIM_LEASE_MS);
+  return prisma.$transaction(async (tx) => {
+    const rows = await tx.$queryRaw<CheckoutCandidate[]>`
+      WITH due AS (
+        SELECT p.id
+        FROM payments p
+        JOIN orders o ON o.id = p.order_id
+        WHERE o.status = 'pending_payment'
+          AND o.expires_at IS NOT NULL
+          AND o.expires_at < now()
+          AND p.status IN ('pending', 'awaiting_payment')
+          AND p.updated_at <= now()
+          AND EXISTS (
+            SELECT 1 FROM reservations r
+            WHERE r.order_id = o.id AND r.status = 'active'
+          )
+        ORDER BY p.updated_at ASC, p.created_at ASC
+        FOR UPDATE OF p SKIP LOCKED
+        LIMIT 1
+      )
+      UPDATE payments p
+      SET updated_at = ${leaseUntil}
+      FROM due
+      WHERE p.id = due.id
+      RETURNING p.id AS payment_id,
+                p.order_id,
+                p.provider,
+                p.provider_payment_id
+    `;
+    return rows[0] ?? null;
+  });
 }
 
 async function deferPayment(paymentId: string, retryAfterMs?: number): Promise<void> {
@@ -162,15 +171,19 @@ async function finalizeClosedCheckout(candidate: CheckoutCandidate): Promise<boo
 export async function reconcileExpiredCheckouts(
   limit = DEFAULT_BATCH_SIZE,
 ): Promise<CheckoutReconciliationSummary> {
-  const candidates = await claimExpiredCheckoutPayments(limit);
+  assertBatchSize(limit);
   const summary: CheckoutReconciliationSummary = {
-    checked: candidates.length,
+    checked: 0,
     closed: 0,
     unresolved: 0,
     errors: 0,
   };
 
-  for (const candidate of candidates) {
+  for (let index = 0; index < limit; index += 1) {
+    const candidate = await claimNextExpiredCheckoutPayment();
+    if (!candidate) break;
+    summary.checked += 1;
+
     if (!candidate.provider_payment_id) {
       summary.unresolved += 1;
       await recordAttention(candidate, "provider_reference_missing_after_checkout_expiry");
