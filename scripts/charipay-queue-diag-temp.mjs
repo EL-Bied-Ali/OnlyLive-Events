@@ -24,7 +24,7 @@ async function get(path) {
   }
 }
 
-await new Promise((resolve) => setTimeout(resolve, 8000));
+await new Promise((resolve) => setTimeout(resolve, 3000));
 const [endpointRes, eventsRes] = await Promise.all([
   get(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`),
   get(`/api/v1/partner/webhooks/events?endpointId=${ENDPOINT_ID}&page=0&size=100`),
