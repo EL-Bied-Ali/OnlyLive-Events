@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { createHold } from "@/lib/inventory";
@@ -84,7 +85,7 @@ describe("checkout provider-specific customer requirements", () => {
     });
 
     const createPaymentSpy = vi.spyOn(ChariPayProvider.prototype, "createPayment").mockResolvedValue({
-      providerPaymentId: "sandbox-session",
+      providerPaymentId: `ps_${crypto.randomUUID()}`,
       redirectUrl: "https://checkout.charipay.test/session",
     });
 
