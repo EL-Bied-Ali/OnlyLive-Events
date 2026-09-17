@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getOnlyLivePublicUrl, getPaymentProvider } from "@/lib/payments";
+import { getChariPayWebhookUrl, getOnlyLivePublicUrl, getPaymentProvider } from "@/lib/payments";
 
 function testKey(kind: "test" | "live") {
   return ["chari", "sk", kind, "unit", "placeholder"].join("_");
@@ -102,5 +102,36 @@ describe("ChariPay configuration guard", () => {
 
     vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.example.com/");
     expect(getOnlyLivePublicUrl()).toBe("https://preview.example.com");
+  });
+
+  it("adds Vercel's automation bypass to the default Preview webhook URL", () => {
+    vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.example.com/");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "unit bypass/?secret");
+
+    const url = new URL(getChariPayWebhookUrl());
+    expect(url.origin).toBe("https://preview.example.com");
+    expect(url.pathname).toBe("/api/payments/webhook/charipay");
+    expect(url.searchParams.get("x-vercel-protection-bypass")).toBe("unit bypass/?secret");
+  });
+
+  it("never auto-attaches the Vercel bypass secret outside Preview", () => {
+    vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://onlylive.example/");
+    vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "must-not-leak");
+
+    expect(getChariPayWebhookUrl()).toBe("https://onlylive.example/api/payments/webhook/charipay");
+  });
+
+  it("supports a dedicated HTTPS webhook ingress override", () => {
+    vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.example.com/");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "unused-for-explicit-url");
+    vi.stubEnv("CHARIPAY_WEBHOOK_URL", "https://relay.example.com/charipay?channel=sandbox");
+
+    expect(getChariPayWebhookUrl()).toBe("https://relay.example.com/charipay?channel=sandbox");
+
+    vi.stubEnv("CHARIPAY_WEBHOOK_URL", "http://relay.example.com/charipay");
+    expect(() => getChariPayWebhookUrl()).toThrow(/HTTPS/);
   });
 });
