@@ -244,10 +244,10 @@ export async function reconcileExpiredCheckouts(
     if (!candidate) break;
     summary.checked += 1;
 
-    let provider;
+    let provider: ReturnType<typeof getPaymentProviderByName>;
     try {
       provider = getPaymentProviderByName(candidate.provider);
-    } catch (error) {
+    } catch {
       summary.errors += 1;
       await recordAttention(candidate, "provider_reconciliation_configuration_failed");
       await deferPayment(candidate.payment_id);
