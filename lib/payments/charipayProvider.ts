@@ -559,7 +559,8 @@ export class ChariPayProvider implements PaymentProvider {
     const amountCents = madToCents(transaction.amount);
 
     const immutableFactsMatch =
-      transaction.type === "PAYMENT"
+      providerOperationId !== undefined
+      && transaction.type === "PAYMENT"
       && transaction.direction === "IN"
       && transaction.currency === "MAD"
       && transaction.currency === input.currency
