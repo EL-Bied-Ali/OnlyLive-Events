@@ -199,14 +199,14 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
   });
 
-  it("rejects signed refund amount and payment-reference mismatches before finalization", async () => {
-    // Currency and providerPaymentId ("sessionId") mismatch scenarios that
-    // used to be tested here no longer apply: a real ChariPay webhook
-    // carries no currency field at all (parseWebhook asserts "MAD", never
-    // parses it from the payload) and no sessionId-equivalent field
-    // (providerPaymentId is always ""), so there is nothing in the
-    // payload an attacker or bug could set wrong for either — see
-    // charipayProvider.ts's parseWebhook comments.
+  it("acknowledges every signed refund event with 202 and never finalizes, regardless of payload correctness", async () => {
+    // Refund webhook field-name casing has not been confirmed against a
+    // real signed delivery (only payment.succeeded has), so
+    // CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED gates all refund.* events
+    // closed before any matching/mismatch logic runs — see route.ts. A
+    // well-formed, correctly-matching payload and a wrong-amount/
+    // wrong-reference payload must be indistinguishable here: both get
+    // acknowledged for manual reconciliation, neither ever finalizes.
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
     expect((await chariWebhookPost(signedRequest(
@@ -229,20 +229,25 @@ describe("ChariPay webhook route", () => {
       metadata: { onlyliveRefundId: initiated.refundId, onlylivePaymentId: fixture.payment.id },
     };
     for (const type of ["refund.succeeded", "refund.failed"] as const) {
-      for (const { payload, expectedStatus } of [
-        { payload: { ...base, RefundAmount: base.RefundAmount + 1 }, expectedStatus: 409 },
-        { payload: { ...base, metadata: { ...base.metadata, onlylivePaymentId: crypto.randomUUID() } }, expectedStatus: 409 },
-        { payload: { ...base, RefundId: "rf_wrong" }, expectedStatus: 409 },
+      for (const payload of [
+        base,
+        { ...base, RefundAmount: base.RefundAmount + 1 },
+        { ...base, metadata: { ...base.metadata, onlylivePaymentId: crypto.randomUUID() } },
+        { ...base, RefundId: "rf_wrong" },
       ]) {
-        const response = await chariWebhookPost(signedRequest(payload, type));
-        expect(response.status).toBe(expectedStatus);
+        const response = await chariWebhookPost(signedRequest(payload, type, crypto.randomUUID()));
+        expect(response.status).toBe(202);
+        await expect(response.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
         await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "processing" });
       }
     }
     await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "paid" });
+    expect(await prisma.auditLog.count({
+      where: { action: "refund.webhook_shape_unverified" },
+    })).toBeGreaterThanOrEqual(8);
   });
 
-  it("captures and acknowledges an authentic provider refund that has no local Refund row", async () => {
+  it("acknowledges an authentic provider refund that has no local Refund row without ever looking it up", async () => {
     enableChariPay();
     const unknownReference = crypto.randomUUID();
     const eventId = crypto.randomUUID();
@@ -254,12 +259,23 @@ describe("ChariPay webhook route", () => {
 
     expect(response.status).toBe(202);
     await expect(response.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
+    // The shape-unverified gate short-circuits before the old
+    // refund-lookup path, so the legacy "refund.provider_unknown" audit
+    // action (which requires reaching prisma.refund.findUnique) is never
+    // written for this event — only the gate's own action is.
     expect(await prisma.auditLog.count({
       where: { action: "refund.provider_unknown", entityId: unknownReference },
+    })).toBe(0);
+    // entityId is always the fixed string "charipay" for every gate hit, so
+    // scope by this event's own externalEventId (unique per call) rather
+    // than by action+entityId, which would also match unrelated rows from
+    // other tests/deliveries in this shared persistent database.
+    expect(await prisma.auditLog.count({
+      where: { action: "refund.webhook_shape_unverified", metadata: { path: ["externalEventId"], equals: eventId } },
     })).toBe(1);
   });
 
-  it("accepts a signed refund webhook when optional provider ids are absent", async () => {
+  it("never finalizes a well-formed refund.succeeded webhook, even when local ids are absent", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
     expect((await chariWebhookPost(signedRequest(
@@ -280,11 +296,12 @@ describe("ChariPay webhook route", () => {
       metadata: { onlyliveRefundId: initiated.refundId },
       RefundAmount: fixture.payment.amountCents / 100,
     }, "refund.succeeded"));
-    expect(response.status).toBe(200);
-    await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "succeeded" });
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
+    await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "processing" });
   });
 
-  it("applies a signed refund.succeeded exactly once without double-releasing inventory", async () => {
+  it("never releases inventory from a refund.succeeded webhook, not even on repeated delivery", async () => {
     const fixture = await createChariPendingOrder({ quantity: 1, priceCents: 10_000 });
     enableChariPay();
     expect((await chariWebhookPost(signedRequest(
@@ -308,16 +325,19 @@ describe("ChariPay webhook route", () => {
     };
     const eventId = crypto.randomUUID();
 
-    const succeeded = await chariWebhookPost(signedRequest(refundPayload, "refund.succeeded", eventId));
-    expect(succeeded.status).toBe(200);
-    await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "succeeded" });
-    const inventoryAfter = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } });
-    expect(inventoryAfter.soldQuantity).toBe(inventoryBefore.soldQuantity - 1);
+    const first = await chariWebhookPost(signedRequest(refundPayload, "refund.succeeded", eventId));
+    expect(first.status).toBe(202);
+    await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "processing" });
+    const inventoryAfterFirst = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } });
+    expect(inventoryAfterFirst.soldQuantity).toBe(inventoryBefore.soldQuantity);
 
-    const duplicate = await chariWebhookPost(signedRequest(refundPayload, "refund.succeeded", eventId));
-    expect(duplicate.status).toBe(200);
-    await expect(duplicate.json()).resolves.toMatchObject({ ok: true, duplicate: true });
-    const inventoryAfterDuplicate = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } });
-    expect(inventoryAfterDuplicate.soldQuantity).toBe(inventoryAfter.soldQuantity);
+    // Same externalEventId delivered twice: the shape-unverified gate runs
+    // before the duplicate/event-collision check, so this is not exercising
+    // idempotency — it's proving the gate applies uniformly on every
+    // delivery, not just the first.
+    const second = await chariWebhookPost(signedRequest(refundPayload, "refund.succeeded", eventId));
+    expect(second.status).toBe(202);
+    const inventoryAfterSecond = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } });
+    expect(inventoryAfterSecond.soldQuantity).toBe(inventoryBefore.soldQuantity);
   });
 });

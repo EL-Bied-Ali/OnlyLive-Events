@@ -14,7 +14,7 @@ describe("ChariPay webhook secret rotation", () => {
     vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "old-placeholder-secret");
     vi.stubEnv("CHARIPAY_WEBHOOK_SECRET_NEXT", "new-placeholder-secret");
 
-    const rawBody = JSON.stringify({ externalId: "payment-1", amount: 10, currency: "MAD" });
+    const rawBody = JSON.stringify({ Amount: 10, metadata: { onlylivePaymentId: "payment-1" } });
     const timestamp = String(Date.now());
     const nextSignature = crypto
       .createHmac("sha256", "new-placeholder-secret")

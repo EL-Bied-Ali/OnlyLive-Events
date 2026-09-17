@@ -204,7 +204,7 @@ describe("ChariPayProvider", () => {
   });
 
   it("fails closed when a signed payload lacks required reconciliation facts", async () => {
-    const raw = JSON.stringify({ externalId: "payment-123" });
+    const raw = JSON.stringify({ ExternalId: "order-123" });
     const parsed = await new ChariPayProvider().parseWebhook({
       rawBody: raw,
       headers: webhookHeaders(raw, "payment.succeeded", "event-incomplete"),
@@ -235,7 +235,7 @@ describe("ChariPayProvider", () => {
   it("rejects stale webhook timestamps even with a valid HMAC", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-14T18:00:00Z"));
-    const raw = JSON.stringify({ externalId: "payment-123", amount: 10 });
+    const raw = JSON.stringify({ Amount: 10, metadata: { onlylivePaymentId: "payment-123" } });
     const stale = Date.now() - 5 * 60 * 1000 - 1;
     const parsed = await new ChariPayProvider().parseWebhook({
       rawBody: raw,
@@ -246,7 +246,7 @@ describe("ChariPayProvider", () => {
 
   it("accepts the next signing secret during webhook-secret rotation", async () => {
     vi.stubEnv("CHARIPAY_WEBHOOK_SECRET_NEXT", "next-secret");
-    const raw = JSON.stringify({ externalId: "payment-123", amount: 10 });
+    const raw = JSON.stringify({ Amount: 10, metadata: { onlylivePaymentId: "payment-123" } });
     const parsed = await new ChariPayProvider().parseWebhook({
       rawBody: raw,
       headers: webhookHeaders(raw, "payment.succeeded", "event-next", "next-secret"),

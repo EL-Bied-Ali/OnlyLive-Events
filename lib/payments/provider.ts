@@ -48,6 +48,14 @@ export interface ParsedWebhookEvent {
   providerRefundId?: string;
   /** Stable OnlyLive Payment id echoed by the provider. */
   paymentExternalId?: string;
+  /**
+   * Stable OnlyLive Order id echoed by the provider, when available, as a
+   * second independent reconciliation invariant alongside paymentExternalId
+   * (both come from the same echoed-back metadata object, so this is a
+   * cross-check against a corrupted/mismatched claim, not a second source
+   * of truth).
+   */
+  orderExternalId?: string;
   /** Stable OnlyLive Refund id/refundReference echoed by the provider. */
   refundExternalId?: string;
   type: PaymentWebhookEventType;

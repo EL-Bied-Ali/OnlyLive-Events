@@ -42,7 +42,7 @@ describe("ChariPayProvider hardening", () => {
   });
 
   it("requires an exact 64-character SHA-256 hex signature", async () => {
-    const raw = JSON.stringify({ externalId: "payment-123", amount: 10, currency: "MAD" });
+    const raw = JSON.stringify({ Amount: 10, metadata: { onlylivePaymentId: "payment-123" } });
     const provider = new ChariPayProvider();
 
     const exact = await provider.parseWebhook({ rawBody: raw, headers: signedHeaders(raw) });

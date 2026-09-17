@@ -302,6 +302,13 @@ export class ChariPayProvider implements PaymentProvider {
     const eventType = supported.has(eventTypeRaw as PaymentWebhookEventType)
       ? eventTypeRaw as PaymentWebhookEventType
       : "payment.failed";
+    // The Amount + metadata.onlylivePaymentId interpretation below is
+    // applied uniformly to both payment.* event types since they share the
+    // same underlying operation envelope (only OperationStatus differs) —
+    // but only payment.succeeded has actually been captured from a real
+    // delivery. payment.failed is extrapolated, not independently
+    // confirmed; capturing a real one remains meaningful since it releases
+    // inventory and could reveal a genuinely different shape.
 
     let payload: ChariPayWebhookBody;
     try {
@@ -333,6 +340,13 @@ export class ChariPayProvider implements PaymentProvider {
       ? metadata.onlylivePaymentId
       : undefined;
 
+    // Second, independent reconciliation invariant from the same confirmed
+    // echoed-back metadata object — the route cross-checks this against
+    // payment.orderId alongside paymentExternalId vs. payment.id.
+    const orderExternalId = typeof metadata.onlyliveOrderId === "string"
+      ? metadata.onlyliveOrderId
+      : undefined;
+
     // Unverified — see the ChariPayWebhookBody comment above. metadata's
     // echo-back behavior is confirmed, so onlyliveRefundId is checked
     // first; the guessed top-level field names are a fallback only.
@@ -348,10 +362,13 @@ export class ChariPayProvider implements PaymentProvider {
       ? madToCents(payload.RefundAmount ?? payload.refundAmount)
       : madToCents(payload.Amount);
 
-    // ChariPay only ever operates in MAD for this integration (enforced at
-    // request time by createPayment()/refund()), and its webhook payload
-    // carries no currency field at all — there is nothing to parse here,
-    // only to assert.
+    // Not parsed from the payload — there is no currency field on a real
+    // ChariPay webhook to read (confirmed against a captured delivery, and
+    // independently, ChariPay's own docs state amounts are MAD-only with
+    // no currency field at all). This adapter only ever creates MAD
+    // transactions (enforced at request time by createPayment()/refund()),
+    // so MAD is assigned here as that known fact, then the route separately
+    // checks it against the stored Payment's own currency.
     const currency = "MAD";
     // No sessionId-equivalent field exists on a real ChariPay webhook —
     // the route already falls back to matching by paymentExternalId alone
@@ -376,6 +393,7 @@ export class ChariPayProvider implements PaymentProvider {
       providerPaymentId,
       providerRefundId,
       paymentExternalId,
+      orderExternalId,
       refundExternalId,
       type: eventType,
       amountCents: normalizedAmount ?? 0,

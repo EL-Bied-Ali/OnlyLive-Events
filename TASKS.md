@@ -253,22 +253,35 @@ dismissed without evidence) and fixed:
   refund reconciliation/replay and historical FakeProvider compatibility.
 - ChariPay reconciliation tests avoid pristine-database assumptions; CI runs the complete Vitest suite three times total (one fresh pass plus two additional passes on the same populated database) to catch pollution/order flakes.
 - **The signed `payment.succeeded` webhook JSON mapping is now pinned
-  against a real sandbox delivery** (captured 2026-09-17 via ChariPay's
-  partner webhook-events API). It revealed the guessed shape used until
-  now was wrong in a way that silently broke every payment: ChariPay's
-  own generated fields are PascalCased, and `ExternalId`/`Reference`/
-  `CustomData` all carry the ORDER id rather than the Payment id despite
-  the misleading name — only `metadata.onlylivePaymentId` reliably
-  resolves the Payment row. `parseWebhook` and both test suites
+  against a real sandbox delivery, and verified end-to-end** (captured
+  2026-09-17 via ChariPay's partner webhook-events API; the exact stuck
+  delivery was then replayed against the fixed code and returned `200`
+  with the order confirmed, ticket generated, and confirmation email
+  sent). It revealed the guessed shape used until now was wrong in a way
+  that silently broke every payment: ChariPay's own generated fields are
+  PascalCased, and `ExternalId`/`Reference`/`CustomData` all carry the
+  ORDER id rather than the Payment id despite the misleading name — only
+  `metadata.onlylivePaymentId` reliably resolves the Payment row (now
+  cross-checked against `metadata.onlyliveOrderId` as a second
+  reconciliation invariant). `parseWebhook` and both test suites
   (`charipay-webhook.test.ts`, `charipayProvider.test.ts`) are fixed and
   re-verified against the real shape; see docs/CHARIPAY.md's "Webhook
-  verification" section for the full mapping.
-- **Not production-ready yet:** the `refund.*` webhook shape is still
-  unverified — only `payment.succeeded` has been captured so far.
-  `parseWebhook` extrapolates PascalCase field names from the confirmed
-  payment convention as a defensive fallback, but this needs its own real
-  captured sample before it can be trusted. PR #13 stays draft until that
-  sandbox validation and the final independent audit are complete.
+  verification" section for the full mapping. `payment.failed` applies
+  the identical interpretation by extrapolation only — it has not itself
+  been captured from a real delivery.
+- **Refund webhooks now fail closed rather than guess.** The `refund.*`
+  shape is still completely unverified — only `payment.succeeded` has
+  been captured — so finalizing a refund from a guessed field mapping
+  would violate this project's own "never invent provider fields" rule
+  and risk a silent amount/reference mismatch on real money movement.
+  `app/api/payments/webhook/charipay/route.ts`'s
+  `CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED` flag (currently `false`) gates
+  the whole refund-matching path: every `refund.succeeded`/`refund.failed`
+  event is acknowledged (`202`, audit-logged) without ever reaching
+  `finalizeRefundSuccess`/`finalizeRefundFailure`, so a real refund stays
+  `processing` pending manual reconciliation instead of risking a wrong
+  auto-finalization. PR #13 stays draft until a real refund delivery is
+  captured, the flag flips, and the final independent audit is complete.
 
 ## Next
 
@@ -297,10 +310,14 @@ dismissed without evidence) and fixed:
 
 ## Blocked
 
-- ChariPay sandbox end-to-end validation is blocked on a sandbox API key,
-  webhook signing secret and a deliberate public HTTPS test/preview URL. Real
-  production go-live additionally requires OnlyLive merchant/KYB approval and
-  live credentials; no production secret should be committed or pasted here.
+- ChariPay sandbox API key, webhook signing secret, and public HTTPS
+  preview URL are obtained and end-to-end payment.succeeded validation is
+  done (see "In progress" above and docs/CHARIPAY.md's checklist) — no
+  longer blocking. Still open: a real `payment.failed` and real refund
+  success/failure captures, both requiring only more sandbox exercises, not
+  new credentials. Real production go-live additionally requires OnlyLive
+  merchant/KYB approval and live credentials; no production secret should
+  be committed or pasted here.
 - Real email delivery is blocked on OnlyLive selecting a provider.
 - Legal document drafting is blocked on legal/accountant review and ChariPay's
   final merchant/go-live requirements.

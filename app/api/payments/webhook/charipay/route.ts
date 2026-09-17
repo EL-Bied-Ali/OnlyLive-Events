@@ -14,6 +14,16 @@ import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
 
+/**
+ * Only payment.succeeded has been captured from a real signed ChariPay
+ * delivery so far — refund.succeeded/refund.failed field-name casing is
+ * still a guess extrapolated from that one confirmed shape (see
+ * charipayProvider.ts's parseWebhook comments). Set this true once a real
+ * refund.* delivery is captured and parseWebhook is corrected against it;
+ * until then refund events are acknowledged but never auto-finalized.
+ */
+const CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED = false;
+
 type WebhookResult =
   | { kind: "duplicate" }
   | { kind: "event_collision" }
@@ -115,6 +125,35 @@ export async function POST(request: NextRequest) {
     let refund = null as Awaited<ReturnType<typeof prisma.refund.findUnique>>;
     let payment = null as Awaited<ReturnType<typeof prisma.payment.findUnique>>;
 
+    if (isRefundEvent && !CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED) {
+      // Refund webhook field-name casing (RefundAmount/refundAmount,
+      // RefundReference/refundReference, RefundId/refundId, even
+      // metadata.onlyliveRefundId) has NOT been confirmed against a real
+      // signed delivery — only payment.succeeded has been captured so far
+      // (see charipayProvider.ts's parseWebhook comments and
+      // docs/CHARIPAY.md). Finalizing a refund from a guessed shape would
+      // violate this project's "never invent provider fields" rule and
+      // risk a silent amount/reference mismatch on real money movement.
+      // Fail closed: acknowledge so ChariPay stops retrying, but require
+      // manual reconciliation instead of auto-finalizing. Flip the flag
+      // above once a real refund.* delivery is captured and parseWebhook
+      // is corrected against it.
+      await prisma.auditLog.create({
+        data: {
+          actorType: "system",
+          action: "refund.webhook_shape_unverified",
+          entityType: "PaymentProvider",
+          entityId: provider.name,
+          metadata: {
+            externalEventId: event.externalEventId,
+            eventType: event.type,
+            raw: event.raw as Prisma.InputJsonValue,
+          },
+        },
+      });
+      return NextResponse.json({ ok: true, reconciliationRequired: true }, { status: 202 });
+    }
+
     if (isRefundEvent) {
       if (!event.refundExternalId) {
         return NextResponse.json({ error: "REFUND_REFERENCE_MISSING" }, { status: 400 });
@@ -151,6 +190,7 @@ export async function POST(request: NextRequest) {
         || payment.currency !== "MAD"
         || event.currency !== payment.currency
         || (event.paymentExternalId !== undefined && event.paymentExternalId !== payment.id)
+        || (event.orderExternalId !== undefined && event.orderExternalId !== payment.orderId)
         || (event.providerPaymentId !== "" && payment.providerPaymentId !== event.providerPaymentId)
         || (event.providerRefundId !== undefined
           && refund.providerRefundId !== null
@@ -182,6 +222,7 @@ export async function POST(request: NextRequest) {
         || payment.currency !== "MAD"
         || event.currency !== payment.currency
         || (event.paymentExternalId !== undefined && event.paymentExternalId !== payment.id)
+        || (event.orderExternalId !== undefined && event.orderExternalId !== payment.orderId)
         || (event.providerPaymentId !== "" && payment.providerPaymentId !== event.providerPaymentId);
       if (mismatch) {
         await auditIntegrityMismatch("payment.amount_mismatch", payment.id, {
