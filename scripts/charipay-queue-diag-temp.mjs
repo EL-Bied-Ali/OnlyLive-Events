@@ -1,23 +1,18 @@
 const API_BASE = "https://api-psp.charipay.ma";
-const ENDPOINT_ID = "77e21777-0e04-44df-9489-c9084671bc84";
+const DELIVERY_ID = "aca45366-ae14-4a1b-a049-493a84f54135";
 const apiKey = process.env.CHARIPAY_API_KEY?.trim();
 
 if (!apiKey) {
-  console.log("CHARIPAY_TOGGLE_PROBE=" + JSON.stringify({ ok:false, error:"missing_api_key" }));
+  console.log("CHARIPAY_TRANSACTION_SHAPE=" + JSON.stringify({ ok:false, error:"missing_api_key" }));
   process.exit(0);
 }
 
-async function request(path, init = {}) {
+async function get(path) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const response = await fetch(API_BASE + path, {
-      ...init,
-      headers:{
-        "X-CHARI-PAY-API-KEY":apiKey,
-        "content-type":"application/json",
-        ...(init.headers || {}),
-      },
+      headers:{ "X-CHARI-PAY-API-KEY":apiKey },
       signal:controller.signal,
     });
     const text = await response.text();
@@ -29,65 +24,51 @@ async function request(path, init = {}) {
   }
 }
 
-async function listEvents() {
-  const res = await request(`/api/v1/partner/webhooks/events?endpointId=${ENDPOINT_ID}&page=0&size=100`);
-  const items = Array.isArray(res.body?.content) ? res.body.content : [];
-  return items.map((event) => ({
-    id:event.id ?? null,
-    createdAt:event.createdAt ?? null,
-    status:event.status ?? null,
-    attemptCount:event.attemptCount ?? null,
-    lastAttemptAt:event.lastAttemptAt ?? null,
-    nextRetryAt:event.nextRetryAt ?? null,
-    errorMessage:event.errorMessage ?? null,
-  }));
+function safeObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const allowed = [
+    "operationId","id","type","status","amount","currency","method","channel",
+    "externalId","reference","customData","gatewayOrderId","gatewayReferenceId",
+    "gatewayTrackId","createdAt","updatedAt","metadata","orderId","refundReference",
+  ];
+  return {
+    keys:Object.keys(value).sort(),
+    selected:Object.fromEntries(
+      allowed
+        .filter((key) => Object.prototype.hasOwnProperty.call(value,key))
+        .map((key) => [key, value[key]])
+    ),
+  };
 }
 
-const endpoint = await request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`);
-const e = endpoint.body;
-if (!e || typeof e !== "object" || typeof e.url !== "string") {
-  console.log("CHARIPAY_TOGGLE_PROBE=" + JSON.stringify({ ok:false, endpointHttpStatus:endpoint.status }));
-  process.exit(0);
+const eventRes = await get(`/api/v1/partner/webhooks/events/${DELIVERY_ID}`);
+const event = eventRes.body && typeof eventRes.body === "object" ? eventRes.body : null;
+const payload = event?.payload ?? event?.requestBody ?? event?.body ?? null;
+const payloadObject = payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
+const operationId = payloadObject?.OperationId ?? payloadObject?.operationId ?? null;
+
+let detailRes = { status:0, body:null };
+if (operationId !== null && operationId !== undefined) {
+  detailRes = await get(`/v1/transactions/${encodeURIComponent(String(operationId))}`);
 }
+const listRes = await get("/v1/transactions?type=PAYMENT&status=SUCCESS&limit=20");
+const listItems = Array.isArray(listRes.body?.content)
+  ? listRes.body.content
+  : Array.isArray(listRes.body?.items)
+    ? listRes.body.items
+    : Array.isArray(listRes.body)
+      ? listRes.body
+      : [];
 
-const baseBody = {
-  url:e.url,
-  description:e.description ?? undefined,
-  enabledEvents:Array.isArray(e.enabledEvents) ? e.enabledEvents : undefined,
-  customHeaders:e.customHeaders && typeof e.customHeaders === "object" ? e.customHeaders : undefined,
-  apiVersion:e.apiVersion ?? undefined,
-};
-
-const before = await listEvents();
-const disable = await request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`, {
-  method:"PATCH",
-  body:JSON.stringify({ ...baseBody, enabled:false }),
-});
-await new Promise((resolve) => setTimeout(resolve, 1500));
-const enable = await request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`, {
-  method:"PATCH",
-  body:JSON.stringify({ ...baseBody, enabled:true }),
-});
-await new Promise((resolve) => setTimeout(resolve, 7000));
-const [after, endpointAfter] = await Promise.all([
-  listEvents(),
-  request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`),
-]);
-
-console.log("CHARIPAY_TOGGLE_PROBE=" + JSON.stringify({
-  disableHttpStatus:disable.status,
-  enableHttpStatus:enable.status,
-  before,
-  after,
-  endpoint:endpointAfter.body && typeof endpointAfter.body === "object" ? {
-    enabled:endpointAfter.body.enabled ?? null,
-    status:endpointAfter.body.status ?? null,
-    consecutiveFailures:endpointAfter.body.consecutiveFailures ?? null,
-    totalDeliveries:endpointAfter.body.totalDeliveries ?? null,
-    successfulDeliveries:endpointAfter.body.successfulDeliveries ?? null,
-    failedDeliveries:endpointAfter.body.failedDeliveries ?? null,
-    lastDeliveryAt:endpointAfter.body.lastDeliveryAt ?? null,
-    lastSuccessAt:endpointAfter.body.lastSuccessAt ?? null,
-    lastFailureAt:endpointAfter.body.lastFailureAt ?? null,
-  } : null,
+console.log("CHARIPAY_TRANSACTION_SHAPE=" + JSON.stringify({
+  eventHttpStatus:eventRes.status,
+  eventPayload:safeObject(payloadObject),
+  operationIdPresent:operationId !== null && operationId !== undefined,
+  detailHttpStatus:detailRes.status,
+  transactionDetail:safeObject(detailRes.body),
+  listHttpStatus:listRes.status,
+  listTopLevelKeys:listRes.body && typeof listRes.body === "object" && !Array.isArray(listRes.body)
+    ? Object.keys(listRes.body).sort()
+    : [],
+  listItems:listItems.slice(0,10).map(safeObject),
 }));
