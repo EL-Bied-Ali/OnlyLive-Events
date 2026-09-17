@@ -133,7 +133,6 @@ describe("ChariPayProvider hardening", () => {
       customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order-unknown",
-      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
       expiresAt: new Date(Date.now() + 60_000),
     })).rejects.toMatchObject({ outcomeUnknown: true, status: 201, correlationId: "corr-checkout" });
   });
