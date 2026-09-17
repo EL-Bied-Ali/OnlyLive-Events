@@ -82,4 +82,144 @@ describe("ChariPay expired checkout reconciliation", () => {
       });
     }
   });
+  it("recovers an exact successful payment from ChariPay's transaction ledger", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, {
+      data: [{
+        operationId: 281,
+        type: "PAYMENT",
+        status: "SUCCESS",
+        amount: 10,
+        currency: "MAD",
+        direction: "IN",
+        externalReference: "order-123",
+      }],
+      hasMore: false,
+      nextCursor: null,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new ChariPayProvider().lookupPaymentStatus({
+      orderExternalId: "order-123",
+      amountCents: 1000,
+      currency: "MAD",
+    })).resolves.toEqual({
+      status: "succeeded",
+      providerOperationId: "281",
+      providerStatus: "SUCCESS",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://api-psp.charipay.ma/v1/transactions?type=PAYMENT&search=order-123&limit=50",
+      expect.objectContaining({
+        method: "GET",
+        headers: expect.objectContaining({
+          "X-CHARI-PAY-API-KEY": expect.stringMatching(/^chari_sk_test_/),
+        }),
+      }),
+    );
+  });
+
+  it("fails closed when the transaction ledger match is ambiguous or immutable facts differ", async () => {
+    const provider = new ChariPayProvider();
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, {
+      data: [{
+        operationId: 281,
+        type: "PAYMENT",
+        status: "SUCCESS",
+        amount: 9.99,
+        currency: "MAD",
+        direction: "IN",
+        externalReference: "order-123",
+      }],
+      hasMore: false,
+    })));
+    await expect(provider.lookupPaymentStatus({
+      orderExternalId: "order-123",
+      amountCents: 1000,
+      currency: "MAD",
+    })).resolves.toMatchObject({ status: "ambiguous", providerOperationId: "281" });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, {
+      data: [
+        { operationId: 281, externalReference: "order-123" },
+        { operationId: 282, externalReference: "order-123" },
+      ],
+      hasMore: false,
+    })));
+    await expect(provider.lookupPaymentStatus({
+      orderExternalId: "order-123",
+      amountCents: 1000,
+      currency: "MAD",
+    })).resolves.toEqual({
+      status: "ambiguous",
+      providerStatus: "MULTIPLE_EXACT_MATCHES",
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, {
+      data: [],
+      hasMore: true,
+      nextCursor: "cursor",
+    })));
+    await expect(provider.lookupPaymentStatus({
+      orderExternalId: "order-123",
+      amountCents: 1000,
+      currency: "MAD",
+    })).resolves.toEqual({
+      status: "ambiguous",
+      providerStatus: "SEARCH_TRUNCATED",
+    });
+  });
+
+  it("maps pending and not-found ledger results without claiming payment success", async () => {
+    const provider = new ChariPayProvider();
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, {
+      data: [{
+        operationId: 300,
+        type: "PAYMENT",
+        status: "PENDING_3DS",
+        amount: 10,
+        currency: "MAD",
+        direction: "IN",
+        externalReference: "order-pending",
+      }],
+      hasMore: false,
+    })));
+    await expect(provider.lookupPaymentStatus({
+      orderExternalId: "order-pending",
+      amountCents: 1000,
+      currency: "MAD",
+    })).resolves.toMatchObject({
+      status: "pending",
+      providerOperationId: "300",
+      providerStatus: "PENDING_3DS",
+    });
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, {
+      data: [],
+      hasMore: false,
+    })));
+    await expect(provider.lookupPaymentStatus({
+      orderExternalId: "order-missing",
+      amountCents: 1000,
+      currency: "MAD",
+    })).resolves.toEqual({ status: "not_found" });
+  });
+
+  it("rejects a malformed transaction list instead of guessing", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, {
+      content: [],
+    })));
+
+    await expect(new ChariPayProvider().lookupPaymentStatus({
+      orderExternalId: "order-123",
+      amountCents: 1000,
+      currency: "MAD",
+    })).rejects.toMatchObject({
+      name: "ProviderRequestError",
+      outcomeUnknown: true,
+    });
+  });
+
 });
