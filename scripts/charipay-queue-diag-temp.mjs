@@ -3,7 +3,7 @@ const ENDPOINT_ID = "77e21777-0e04-44df-9489-c9084671bc84";
 const apiKey = process.env.CHARIPAY_API_KEY?.trim();
 
 if (!apiKey) {
-  console.log("CHARIPAY_SECOND_ACTIVATE=" + JSON.stringify({ ok:false, error:"missing_api_key" }));
+  console.log("CHARIPAY_TOGGLE_PROBE=" + JSON.stringify({ ok:false, error:"missing_api_key" }));
   process.exit(0);
 }
 
@@ -15,6 +15,7 @@ async function request(path, init = {}) {
       ...init,
       headers:{
         "X-CHARI-PAY-API-KEY":apiKey,
+        "content-type":"application/json",
         ...(init.headers || {}),
       },
       signal:controller.signal,
@@ -42,13 +43,51 @@ async function listEvents() {
   }));
 }
 
-const before = await listEvents();
-const activate = await request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}/activate`, { method:"POST" });
-await new Promise((resolve) => setTimeout(resolve, 5000));
-const after = await listEvents();
+const endpoint = await request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`);
+const e = endpoint.body;
+if (!e || typeof e !== "object" || typeof e.url !== "string") {
+  console.log("CHARIPAY_TOGGLE_PROBE=" + JSON.stringify({ ok:false, endpointHttpStatus:endpoint.status }));
+  process.exit(0);
+}
 
-console.log("CHARIPAY_SECOND_ACTIVATE=" + JSON.stringify({
-  activateHttpStatus:activate.status,
+const baseBody = {
+  url:e.url,
+  description:e.description ?? undefined,
+  enabledEvents:Array.isArray(e.enabledEvents) ? e.enabledEvents : undefined,
+  customHeaders:e.customHeaders && typeof e.customHeaders === "object" ? e.customHeaders : undefined,
+  apiVersion:e.apiVersion ?? undefined,
+};
+
+const before = await listEvents();
+const disable = await request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`, {
+  method:"PATCH",
+  body:JSON.stringify({ ...baseBody, enabled:false }),
+});
+await new Promise((resolve) => setTimeout(resolve, 1500));
+const enable = await request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`, {
+  method:"PATCH",
+  body:JSON.stringify({ ...baseBody, enabled:true }),
+});
+await new Promise((resolve) => setTimeout(resolve, 7000));
+const [after, endpointAfter] = await Promise.all([
+  listEvents(),
+  request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`),
+]);
+
+console.log("CHARIPAY_TOGGLE_PROBE=" + JSON.stringify({
+  disableHttpStatus:disable.status,
+  enableHttpStatus:enable.status,
   before,
   after,
+  endpoint:endpointAfter.body && typeof endpointAfter.body === "object" ? {
+    enabled:endpointAfter.body.enabled ?? null,
+    status:endpointAfter.body.status ?? null,
+    consecutiveFailures:endpointAfter.body.consecutiveFailures ?? null,
+    totalDeliveries:endpointAfter.body.totalDeliveries ?? null,
+    successfulDeliveries:endpointAfter.body.successfulDeliveries ?? null,
+    failedDeliveries:endpointAfter.body.failedDeliveries ?? null,
+    lastDeliveryAt:endpointAfter.body.lastDeliveryAt ?? null,
+    lastSuccessAt:endpointAfter.body.lastSuccessAt ?? null,
+    lastFailureAt:endpointAfter.body.lastFailureAt ?? null,
+  } : null,
 }));
