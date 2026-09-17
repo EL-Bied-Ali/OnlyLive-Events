@@ -650,4 +650,65 @@ describe("reconciliation alert — enqueue fan-out and delivery", () => {
       expect(row.lastErrorCode).toBe("entity_state_no_longer_valid");
     }
   });
+
+  it("an admin deactivated or downgraded after enqueue never receives the alert, but an unaffected admin still does", async () => {
+    // Found during a pre-merge audit: renderReconciliationAlert() only
+    // parsed orderId out of entityId and sent unconditionally to the
+    // row's enqueue-time recipientEmail, never re-checking the admin half
+    // of `${orderId}:${adminUserId}`. A durable outbox row can sit
+    // pending/retrying for a while, so an admin revoked after enqueue but
+    // before dispatch would still receive customer PII (email, amount,
+    // event, admin order link) they no longer have access to act on.
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await prisma.reservation.update({ where: { id: fixture.reservationId }, data: { status: "expired" } });
+    await postWebhook(fixture, "payment.succeeded");
+    const order = await prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } });
+    expect(order.status).toBe("paid_but_unfulfillable");
+
+    function createRecon(name: string) {
+      return prisma.adminUser.create({
+        data: {
+          email: `recon-${name}-${crypto.randomUUID()}@test.onlylive.ma`,
+          passwordHash: "not-used-in-tests",
+          name,
+          role: "admin",
+        },
+      });
+    }
+    const [toDeactivate, toDowngrade, unaffected] = await Promise.all([
+      createRecon("to-deactivate"),
+      createRecon("to-downgrade"),
+      createRecon("unaffected"),
+    ]);
+    // Enqueued directly (not via the webhook, which already ran before
+    // these admins existed) — same call path enqueueReconciliationAlertEmail
+    // is idempotent through, per the test above.
+    await prisma.$transaction((tx) => enqueueReconciliationAlertEmail(tx, order.id));
+
+    // Revoked/downgraded strictly after the row was already enqueued while
+    // each admin was still a valid recipient.
+    await Promise.all([
+      prisma.adminUser.update({ where: { id: toDeactivate.id }, data: { isActive: false } }),
+      prisma.adminUser.update({ where: { id: toDowngrade.id }, data: { role: "scanner" } }),
+    ]);
+
+    const sendSpy = vi.spyOn(ConsoleEmailProvider.prototype, "send");
+    await dispatchPendingEmails();
+
+    const sentTo = sendSpy.mock.calls.map((args) => args[0].to);
+    expect(sentTo).not.toContain(toDeactivate.email);
+    expect(sentTo).not.toContain(toDowngrade.email);
+    expect(sentTo).toContain(unaffected.email);
+
+    const [deactivatedRow, downgradedRow, unaffectedRow] = await Promise.all([
+      prisma.emailOutbox.findFirstOrThrow({ where: { type: "reconciliation_alert", entityId: `${order.id}:${toDeactivate.id}` } }),
+      prisma.emailOutbox.findFirstOrThrow({ where: { type: "reconciliation_alert", entityId: `${order.id}:${toDowngrade.id}` } }),
+      prisma.emailOutbox.findFirstOrThrow({ where: { type: "reconciliation_alert", entityId: `${order.id}:${unaffected.id}` } }),
+    ]);
+    expect(deactivatedRow.status).toBe("failed");
+    expect(deactivatedRow.lastErrorCode).toBe("entity_state_no_longer_valid");
+    expect(downgradedRow.status).toBe("failed");
+    expect(downgradedRow.lastErrorCode).toBe("entity_state_no_longer_valid");
+    expect(unaffectedRow.status).toBe("sent");
+  });
 });

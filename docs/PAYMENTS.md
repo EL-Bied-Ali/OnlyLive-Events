@@ -146,10 +146,11 @@ treating it as `already_handled`:
    refund). This is a terminal, human-only state: it is never
    re-attempted automatically by a later event — every admin/super_admin
    active at that moment is also emailed (see the best-effort alert
-   described just above `paid_but_unfulfillable`), but the dashboard's
-   attention metrics remain the reliable way "human must resolve it" gets
-   noticed, since the email isn't retried on a provider failure and
-   doesn't reach an admin added afterward.
+   described just above `paid_but_unfulfillable`, retried on a provider
+   failure like any other outbox row), but the dashboard's attention
+   metrics remain the reliable way "human must resolve it" gets noticed,
+   since the recipient list is fixed at enqueue time and never reaches an
+   admin added or reactivated afterward.
 4. Either way, `Payment.status` is set to `paid` (money was captured —
    this is a fact, independent of whether the order could be fulfilled)
    and an `AuditLog` entry is written

@@ -138,16 +138,35 @@ async function renderRefundConfirmation(refundId: string): Promise<RenderedEmail
 
 /**
  * entityId is `${orderId}:${adminUserId}` (see
- * `enqueueReconciliationAlertEmail`) — only orderId is needed to render
- * content, since the recipient address was already captured on the row at
- * enqueue time. The outcome/reason is deliberately re-derived from the
- * order's CURRENT status rather than trusted from enqueue time: if the
- * order has since moved past reconciliation (e.g. an admin already
- * resolved it) the alert is stale and this returns null instead of
- * re-alerting on outdated information.
+ * `enqueueReconciliationAlertEmail`). Both the order's business state AND
+ * the admin's current access are re-checked fresh at dispatch time, never
+ * trusted from enqueue time: the order may have since moved past
+ * reconciliation (e.g. another admin already resolved it), and the admin
+ * may have been deactivated, offboarded, or downgraded to a role that can
+ * no longer act on a refund (`support`/`scanner`) since this row was
+ * enqueued — a durable outbox row can sit pending/retrying for a while, so
+ * this is not just a theoretical race. Sending a captured-payment alert
+ * (customer email, amount, event, admin order link) to someone who no
+ * longer has the access that justified receiving it would leak that data
+ * past their revoked authorization. Returns null (row marked terminally
+ * failed, never sent) whenever either check fails, including when the
+ * admin's current email no longer matches the row's `recipientEmail` — an
+ * email change means the enqueue-time address is a stale snapshot.
  */
-async function renderReconciliationAlert(entityId: string): Promise<RenderedEmail | null> {
-  const orderId = entityId.split(":")[0]!;
+async function renderReconciliationAlert(entityId: string, recipientEmail: string): Promise<RenderedEmail | null> {
+  const [orderId, adminUserId] = entityId.split(":");
+  if (!orderId || !adminUserId) return null;
+
+  const admin = await prisma.adminUser.findUnique({ where: { id: adminUserId } });
+  if (
+    !admin
+    || !admin.isActive
+    || (admin.role !== "admin" && admin.role !== "super_admin")
+    || admin.email !== recipientEmail
+  ) {
+    return null;
+  }
+
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: { user: { select: { email: true } }, event: { select: { title: true } } },
@@ -175,7 +194,7 @@ async function renderReconciliationAlert(entityId: string): Promise<RenderedEmai
   return { subject: `Alerte réconciliation — commande ${order.orderNumber}`, text };
 }
 
-async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId">): Promise<RenderedEmail | null> {
+async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId" | "recipientEmail">): Promise<RenderedEmail | null> {
   switch (row.type) {
     case "order_confirmation":
       return renderOrderConfirmation(row.entityId);
@@ -184,7 +203,7 @@ async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId">): Promise
     case "refund_confirmation":
       return renderRefundConfirmation(row.entityId);
     case "reconciliation_alert":
-      return renderReconciliationAlert(row.entityId);
+      return renderReconciliationAlert(row.entityId, row.recipientEmail);
   }
 }
 
