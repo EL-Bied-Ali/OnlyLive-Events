@@ -255,10 +255,16 @@ result — needs a request timeout shorter than the lease plus a fencing/
 conditional-finalization mechanism before a real provider is wired in.
 `errorCode()`'s stored/logged error message isn't guaranteed free of
 provider-specific sensitive data — needs a typed provider error with a
-safe machine code before a real provider is wired in. Native Vercel Cron
-needs `vercel.json` + `CRON_SECRET`, not this route's custom header
-contract — an external scheduler works today but must actually be
-provisioned before dispatch can be relied on to run. The HTTP-loopback
+safe machine code before a real provider is wired in. `/api/internal/
+dispatch-emails` now accepts `CRON_SECRET`/`Authorization: Bearer` the
+same way `/api/internal/sweep-expired-holds` does (`lib/http/
+internalAuth.ts`, shared by both routes; fixed during the PR #13 merge
+audit), but it is still **not** in `vercel.json`'s `crons` array: the
+current Vercel Hobby plan only allows a cron to run once per day, far too
+infrequent for customer-facing order-confirmation/failure emails. An
+external higher-frequency scheduler (or a paid Vercel plan, once
+budgeted) must call this route directly — not provisioned yet, so
+dispatch cannot be relied on to run promptly until it is. The HTTP-loopback
 exemption in `lib/appUrl.ts` (`NODE_ENV=production` still permits `http://`
 when the hostname is `localhost`/`127.0.0.1`/`::1`, for the Playwright/CI
 `next start` run) would also silently accept a genuine production

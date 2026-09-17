@@ -1,26 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { sweepExpiredHolds } from "@/lib/inventory";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
+import { isInternalRequestAuthorized } from "@/lib/http/internalAuth";
 import { pruneRateLimitBuckets } from "@/lib/rateLimit";
 import { reconcileExpiredCheckouts } from "@/lib/orders/checkoutReconciliation";
 import { reconcileProcessingRefundsFair } from "@/lib/orders/refundReconciliation";
 
 export const runtime = "nodejs";
 
-function isAuthorized(request: NextRequest): boolean {
-  const internalSecret = process.env.INTERNAL_API_SECRET;
-  const cronSecret = process.env.CRON_SECRET;
-  const internalHeader = request.headers.get("x-internal-secret");
-  const authorization = request.headers.get("authorization");
-  return Boolean(
-    (internalSecret && internalHeader === internalSecret)
-    || (cronSecret && authorization === `Bearer ${cronSecret}`),
-  );
-}
-
 async function runHousekeeping(request: NextRequest) {
   try {
-    if (!isAuthorized(request)) {
+    if (!isInternalRequestAuthorized(request)) {
       throw new ApiError(401, "UNAUTHENTICATED", "Invalid housekeeping credentials");
     }
 
