@@ -58,7 +58,6 @@ describe("ChariPayProvider", () => {
       customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order-456",
-      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
       expiresAt: checkoutExpiry,
     });
 
@@ -82,7 +81,6 @@ describe("ChariPayProvider", () => {
         urls: {
           accept: "https://onlylive.ma/orders/order-456",
           decline: "https://onlylive.ma/orders/order-456",
-          notification: "https://onlylive.ma/api/payments/webhook/charipay",
         },
       },
       metadata: { onlylivePaymentId: "payment-123", onlyliveOrderId: "order-456" },
@@ -96,7 +94,6 @@ describe("ChariPayProvider", () => {
       paymentId: "payment-customer", orderId: "order-customer", amountCents: 1000, currency: "MAD",
       idempotencyKey: "idem-customer", customerEmail: "buyer@example.com", customerName: "Amine Bennani",
       returnUrl: "https://onlylive.ma/orders/order-customer",
-      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
       expiresAt: new Date(Date.now() + 60_000),
     };
     const provider = new ChariPayProvider();
@@ -120,7 +117,6 @@ describe("ChariPayProvider", () => {
       customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order",
-      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
       expiresAt: new Date(Date.now() + 60_000),
     };
     await expect(provider.createPayment({ ...base, currency: "EUR" })).rejects.toThrow("only supports MAD");
@@ -144,7 +140,6 @@ describe("ChariPayProvider", () => {
       customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order",
-      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
     };
     await expect(provider.createPayment(base)).rejects.toThrow("future checkout expiry");
     await expect(provider.createPayment({ ...base, expiresAt: new Date(Date.now() - 1) })).rejects.toThrow("future checkout expiry");
@@ -165,7 +160,6 @@ describe("ChariPayProvider", () => {
       customerName: "Amine Bennani",
       customerPhone: "+212600000000",
       returnUrl: "https://onlylive.ma/orders/order",
-      webhookUrl: "https://onlylive.ma/api/payments/webhook/charipay",
       expiresAt: new Date(Date.now() + 60_000),
     })).rejects.toThrow(/checkoutUrl/);
   });
