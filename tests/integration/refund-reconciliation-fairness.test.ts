@@ -16,6 +16,7 @@ function enableChariPay() {
   vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "fairness-webhook-secret");
   vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.onlylive.example/");
   vi.stubEnv("VERCEL_ENV", "preview");
+  vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "test-automation-bypass-secret");
 }
 
 function fakeWebhookRequest(payload: unknown) {

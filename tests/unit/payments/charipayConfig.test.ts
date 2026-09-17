@@ -36,6 +36,7 @@ describe("ChariPay configuration guard", () => {
   it("allows only sandbox credentials on Vercel Preview", () => {
     configureBase();
     vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "unit-bypass-secret");
     vi.stubEnv("CHARIPAY_ENV", "sandbox");
     vi.stubEnv("CHARIPAY_API_KEY", testKey("test"));
     expect(getPaymentProvider().name).toBe("charipay");
