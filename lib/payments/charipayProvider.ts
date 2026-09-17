@@ -8,6 +8,8 @@ import {
   type ParsedWebhookEvent,
   type ParseWebhookInput,
   type PaymentProvider,
+  type PaymentStatusLookupInput,
+  type PaymentStatusLookupResult,
   type PaymentWebhookEventType,
   type RefundInput,
   type RefundResult,
@@ -120,6 +122,22 @@ interface ChariPayRefundResponse {
   refundId?: unknown;
   refundReference?: unknown;
   status?: unknown;
+}
+
+interface ChariPayTransaction {
+  operationId?: unknown;
+  type?: unknown;
+  status?: unknown;
+  amount?: unknown;
+  currency?: unknown;
+  direction?: unknown;
+  externalReference?: unknown;
+}
+
+interface ChariPayTransactionListResponse {
+  data?: unknown;
+  hasMore?: unknown;
+  nextCursor?: unknown;
 }
 
 interface ChariPayWebhookBody {
@@ -478,6 +496,92 @@ export class ChariPayProvider implements PaymentProvider {
         ? body.refundReference
         : refundReference;
     return { providerRefundId, status };
+  }
+
+  async lookupPaymentStatus(input: PaymentStatusLookupInput): Promise<PaymentStatusLookupResult> {
+    // Real sandbox responses (captured 2026-09-17) expose the OnlyLive Order
+    // id as externalReference. The Payment id is not searchable there.
+    if (input.currency !== "MAD") {
+      return { status: "ambiguous", providerStatus: "CURRENCY_MISMATCH" };
+    }
+
+    const params = new URLSearchParams({
+      type: "PAYMENT",
+      search: input.orderExternalId,
+      limit: "50",
+    });
+    const response = await fetchWithTimeout(
+      `${CHARIPAY_API_BASE_URL}/v1/transactions?${params.toString()}`,
+      {
+        method: "GET",
+        headers: { "X-CHARI-PAY-API-KEY": requiredEnv("CHARIPAY_API_KEY") },
+      },
+    );
+    const body = (await parseApiResponse(response)) as ChariPayTransactionListResponse;
+    if (!Array.isArray(body.data) || typeof body.hasMore !== "boolean") {
+      throw new ProviderRequestError(
+        "ChariPay transaction lookup returned a malformed list",
+        true,
+        response.status,
+        undefined,
+        responseCorrelationId(response),
+      );
+    }
+
+    // Never declare success from a truncated search result: another exact
+    // reference could exist on a later page and make the match ambiguous.
+    if (body.hasMore) {
+      return { status: "ambiguous", providerStatus: "SEARCH_TRUNCATED" };
+    }
+
+    const exactMatches = body.data.filter((entry): entry is ChariPayTransaction => {
+      return Boolean(
+        entry
+        && typeof entry === "object"
+        && !Array.isArray(entry)
+        && (entry as ChariPayTransaction).externalReference === input.orderExternalId,
+      );
+    });
+
+    if (exactMatches.length === 0) return { status: "not_found" };
+    if (exactMatches.length !== 1) {
+      return { status: "ambiguous", providerStatus: "MULTIPLE_EXACT_MATCHES" };
+    }
+
+    const transaction = exactMatches[0]!;
+    const providerStatus = typeof transaction.status === "string" ? transaction.status : undefined;
+    const providerOperationId =
+      typeof transaction.operationId === "number" && Number.isFinite(transaction.operationId)
+        ? String(transaction.operationId)
+        : typeof transaction.operationId === "string" && transaction.operationId.length > 0
+          ? transaction.operationId
+          : undefined;
+    const amountCents = madToCents(transaction.amount);
+
+    const immutableFactsMatch =
+      transaction.type === "PAYMENT"
+      && transaction.direction === "IN"
+      && transaction.currency === "MAD"
+      && transaction.currency === input.currency
+      && amountCents === input.amountCents;
+
+    if (!immutableFactsMatch) {
+      return { status: "ambiguous", providerOperationId, providerStatus };
+    }
+
+    if (providerStatus === "SUCCESS") {
+      return { status: "succeeded", providerOperationId, providerStatus };
+    }
+    if (providerStatus === "PENDING" || providerStatus === "PENDING_3DS") {
+      return { status: "pending", providerOperationId, providerStatus };
+    }
+    if (providerStatus === "FAILED") {
+      return { status: "failed", providerOperationId, providerStatus };
+    }
+    if (providerStatus === "CANCELED") {
+      return { status: "cancelled", providerOperationId, providerStatus };
+    }
+    return { status: "ambiguous", providerOperationId, providerStatus };
   }
 
   async closePaymentSession(providerPaymentId: string, requestId: string): Promise<ClosePaymentSessionResult> {
