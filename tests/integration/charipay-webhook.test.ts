@@ -235,6 +235,34 @@ describe("ChariPay webhook route", () => {
     expect(rows[0]!.status).toBe("pending");
   });
 
+  it("enqueues a reconciliation alert atomically when payment.succeeded resolves to paid_but_unfulfillable", async () => {
+    // Added during the PR #13 rebase onto PR #16 (admin reconciliation
+    // alerts): the fake webhook route already enqueued this; the ChariPay
+    // route did not, since PR #16 didn't exist yet when it was written —
+    // ChariPay-originated stuck orders would otherwise silently never
+    // alert anyone while fake-provider ones did.
+    const fixture = await createChariPendingOrder({ quantity: 1, priceCents: 10_000 });
+    await prisma.reservation.update({ where: { id: fixture.reservationId }, data: { status: "expired" } });
+    enableChariPay();
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+    ));
+    expect(response.status).toBe(200);
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } })).resolves.toMatchObject({ status: "paid_but_unfulfillable" });
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "paid" });
+
+    const rows = await prisma.emailOutbox.findMany({
+      where: { type: "reconciliation_alert", entityType: "order", entityId: { startsWith: `${fixture.order.id}:` } },
+    });
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) expect(row.status).toBe("pending");
+    // No order_confirmation should have been enqueued for an unfulfillable order.
+    expect(await prisma.emailOutbox.count({
+      where: { type: "order_confirmation", entityType: "order", entityId: fixture.order.id },
+    })).toBe(0);
+  });
+
   it("fails closed on a payment webhook missing metadata.onlyliveOrderId, even with a correct payment id", async () => {
     // metadata.onlyliveOrderId is a required second reconciliation
     // invariant, not an optional bonus check — a real payment.succeeded

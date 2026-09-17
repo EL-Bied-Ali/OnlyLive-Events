@@ -9,7 +9,11 @@ import {
   finalizeRefundSuccess,
   type RefundProviderEvidence,
 } from "@/lib/orders/refund";
-import { enqueueOrderConfirmationEmail, enqueuePaymentFailedEmail } from "@/lib/email/notifications";
+import {
+  enqueueOrderConfirmationEmail,
+  enqueuePaymentFailedEmail,
+  enqueueReconciliationAlertEmail,
+} from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -310,6 +314,8 @@ export async function POST(request: NextRequest) {
         // lib/email/notifications.ts and lib/email/dispatcher.ts.
         if (outcome === "paid") {
           await enqueueOrderConfirmationEmail(tx, payment.orderId);
+        } else if (outcome === "paid_but_unfulfillable" || outcome === "reconciliation_required") {
+          await enqueueReconciliationAlertEmail(tx, payment.orderId);
         }
       } else if (event.type === "payment.failed") {
         outcome = await failOrderPayment(payment.orderId, "failed", tx);
