@@ -45,9 +45,9 @@ function validateChariPayWebhookUrl(value: string): URL {
  * Build the provider notification URL independently from the browser return
  * origin. A deliberate CHARIPAY_WEBHOOK_URL can point at a dedicated public
  * ingress/relay. Otherwise Preview deployments use the normal OnlyLive route,
- * with Vercel's documented automation-bypass query attached when available so
- * third-party webhook POSTs are not stopped by Vercel Authentication before
- * reaching the application. Production never auto-attaches the bypass secret.
+ * with Vercel's documented automation-bypass query attached so third-party
+ * webhook POSTs are not stopped by Vercel Authentication before reaching the
+ * application. Production never auto-attaches the bypass secret.
  */
 export function getChariPayWebhookUrl(): string {
   const explicit = process.env.CHARIPAY_WEBHOOK_URL?.trim();
@@ -56,9 +56,12 @@ export function getChariPayWebhookUrl(): string {
   const url = validateChariPayWebhookUrl(`${getOnlyLivePublicUrl()}/api/payments/webhook/charipay`);
   if (process.env.VERCEL_ENV?.trim() === "preview") {
     const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET?.trim();
-    if (bypassSecret) {
-      url.searchParams.set("x-vercel-protection-bypass", bypassSecret);
+    if (!bypassSecret) {
+      throw new Error(
+        "Vercel Preview ChariPay requires VERCEL_AUTOMATION_BYPASS_SECRET or an explicit public CHARIPAY_WEBHOOK_URL",
+      );
     }
+    url.searchParams.set("x-vercel-protection-bypass", bypassSecret);
   }
   return url.toString();
 }
