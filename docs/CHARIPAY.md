@@ -19,7 +19,7 @@ The public reference is generated from ChariPay's OpenAPI contract. Re-check tha
 
 OnlyLive uses `POST /v1/payment-sessions`, never direct card endpoints. PAN/CVV therefore stay outside OnlyLive.
 
-For each session the adapter sends MAD major units, stable OnlyLive Payment id as `externalId`, a stable `Idempotency-Key`, order id, buyer email, HTTPS callbacks, `singleUse:true`, `notifyOnFailure:true`, and reconciliation ids in metadata.
+For each session the adapter sends MAD major units, stable OnlyLive Payment id as `externalId`, a stable `Idempotency-Key`, order id, buyer email, HTTPS browser return callbacks (accept/decline), `singleUse:true`, `notifyOnFailure:true`, and reconciliation ids in metadata. It deliberately does **not** send `config.urls.notification`: webhook delivery uses the separately registered partner webhook endpoint.
 
 Generic checkout passes customer name/phone data unchanged. Registration itself now requires a phone number (`lib/validation/auth.ts`'s `registerSchema`, loosely validated: plausible phone characters plus an 8–15 real-digit count) precisely because ChariPay's hosted checkout needs one — but the stricter ChariPay-specific name splitting, Moroccan/international phone normalization, and final required-field validation still live inside the ChariPay adapter itself, not in registration; FakeProvider and future providers do not inherit those ChariPay-specific requirements. A ChariPay checkout fails with `PAYMENT_CUSTOMER_DETAILS_REQUIRED` before network I/O when the provider-required customer data is missing or invalid, even though registration already required a phone value upstream.
 
@@ -69,7 +69,9 @@ Register a dedicated HTTPS endpoint on port 443 with an explicit allowlist only:
 - `refund.succeeded`
 - `refund.failed`
 
-Pin the webhook `apiVersion` to the provider's published payload contract version (the public API reference is currently v1.0.0) and verify the exact accepted literal in sandbox before final provider verification. Never leave `enabledEvents` null/empty, because that subscribes to all current and future events.
+Pin the webhook `apiVersion` to the provider's published payload contract version and verify the exact accepted literal in sandbox before final provider verification. Never leave `enabledEvents` null/empty, because that subscribes to all current and future events.
+
+**Sandbox finding (2026-09-17):** sending a per-session `config.urls.notification` caused ChariPay to auto-register a second endpoint ("Session notification URL (auto-registered)") in addition to the dedicated partner endpoint. The auto-registered endpoint dropped the `x-vercel-protection-bypass` query parameter and its real deliveries returned Vercel `401 Unauthorized`. The dedicated registered endpoint retained the bypass query and it exactly matched Vercel's current automation-bypass secret. A single payment also produced duplicate webhook-event rows, one for each endpoint. Therefore OnlyLive omits the per-session notification URL and treats the registered partner endpoint as the sole webhook ingress.
 
 The registration secret is returned only once. Store it as a secret. **ChariPay's own documentation is internally contradictory on rotation:** the API overview states, verbatim, "During a rotation, while the old secret is still in its grace window, we send the same body signed twice," while the `rotate-secret` endpoint reference states, verbatim, "Immediately invalidates the previous secret." These cannot both be literally true, and neither has been confirmed against real provider behavior. OnlyLive's `CHARIPAY_WEBHOOK_SECRET`/`CHARIPAY_WEBHOOK_SECRET_NEXT` support **both** possibilities defensively: `verifySignature` checks both secrets against both signature headers (`X-CHARI-SIGNATURE`, `X-CHARI-SIGNATURE-NEXT`) — see `charipayWebhookRotation.test.ts` — so it degrades safely whether ChariPay sends a dual-signed grace window or cuts over immediately. Do not treat either doc claim as established provider truth; sandbox acceptance checklist item 15 below is the actual arbiter — only a real coordinated rotation test in sandbox settles which behavior (or something else entirely) ChariPay actually implements.
 
@@ -145,7 +147,7 @@ Before setting `CHARIPAY_PROVIDER_VERIFIED=true`:
 7. exercise a real payment failure;
 8. exercise full and partial refund success/failure;
 9. replay a webhook delivery and the same `refundReference`;
-10. compare per-session notification URL behavior with the registered endpoint and ensure duplicate paths are harmless or remove the redundant path;
+10. **done** — real sandbox evidence showed that `config.urls.notification` auto-registers a duplicate endpoint, drops the Vercel bypass query, and duplicates event delivery; OnlyLive now omits the per-session notification URL and relies only on the registered partner webhook endpoint;
 11. verify real rate-limit/`Retry-After` headers and correlation ids;
 12. confirm CASH is disabled or explicitly redesign the hold flow;
 13. capture `GET /v1/transactions` responses needed for payment-loss reconciliation;
