@@ -91,6 +91,19 @@ export interface RefundStatusResult {
   status: "pending" | "succeeded" | "failed" | "not_found";
 }
 
+export interface PaymentStatusLookupInput {
+  /** Stable OnlyLive Order id; ChariPay exposes this as externalReference. */
+  orderExternalId: string;
+  amountCents: number;
+  currency: string;
+}
+
+export interface PaymentStatusLookupResult {
+  status: "succeeded" | "pending" | "failed" | "cancelled" | "not_found" | "ambiguous";
+  providerOperationId?: string;
+  providerStatus?: string;
+}
+
 /**
  * Result of an explicit attempt to make an expired checkout session
  * non-payable before releasing its inventory. `non_payable` is the only
@@ -145,6 +158,12 @@ export interface PaymentProvider {
   refund(input: RefundInput): Promise<RefundResult>;
   /** Query an already-submitted refund by its stable provider/reference id. */
   getRefundStatus(refundReference: string): Promise<RefundStatusResult>;
+  /**
+   * Optional authenticated ledger lookup used to recover a payment when the
+   * provider's webhook delivery is delayed or lost. Implementations must
+   * return `succeeded` only after all immutable business facts match.
+   */
+  lookupPaymentStatus?(input: PaymentStatusLookupInput): Promise<PaymentStatusLookupResult>;
   /**
    * Make a hosted checkout session non-payable after OnlyLive's local checkout
    * deadline. Implementations must never return `non_payable` for a session
