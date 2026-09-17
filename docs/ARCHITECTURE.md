@@ -76,6 +76,42 @@ browser) makes this unnecessary — leave the env var unset.
 Production deployment should target a managed Postgres
 (Neon/Supabase/RDS — **not yet decided**) compatible with Vercel.
 
+## Deployment migrations
+
+Vercel builds Next.js projects with `next build` by default, which never
+runs `prisma migrate deploy` — a schema change merged to a branch only
+reached whichever database someone remembered to migrate by hand. This bit
+us in practice: the Preview database was missing `email_outbox` for days
+after PR #17 merged, silently rolling back every real ChariPay webhook's
+`$transaction` (order confirmation included) on the `P2021` it threw.
+
+Fixed by adding a `vercel-build` script (`package.json`) — Vercel runs this
+instead of `build` automatically whenever it's present:
+
+```
+"vercel-build": "prisma migrate deploy && next build"
+```
+
+`prisma migrate deploy` runs against the same `DATABASE_URL` the app
+already uses at runtime; there is no separate pooled/direct-URL split in
+this project. (Older Prisma versions supported a `directUrl` field in
+`schema.prisma`'s `datasource` block specifically so migrations could use
+a session-level connection while runtime queries went through a
+transaction-mode pooler — Prisma 7's config-file-based setup removed that
+field entirely: `schema.prisma` now rejects `directUrl` outright, and
+`prisma.config.ts`'s own `Datasource` type only has `url`/`shadowDatabaseUrl`.
+If `DATABASE_URL` in some environment turns out to be a pooled connection
+that can't hold the advisory lock `migrate deploy` needs, that will surface
+as its own distinct, actionable Prisma error at deploy time — not something
+to pre-emptively guess a workaround for now.)
+
+A build with no pending migrations is a no-op (`No pending migrations to
+apply`); an unreachable or misconfigured `DATABASE_URL` now fails the build
+loudly instead of shipping code the database can't support — verified
+locally end-to-end against a from-scratch database (all 9 migrations
+applied, then `next build` succeeded) and confirmed idempotent on a
+second run.
+
 ## Folder structure
 
 ```

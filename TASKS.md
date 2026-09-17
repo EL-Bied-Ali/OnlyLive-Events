@@ -395,6 +395,34 @@ running this migration — not a concern for the app's current state.
   phone (FakeProvider) is never blocked by this. Submitting the form saves
   the phone then immediately retries checkout.
 
+## Completed (automated deployment migrations)
+
+- Root cause of the live Preview bug where real ChariPay `payment.succeeded`
+  webhooks 500'd with `P2021: table public.email_outbox does not exist`:
+  Vercel's default `next build` never runs `prisma migrate deploy`, so a
+  merged schema migration only reached a database if someone ran it by
+  hand. Fixed with a `vercel-build` script (`prisma migrate deploy && next
+  build`) — Vercel automatically prefers this over `build` when present.
+- Confirmed this project's Prisma version (7.10.0) has no pooled/direct-URL
+  split available: `directUrl` in `schema.prisma`'s datasource block is
+  rejected outright ("no longer supported... Move connection URLs to
+  prisma.config.ts"), and `prisma.config.ts`'s own `Datasource` type only
+  exposes `url`/`shadowDatabaseUrl`. `migrate deploy` therefore runs against
+  the same `DATABASE_URL` already used at runtime — see
+  `docs/ARCHITECTURE.md`'s "Deployment migrations" section for the reasoning
+  and what to do if that specific connection ever can't hold the advisory
+  lock `migrate deploy` needs.
+- Verified end-to-end locally against a from-scratch database: all 9
+  migrations applied via `npm run vercel-build`, `next build` succeeded,
+  and a second `prisma migrate deploy` run against the now-migrated
+  database confirmed idempotent (`No pending migrations to apply`).
+- Still needed, outside this fix's scope: someone with the actual Preview
+  environment's Vercel/database access needs to confirm the next
+  deployment's build log actually shows the migration running (this fix
+  only takes effect on the next deploy to that environment), and rotate
+  any database credential that was pasted in plaintext during
+  troubleshooting.
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
