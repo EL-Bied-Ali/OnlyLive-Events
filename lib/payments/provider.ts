@@ -16,8 +16,6 @@ export interface CreatePaymentInput {
   customerPhone?: string | null;
   /** Browser return destination. A redirect is never proof of payment. */
   returnUrl: string;
-  /** Provider callback endpoint. Required by the ChariPay adapter. */
-  webhookUrl?: string;
   /** Provider session should not remain payable after OnlyLive's checkout hold. */
   expiresAt?: Date;
 }
