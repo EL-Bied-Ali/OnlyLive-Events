@@ -1188,5 +1188,21 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "customer-phone-update-schema-shared",
+    "scenario": "updatePhoneSchema accepts and rejects the exact same phone formats as registerSchema's phoneSchema, since both share one export",
+    "category": "validation",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/validation/auth.test.ts"
+  },
+  {
+    "id": "customer-phone-update-auth-and-ownership",
+    "scenario": "PATCH /api/customers/phone rejects an unauthenticated request and an invalid phone without mutating the database, updates only the signed-in customer's own phone, and writes a customer.phone_updated audit entry",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/customerPhone.test.ts"
   }
 ]

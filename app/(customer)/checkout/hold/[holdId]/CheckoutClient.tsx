@@ -29,6 +29,15 @@ export function CheckoutClient({
   );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  // Set only when the provider rejects checkout for a missing/invalid phone
+  // (a customer who registered before phone became mandatory) — see
+  // /api/customers/phone. Never shown speculatively: only after the
+  // provider itself says it's needed, so this never blocks a provider
+  // (like FakeProvider) that doesn't require one.
+  const [needsPhone, setNeedsPhone] = useState(false);
+  const [phone, setPhone] = useState("");
+  const [phoneError, setPhoneError] = useState<string | null>(null);
+  const [savingPhone, setSavingPhone] = useState(false);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -49,6 +58,10 @@ export function CheckoutClient({
       const response = await fetch(`/api/checkout/${reservationId}/start`, { method: "POST" });
       const data = await response.json();
       if (!response.ok) {
+        if (data.error === "PAYMENT_CUSTOMER_DETAILS_REQUIRED") {
+          setNeedsPhone(true);
+          return;
+        }
         setError(data.message ?? "Impossible de démarrer le paiement");
         return;
       }
@@ -62,6 +75,31 @@ export function CheckoutClient({
       setError("Erreur réseau, réessayez");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function handleSavePhone(event: React.FormEvent) {
+    event.preventDefault();
+    setPhoneError(null);
+    setSavingPhone(true);
+    try {
+      const response = await fetch("/api/customers/phone", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ phone }),
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        setPhoneError(data.message ?? "Numéro de téléphone invalide");
+        return;
+      }
+      setNeedsPhone(false);
+      // Retry checkout immediately now that the provider's requirement is met.
+      await handlePay();
+    } catch {
+      setPhoneError("Erreur réseau, réessayez");
+    } finally {
+      setSavingPhone(false);
     }
   }
 
@@ -91,9 +129,30 @@ export function CheckoutClient({
 
       {error && <p style={{ color: "#ff6b6b" }}>{error}</p>}
 
-      <button onClick={handlePay} disabled={expired || submitting} style={{ padding: 14, width: "100%" }}>
-        {submitting ? "..." : "Payer"}
-      </button>
+      {needsPhone ? (
+        <form onSubmit={handleSavePhone} style={{ display: "grid", gap: 12 }}>
+          <p style={{ margin: 0 }}>
+            Un numéro de téléphone est requis pour finaliser ce paiement.
+          </p>
+          <input
+            type="tel"
+            placeholder="Téléphone (ex. 06 12 34 56 78)"
+            value={phone}
+            onChange={(event) => setPhone(event.target.value)}
+            required
+            minLength={8}
+            style={{ padding: 10 }}
+          />
+          {phoneError && <p style={{ color: "#ff6b6b", margin: 0 }}>{phoneError}</p>}
+          <button type="submit" disabled={savingPhone} style={{ padding: 14, width: "100%" }}>
+            {savingPhone ? "..." : "Enregistrer et continuer"}
+          </button>
+        </form>
+      ) : (
+        <button onClick={handlePay} disabled={expired || submitting} style={{ padding: 14, width: "100%" }}>
+          {submitting ? "..." : "Payer"}
+        </button>
+      )}
     </main>
   );
 }

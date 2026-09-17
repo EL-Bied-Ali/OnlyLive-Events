@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { registerSchema } from "@/lib/validation/auth";
+import { registerSchema, updatePhoneSchema } from "@/lib/validation/auth";
 
 function validPayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -64,5 +64,25 @@ describe("registerSchema", () => {
     expect(registerSchema.safeParse(validPayload({ email: "not-an-email" })).success).toBe(false);
     expect(registerSchema.safeParse(validPayload({ password: "short" })).success).toBe(false);
     expect(registerSchema.safeParse(validPayload({ name: "" })).success).toBe(false);
+  });
+});
+
+describe("updatePhoneSchema", () => {
+  // Shares phoneSchema with registerSchema — this only re-checks that the
+  // shared export is actually wired up correctly, not the validation rules
+  // themselves (already exhaustively covered above).
+  it("accepts the same phone formats registerSchema accepts", () => {
+    expect(updatePhoneSchema.safeParse({ phone: "0612345678" }).success).toBe(true);
+    expect(updatePhoneSchema.safeParse({ phone: "+212 6 12 34 56 78" }).success).toBe(true);
+  });
+
+  it("rejects the same invalid formats registerSchema rejects", () => {
+    expect(updatePhoneSchema.safeParse({ phone: "" }).success).toBe(false);
+    expect(updatePhoneSchema.safeParse({ phone: "123" }).success).toBe(false);
+    expect(updatePhoneSchema.safeParse({ phone: "++++++++" }).success).toBe(false);
+  });
+
+  it("rejects a missing phone field", () => {
+    expect(updatePhoneSchema.safeParse({}).success).toBe(false);
   });
 });

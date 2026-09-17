@@ -375,6 +375,26 @@ running this migration — not a concern for the app's current state.
   action from the order detail page — only detection/notification is
   automatic now (see docs/PAYMENTS.md's Open decisions).
 
+## Completed (customer phone-completion flow)
+
+- A customer who registered before phone became mandatory (PR #18) had
+  `phone: null` and no way to add one, so ChariPay checkout would keep
+  cleanly rejecting them (`PAYMENT_CUSTOMER_DETAILS_REQUIRED`, no crash or
+  financial risk) with no path forward. `updatePhoneSchema`
+  (`lib/validation/auth.ts`) shares the exact same validation rule as
+  registration's `phoneSchema` (now extracted as its own export) so a
+  later add-a-phone submission is never held to a looser or stricter bar.
+- `PATCH /api/customers/phone` (`requireCustomer`-gated) lets the
+  signed-in customer set/change their own phone number; writes a
+  `customer.phone_updated` audit entry, same pattern as registration's
+  `customer.registered`.
+- The checkout page (`CheckoutClient.tsx`) never gates on phone
+  speculatively — it only shows the inline phone form after the provider
+  itself returns `PAYMENT_CUSTOMER_DETAILS_REQUIRED` from
+  `POST /api/checkout/[holdId]/start`, so a provider that doesn't need a
+  phone (FakeProvider) is never blocked by this. Submitting the form saves
+  the phone then immediately retries checkout.
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
@@ -462,13 +482,6 @@ running this migration — not a concern for the app's current state.
    real traffic, then tune/enforce without replacing account-level limiting.
 7. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
-8. Before ChariPay go-live: a customer who registered before phone became
-   required (PR #18) has `phone: null` and cannot pay — ChariPay's adapter
-   rejects cleanly (`PAYMENT_CUSTOMER_DETAILS_REQUIRED`), no crash/financial
-   risk, but there's currently no profile page or endpoint letting an
-   existing customer add a phone number. Needs a small "complete your
-   phone" flow, ideally surfaced at the start of checkout. Not a blocker if
-   production has no real historical customers yet by go-live.
 
 ## Blocked
 
