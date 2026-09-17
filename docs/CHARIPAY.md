@@ -73,6 +73,8 @@ Pin the webhook `apiVersion` to the provider's published payload contract versio
 
 **Sandbox finding (2026-09-17):** sending a per-session `config.urls.notification` caused ChariPay to auto-register a second endpoint ("Session notification URL (auto-registered)") in addition to the dedicated partner endpoint. The auto-registered endpoint dropped the `x-vercel-protection-bypass` query parameter and its real deliveries returned Vercel `401 Unauthorized`. The dedicated registered endpoint retained the bypass query and it exactly matched Vercel's current automation-bypass secret. A single payment also produced duplicate webhook-event rows, one for each endpoint. Therefore OnlyLive omits the per-session notification URL and treats the registered partner endpoint as the sole webhook ingress.
 
+**Sandbox queue finding (2026-09-18):** one older failed registered-endpoint delivery remained in `retrying` state and blocked every newer event behind it at `pending / attemptCount=0`. Calling the provider's documented endpoint `activate` action reset the failure counter and immediately retried that older item; it then reached OnlyLive and returned `200` on attempt 6. The newer already-queued rows nevertheless remained stranded at attempt 0 even after a second activate and a full `enabled=false -> enabled=true` PATCH cycle. Treat this as a provider-side delivery-queue defect: do not rely on webhook retries alone for payment recovery.
+
 The registration secret is returned only once. Store it as a secret. **ChariPay's own documentation is internally contradictory on rotation:** the API overview states, verbatim, "During a rotation, while the old secret is still in its grace window, we send the same body signed twice," while the `rotate-secret` endpoint reference states, verbatim, "Immediately invalidates the previous secret." These cannot both be literally true, and neither has been confirmed against real provider behavior. OnlyLive's `CHARIPAY_WEBHOOK_SECRET`/`CHARIPAY_WEBHOOK_SECRET_NEXT` support **both** possibilities defensively: `verifySignature` checks both secrets against both signature headers (`X-CHARI-SIGNATURE`, `X-CHARI-SIGNATURE-NEXT`) — see `charipayWebhookRotation.test.ts` — so it degrades safely whether ChariPay sends a dual-signed grace window or cuts over immediately. Do not treat either doc claim as established provider truth; sandbox acceptance checklist item 15 below is the actual arbiter — only a real coordinated rotation test in sandbox settles which behavior (or something else entirely) ChariPay actually implements.
 
 ## Refund lifecycle
@@ -115,20 +117,20 @@ Failed async refunds are included in the admin attention metric, and the admin r
 
 A refund already finalized `failed` is terminal locally. A later contradictory success event is intentionally not applied automatically; it remains a provider-reconciliation anomaly and the failed refund keeps the order visible for admin attention until a supported/manual reconciliation policy resolves it.
 
-## Payment reconciliation after lost webhooks — sandbox gate
+## Payment reconciliation after lost webhooks
 
-ChariPay recommends reconciling with `GET /v1/transactions` after a longer outage rather than waiting for an exhausted webhook delivery to return. OnlyLive does **not** yet auto-finalize a payment from that API because the public page available during implementation does not expose enough response-object detail to write a money-moving parser without guessing.
+ChariPay recommends reconciling with `GET /v1/transactions` after a longer outage rather than waiting for an exhausted webhook delivery to return. This fallback is now implemented in the expired-checkout reconciler before any session cancellation or inventory release.
 
-Before implementing this fallback, capture the real sandbox response/fixture. Any automatic payment recovery must require all of:
+A real sandbox `PAYMENT / SUCCESS` transaction captured on 2026-09-18 pinned the response shape:
 
-- transaction type exactly `PAYMENT`;
-- status exactly `SUCCESS`;
-- unambiguous match to the OnlyLive Payment externalId;
-- exact stored amount;
-- currency exactly MAD;
-- no multiple conflicting candidates.
+- list envelope: `{ data, hasMore, nextCursor }`;
+- transaction fields used by OnlyLive: `operationId`, `type`, `status`, `amount`, `currency`, `direction`, `externalReference`;
+- `externalReference` is exactly the OnlyLive **Order id**; searching by the OnlyLive Payment id returned no match;
+- the observed successful transaction was `type=PAYMENT`, `direction=IN`, `status=SUCCESS`, exact MAD amount/currency.
 
-Anything else creates AuditLog/admin attention and issues no ticket. Until this gate is closed, checkout-linked expired stock stays reserved rather than being blindly resold.
+Automatic recovery is deliberately fail-closed. OnlyLive searches by Order id and accepts success only when there is exactly one exact `externalReference` match, the search result is not truncated, `type=PAYMENT`, `direction=IN`, amount converts exactly to the stored integer cents, currency is exactly the stored `MAD`, and status is exactly `SUCCESS`. `PENDING`/`PENDING_3DS`, multiple matches, truncated results, malformed responses, unknown statuses, or any immutable-field mismatch keep inventory reserved. `FAILED`/`CANCELED`/`not_found` still do **not** release inventory by themselves; OnlyLive continues to require the existing explicit payment-session close/non-payable proof before cancellation.
+
+A recovered success is finalized through the same `confirmOrderPayment` transaction as a webhook: Payment becomes paid, tickets/inventory are updated atomically, the correct durable email outbox row is enqueued, and an audit record stores only safe provider evidence. A later signed webhook remains idempotent.
 
 ## Cash gate
 
@@ -150,7 +152,7 @@ Before setting `CHARIPAY_PROVIDER_VERIFIED=true`:
 10. **done** — real sandbox evidence showed that `config.urls.notification` auto-registers a duplicate endpoint, drops the Vercel bypass query, and duplicates event delivery; OnlyLive now omits the per-session notification URL and relies only on the registered partner webhook endpoint;
 11. verify real rate-limit/`Retry-After` headers and correlation ids;
 12. confirm CASH is disabled or explicitly redesign the hold flow;
-13. capture `GET /v1/transactions` responses needed for payment-loss reconciliation;
+13. **done** — real sandbox transaction responses and Order-id search behavior are pinned; strict authenticated transaction-ledger recovery is implemented before checkout cancellation;
 14. capture Payment Session lookup/cancel responses and exact status values needed to release an expired checkout safely;
 15. verify the provider's actual secret-rotation behavior and perform one coordinated rotation test;
 16. replace/pin test fixtures to the exact signed provider bodies observed; **done for `payment.succeeded`** (`tests/integration/charipay-webhook.test.ts`, `tests/unit/payments/charipayProvider.test.ts`), still open for `refund.*`;
