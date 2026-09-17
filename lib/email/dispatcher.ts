@@ -136,7 +136,65 @@ async function renderRefundConfirmation(refundId: string): Promise<RenderedEmail
   return { subject: `Remboursement — commande ${order.orderNumber}`, text };
 }
 
-async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId">): Promise<RenderedEmail | null> {
+/**
+ * entityId is `${orderId}:${adminUserId}` (see
+ * `enqueueReconciliationAlertEmail`). Both the order's business state AND
+ * the admin's current access are re-checked fresh at dispatch time, never
+ * trusted from enqueue time: the order may have since moved past
+ * reconciliation (e.g. another admin already resolved it), and the admin
+ * may have been deactivated, offboarded, or downgraded to a role that can
+ * no longer act on a refund (`support`/`scanner`) since this row was
+ * enqueued — a durable outbox row can sit pending/retrying for a while, so
+ * this is not just a theoretical race. Sending a captured-payment alert
+ * (customer email, amount, event, admin order link) to someone who no
+ * longer has the access that justified receiving it would leak that data
+ * past their revoked authorization. Returns null (row marked terminally
+ * failed, never sent) whenever either check fails, including when the
+ * admin's current email no longer matches the row's `recipientEmail` — an
+ * email change means the enqueue-time address is a stale snapshot.
+ */
+async function renderReconciliationAlert(entityId: string, recipientEmail: string): Promise<RenderedEmail | null> {
+  const [orderId, adminUserId] = entityId.split(":");
+  if (!orderId || !adminUserId) return null;
+
+  const admin = await prisma.adminUser.findUnique({ where: { id: adminUserId } });
+  if (
+    !admin
+    || !admin.isActive
+    || (admin.role !== "admin" && admin.role !== "super_admin")
+    || admin.email !== recipientEmail
+  ) {
+    return null;
+  }
+
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    include: { user: { select: { email: true } }, event: { select: { title: true } } },
+  });
+  if (!order || (order.status !== "paid_but_unfulfillable" && order.status !== "reconciliation_required")) return null;
+
+  const reason =
+    order.status === "paid_but_unfulfillable"
+      ? "la réservation avait expiré avant la confirmation du paiement"
+      : "un événement de paiement contradictoire est arrivé après l’échec/l’annulation de la commande, et le stock n’était plus disponible";
+
+  const text = [
+    `Alerte réconciliation — commande ${order.orderNumber} (${order.event.title})`,
+    "",
+    `Le paiement de ${money(order.totalAmountCents, order.currency)} a été capturé (client : ${order.user.email}),`,
+    `mais aucun billet n’a pu être émis : ${reason}.`,
+    "",
+    `Statut actuel : ${order.status}. Cette commande ne se résoudra pas automatiquement —`,
+    "vérifiez le stock disponible pour cet événement puis remboursez ou honorez manuellement",
+    `la commande depuis ${absoluteAppUrl(`/admin/orders/${order.id}`)}.`,
+    "",
+    "— OnlyLive",
+  ].join("\n");
+
+  return { subject: `Alerte réconciliation — commande ${order.orderNumber}`, text };
+}
+
+async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId" | "recipientEmail">): Promise<RenderedEmail | null> {
   switch (row.type) {
     case "order_confirmation":
       return renderOrderConfirmation(row.entityId);
@@ -144,6 +202,8 @@ async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId">): Promise
       return renderPaymentFailed(row.entityId);
     case "refund_confirmation":
       return renderRefundConfirmation(row.entityId);
+    case "reconciliation_alert":
+      return renderReconciliationAlert(row.entityId, row.recipientEmail);
   }
 }
 

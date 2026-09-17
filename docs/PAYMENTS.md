@@ -353,3 +353,22 @@ PR #13 additionally covers:
 A real sandbox run is still mandatory before production because provider unit
 fixtures cannot substitute for capturing the exact signed JSON emitted by the
 external system. See `docs/CHARIPAY.md` and `TASKS.md`.
+
+Automated (rather than admin-triggered) *resolution* of
+`paid_but_unfulfillable`/`reconciliation_required` orders remains a manual
+admin action from the order detail page (fulfil manually if stock frees up,
+or refund) — but detection and notification are automatic: every
+admin/super_admin active at the moment either state is reached is alerted
+(`lib/email/notifications.ts::enqueueReconciliationAlertEmail`, enqueued in
+the same webhook transaction, delivered out-of-band by
+`lib/email/dispatcher.ts` like every other transactional email — see
+docs/ARCHITECTURE.md's outbox/dispatcher section), as a best-effort push
+alongside — not a replacement for — the dashboard's attention metrics. A
+send failure is retried with backoff like any other outbox row, and both
+the alert's reason text and the recipient's continued access (still
+active, still `admin`/`super_admin`) are re-checked fresh at dispatch time
+rather than trusted from enqueue time. An admin added, reactivated, or
+promoted *after* the order already settled still isn't retroactively
+notified for that order — the fan-out list is fixed at enqueue time — so
+the dashboard remains the reliable source of truth for these orders
+regardless of email delivery.

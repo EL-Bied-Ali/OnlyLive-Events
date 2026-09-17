@@ -514,6 +514,7 @@ enum EmailType {
   order_confirmation
   payment_failed
   refund_confirmation
+  reconciliation_alert
 }
 
 enum EmailOutboxStatus {
