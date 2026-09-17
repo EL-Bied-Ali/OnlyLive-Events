@@ -5,6 +5,7 @@ import { prisma } from "@/lib/db";
 import { createHold } from "@/lib/inventory";
 import { startCheckout } from "@/lib/orders/checkout";
 import { reconcileExpiredCheckouts } from "@/lib/orders/checkoutReconciliation";
+import { ChariPayProvider } from "@/lib/payments/charipayProvider";
 import { FakeProvider, signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
 import { POST as fakeWebhookPost } from "@/app/api/payments/webhook/fake/route";
 import { createTestCategory, createTestUser } from "../helpers/fixtures";
@@ -43,9 +44,18 @@ function fakeWebhookRequest(payload: unknown) {
   });
 }
 
+function configureChariPayReconciliation() {
+  vi.stubEnv("CHARIPAY_ENV", "sandbox");
+  vi.stubEnv("CHARIPAY_API_KEY", "chari_sk_test_checkout-reconciliation");
+  vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "checkout-reconciliation-secret");
+  vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.onlylive.test");
+  vi.stubEnv("VERCEL_ENV", "preview");
+}
+
 describe("expired hosted checkout reconciliation", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("releases inventory only after the provider confirms the session is non-payable", async () => {
@@ -165,4 +175,95 @@ describe("expired hosted checkout reconciliation", () => {
     expect(inventory.soldQuantity).toBe(1);
     expect(tickets).toBe(1);
   });
+  it("recovers a captured ChariPay payment from the authenticated transaction ledger before cancellation", async () => {
+    const fixture = await setupExpiredCheckout();
+    configureChariPayReconciliation();
+    await prisma.payment.update({
+      where: { id: fixture.payment.id },
+      data: { provider: "charipay" },
+    });
+
+    const lookupSpy = vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+      status: "succeeded",
+      providerOperationId: "281",
+      providerStatus: "SUCCESS",
+    });
+    const closeSpy = vi.spyOn(ChariPayProvider.prototype, "closePaymentSession");
+
+    const result = await reconcileExpiredCheckouts(1);
+
+    expect(result).toMatchObject({ checked: 1, closed: 0, unresolved: 0, errors: 0 });
+    expect(lookupSpy).toHaveBeenCalledWith({
+      orderExternalId: fixture.orderId,
+      amountCents: fixture.payment.amountCents,
+      currency: fixture.payment.currency,
+    });
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    const [reservation, order, payment, inventory, tickets, audit, email] = await Promise.all([
+      prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),
+      prisma.order.findUniqueOrThrow({ where: { id: fixture.orderId } }),
+      prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } }),
+      prisma.ticket.count({ where: { eventId: fixture.category.eventId } }),
+      prisma.auditLog.findFirst({
+        where: {
+          action: "payment.reconciled_from_provider_transaction",
+          entityType: "Payment",
+          entityId: fixture.payment.id,
+        },
+      }),
+      prisma.emailOutbox.findFirst({
+        where: {
+          type: "order_confirmation",
+          entityType: "order",
+          entityId: fixture.orderId,
+        },
+      }),
+    ]);
+
+    expect(reservation.status).toBe("converted");
+    expect(order.status).toBe("paid");
+    expect(payment.status).toBe("paid");
+    expect(inventory.reservedQuantity).toBe(0);
+    expect(inventory.soldQuantity).toBe(1);
+    expect(tickets).toBe(1);
+    expect(audit).not.toBeNull();
+    expect(email).not.toBeNull();
+  });
+
+  it("does not cancel a ChariPay checkout while the authenticated ledger is still pending", async () => {
+    const fixture = await setupExpiredCheckout();
+    configureChariPayReconciliation();
+    await prisma.payment.update({
+      where: { id: fixture.payment.id },
+      data: { provider: "charipay" },
+    });
+
+    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+      status: "pending",
+      providerOperationId: "300",
+      providerStatus: "PENDING_3DS",
+    });
+    const closeSpy = vi.spyOn(ChariPayProvider.prototype, "closePaymentSession");
+
+    const result = await reconcileExpiredCheckouts(1);
+
+    expect(result).toMatchObject({ checked: 1, closed: 0, unresolved: 1, errors: 0 });
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    const [reservation, order, payment, inventory] = await Promise.all([
+      prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),
+      prisma.order.findUniqueOrThrow({ where: { id: fixture.orderId } }),
+      prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } }),
+    ]);
+
+    expect(reservation.status).toBe("active");
+    expect(order.status).toBe("pending_payment");
+    expect(payment.status).toBe("awaiting_payment");
+    expect(inventory.reservedQuantity).toBe(1);
+    expect(inventory.soldQuantity).toBe(0);
+  });
+
 });
