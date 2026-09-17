@@ -128,11 +128,10 @@ async function recordAttention(
 }
 
 /**
- * Final local transition after the provider has definitively made the hosted
- * session non-payable. The Payment row is locked before the Order transition,
- * matching webhook lock order. If a signed success webhook won the race first,
- * Payment.status is already `paid` and this becomes a no-op — inventory is
- * never released underneath a captured payment.
+ * Finalize authenticated provider-ledger evidence of a captured payment using
+ * the same Payment -> Order lock order and fulfillment primitives as webhooks.
+ * A concurrent signed webhook either wins first (making this a safe no-op) or
+ * waits for this transaction, then observes the already-paid state.
  */
 async function finalizeRecoveredCheckoutPayment(
   candidate: CheckoutCandidate,
@@ -186,6 +185,13 @@ async function finalizeRecoveredCheckoutPayment(
   });
 }
 
+/**
+ * Final local transition after the provider has definitively made the hosted
+ * session non-payable. The Payment row is locked before the Order transition,
+ * matching webhook lock order. If a signed success webhook won the race first,
+ * Payment.status is already `paid` and this becomes a no-op — inventory is
+ * never released underneath a captured payment.
+ */
 async function finalizeClosedCheckout(candidate: CheckoutCandidate): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<{ status: string }[]>`
@@ -222,11 +228,12 @@ async function finalizeClosedCheckout(candidate: CheckoutCandidate): Promise<boo
 
 /**
  * Reconcile order-linked reservations whose local checkout deadline passed.
- * Local wall-clock expiry is never sufficient evidence to release inventory:
- * OnlyLive first asks the persisted provider to make the hosted session
- * non-payable. Only a definitive provider result permits local cancellation.
- * Everything ambiguous remains reserved and becomes visible for admin
- * attention rather than risking "captured money, resold ticket".
+ * Local wall-clock expiry is never sufficient evidence to release inventory.
+ * Providers with an authenticated ledger lookup are checked for captured money
+ * first; a verified success is fulfilled locally. Only when success is ruled
+ * out does OnlyLive ask the provider to make the hosted session non-payable.
+ * A definitive close result is still required before local cancellation.
+ * Everything ambiguous remains reserved for admin attention.
  */
 export async function reconcileExpiredCheckouts(
   limit = DEFAULT_BATCH_SIZE,
