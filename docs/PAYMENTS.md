@@ -96,10 +96,21 @@ confirms payment" while the order was still `pending_payment` — see
 `lib/orders/checkout.ts`'s checkout-expiry extension, which shrinks but
 cannot eliminate this race. When it happens, the customer's money was
 captured (`Payment.status = 'paid'`) but no tickets are generated; this is
-intentional (never oversell) but currently has **no automated
-resolution** — an admin must notice it (surfaced in the dashboard's
-attention metrics) and manually issue a full refund from the order
-detail page; there is no automatic trigger yet (tracked in TASKS.md).
+intentional (never oversell), and resolution is still a manual admin
+action from the order detail page (fulfil manually if stock frees up, or
+refund). Every admin/super_admin active at that moment is also alerted
+(`lib/email/notifications.ts::enqueueReconciliationAlertEmail`, enqueued
+in the same webhook transaction, delivered out-of-band by
+`lib/email/dispatcher.ts` like every other transactional email — see
+docs/ARCHITECTURE.md's outbox/dispatcher section), as a best-effort push
+alongside — not a
+replacement for — the dashboard's attention metrics: a send failure is
+retried with backoff like any other outbox row, and the reason text is
+re-derived from the order's live status at dispatch time rather than
+trusted from enqueue time. An admin added *after* the order already
+settled still isn't retroactively notified for that order — the fan-out
+list is fixed at enqueue time. The dashboard remains the reliable source
+of truth for these orders regardless of email delivery.
 
 ## Reconciliation: a contradictory payment.succeeded after failed/cancelled
 
@@ -133,7 +144,13 @@ treating it as `already_handled`:
    `reconciliation_required` — no ticket is generated (never oversell),
    and a human must resolve it (manually fulfil if stock frees up, or
    refund). This is a terminal, human-only state: it is never
-   re-attempted automatically by a later event.
+   re-attempted automatically by a later event — every admin/super_admin
+   active at that moment is also emailed (see the best-effort alert
+   described just above `paid_but_unfulfillable`, retried on a provider
+   failure like any other outbox row), but the dashboard's attention
+   metrics remain the reliable way "human must resolve it" gets noticed,
+   since the recipient list is fixed at enqueue time and never reaches an
+   admin added or reactivated afterward.
 4. Either way, `Payment.status` is set to `paid` (money was captured —
    this is a fact, independent of whether the order could be fulfilled)
    and an `AuditLog` entry is written
@@ -361,5 +378,7 @@ later, a webhook confirmation.
 
 - Which Moroccan PSP to integrate (CMI, HPS/Onepay, or another —
   **undecided**, do not build against any of them speculatively).
-- Automated (rather than admin-triggered) handling of
-  `paid_but_unfulfillable`/`reconciliation_required` orders.
+- Automated (rather than admin-triggered) *resolution* of
+  `paid_but_unfulfillable`/`reconciliation_required` orders — detection and
+  admin notification are now automatic (see above), but fulfilling or
+  refunding one is still a manual admin action from the order detail page.
