@@ -73,6 +73,32 @@ describe("checkout provider-specific customer requirements", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("passes the Vercel automation-bypass notification URL into a Preview ChariPay session", async () => {
+    enableChariPay();
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "preview bypass/?secret");
+    const { user, reservationId } = await createActiveHold("chari-preview-webhook-bypass");
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { phone: "+212600000000", name: "Preview Buyer" },
+    });
+
+    const createPaymentSpy = vi.spyOn(ChariPayProvider.prototype, "createPayment").mockResolvedValue({
+      providerPaymentId: "sandbox-session",
+      redirectUrl: "https://checkout.charipay.test/session",
+    });
+
+    await startCheckout(reservationId, user.id, BASE_URL);
+
+    expect(createPaymentSpy).toHaveBeenCalledTimes(1);
+    const input = createPaymentSpy.mock.calls[0]![0];
+    expect(input.returnUrl).toMatch(/^https:\/\/preview\.onlylive\.test\/orders\//);
+    const webhookUrl = new URL(input.webhookUrl);
+    expect(webhookUrl.origin).toBe("https://preview.onlylive.test");
+    expect(webhookUrl.pathname).toBe("/api/payments/webhook/charipay");
+    expect(webhookUrl.searchParams.get("x-vercel-protection-bypass")).toBe("preview bypass/?secret");
+  });
+
   it("keeps historical fake Payment initialization on FakeProvider after the default changes", async () => {
     vi.stubEnv("PAYMENT_PROVIDER", "fake");
     const { user, reservationId } = await createActiveHold("historical-fake-init");
