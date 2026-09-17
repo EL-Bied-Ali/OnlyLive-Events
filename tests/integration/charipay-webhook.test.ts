@@ -157,7 +157,7 @@ describe("ChariPay webhook route", () => {
     await expect(duplicate.json()).resolves.toMatchObject({ ok: true, duplicate: true });
 
     const collision = await chariWebhookPost(signedRequest(
-      { ...payload, metadata: { onlylivePaymentId: fixture.payment.id, changed: true } },
+      { ...payload, metadata: { onlylivePaymentId: fixture.payment.id, onlyliveOrderId: fixture.order.id, changed: true } },
       "payment.succeeded",
       eventId,
     ));
@@ -197,6 +197,35 @@ describe("ChariPay webhook route", () => {
     ));
     expect(response.status).toBe(409);
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+  });
+
+  it("fails closed on a payment webhook missing metadata.onlyliveOrderId, even with a correct payment id", async () => {
+    // metadata.onlyliveOrderId is a required second reconciliation
+    // invariant, not an optional bonus check — a real payment.succeeded
+    // delivery always carries both (createPayment() always sends both in
+    // the same metadata object), so a payload missing it is malformed
+    // regardless of how correct paymentExternalId looks.
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const response = await chariWebhookPost(signedRequest({
+      Amount: fixture.payment.amountCents / 100,
+      metadata: { onlylivePaymentId: fixture.payment.id },
+    }, "payment.succeeded"));
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "INVALID_PROVIDER_PAYLOAD" });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+  });
+
+  it("rejects a payment webhook whose metadata.onlyliveOrderId does not match the payment's actual order", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const response = await chariWebhookPost(signedRequest({
+      Amount: fixture.payment.amountCents / 100,
+      metadata: { onlylivePaymentId: fixture.payment.id, onlyliveOrderId: crypto.randomUUID() },
+    }, "payment.succeeded"));
+    expect(response.status).toBe(409);
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "awaiting_payment" });
   });
 
   it("acknowledges every signed refund event with 202 and never finalizes, regardless of payload correctness", async () => {
@@ -245,6 +274,32 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.auditLog.count({
       where: { action: "refund.webhook_shape_unverified" },
     })).toBeGreaterThanOrEqual(8);
+  });
+
+  it("acknowledges a signed refund event with a completely unfamiliar body shape, not 400", async () => {
+    // The shape-verified gate must fire on event type + event id alone,
+    // BEFORE the generic payloadValid check that depends on the guessed
+    // refund field names (RefundAmount/refundAmount, onlyliveRefundId/
+    // RefundReference/refundReference). A real refund delivery whose actual
+    // field names differ entirely from that guess must still be 202'd for
+    // reconciliation, not rejected as 400 INVALID_PROVIDER_PAYLOAD — that
+    // would defeat the whole point of failing closed instead of guessing.
+    enableChariPay();
+    const eventId = crypto.randomUUID();
+    const response = await chariWebhookPost(signedRequest({
+      totallyUnfamiliarField: "some-provider-native-shape",
+      nested: { alsoUnfamiliar: 12345 },
+    }, "refund.succeeded", eventId));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
+    // This shared, persistent test database accumulates Refund rows from
+    // other tests, so assert no financial mutation by event scope (this
+    // event carries no refundExternalId at all, so nothing it could have
+    // touched exists) rather than by a global count.
+    expect(await prisma.auditLog.count({
+      where: { action: "refund.webhook_shape_unverified", metadata: { path: ["externalEventId"], equals: eventId } },
+    })).toBe(1);
   });
 
   it("acknowledges an authentic provider refund that has no local Refund row without ever looking it up", async () => {

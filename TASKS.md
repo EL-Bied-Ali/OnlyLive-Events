@@ -261,27 +261,42 @@ dismissed without evidence) and fixed:
   that silently broke every payment: ChariPay's own generated fields are
   PascalCased, and `ExternalId`/`Reference`/`CustomData` all carry the
   ORDER id rather than the Payment id despite the misleading name — only
-  `metadata.onlylivePaymentId` reliably resolves the Payment row (now
-  cross-checked against `metadata.onlyliveOrderId` as a second
-  reconciliation invariant). `parseWebhook` and both test suites
-  (`charipay-webhook.test.ts`, `charipayProvider.test.ts`) are fixed and
-  re-verified against the real shape; see docs/CHARIPAY.md's "Webhook
-  verification" section for the full mapping. `payment.failed` applies
-  the identical interpretation by extrapolation only — it has not itself
-  been captured from a real delivery.
-- **Refund webhooks now fail closed rather than guess.** The `refund.*`
-  shape is still completely unverified — only `payment.succeeded` has
-  been captured — so finalizing a refund from a guessed field mapping
-  would violate this project's own "never invent provider fields" rule
-  and risk a silent amount/reference mismatch on real money movement.
+  `metadata.onlylivePaymentId` reliably resolves the Payment row, and
+  `metadata.onlyliveOrderId` is now a **required** second reconciliation
+  invariant for payment events (not merely an optional cross-check —
+  `payloadValid` rejects a payment webhook missing either id).
+  `parseWebhook` and all three affected test suites
+  (`charipay-webhook.test.ts`, `charipayProvider.test.ts`,
+  `charipayHardening.test.ts`, `charipayWebhookRotation.test.ts`) are
+  fixed and re-verified against the real shape; see docs/CHARIPAY.md's
+  "Webhook verification" section for the full mapping. `payment.failed`
+  applies the identical interpretation by extrapolation only — it has
+  not itself been captured from a real delivery.
+- **Refund webhooks now fail closed rather than guess — and the gate
+  runs in the right place.** The `refund.*` shape is still completely
+  unverified — only `payment.succeeded` has been captured — so finalizing
+  a refund from a guessed field mapping would violate this project's own
+  "never invent provider fields" rule and risk a silent amount/reference
+  mismatch on real money movement.
   `app/api/payments/webhook/charipay/route.ts`'s
   `CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED` flag (currently `false`) gates
-  the whole refund-matching path: every `refund.succeeded`/`refund.failed`
-  event is acknowledged (`202`, audit-logged) without ever reaching
-  `finalizeRefundSuccess`/`finalizeRefundFailure`, so a real refund stays
-  `processing` pending manual reconciliation instead of risking a wrong
-  auto-finalization. PR #13 stays draft until a real refund delivery is
-  captured, the flag flips, and the final independent audit is complete.
+  the whole refund-matching path, and — fixed in this round, after GPT's
+  audit caught it — this check now runs **before** the generic
+  `payloadValid` gate, keyed only on already-confirmed envelope facts
+  (event type, event id). `payloadValid` itself depends on the unverified
+  guessed refund fields, so checking it first would have 400-rejected a
+  real refund whose actual shape differs from the guess instead of
+  acknowledging it for reconciliation — exactly the failure mode this
+  gate exists to prevent. Every `refund.succeeded`/`refund.failed` event,
+  however shaped, is now acknowledged (`202`, audit-logged) without ever
+  reaching `finalizeRefundSuccess`/`finalizeRefundFailure`, so a real
+  refund stays `processing` pending **authenticated provider-status
+  reconciliation** (`lib/orders/refundReconciliation.ts` independently
+  polls ChariPay's `getRefundStatus()` API, not the webhook) or manual
+  attention — not bare "manual reconciliation" as previously stated here,
+  since the automatic poller already exists. PR #13 stays draft until a
+  real refund delivery is captured, the flag flips, and the final
+  independent audit is complete.
 
 ## Next
 

@@ -105,6 +105,42 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true, test: true });
     }
 
+    const isRefundEvent = event.type === "refund.succeeded" || event.type === "refund.failed";
+
+    // This must run BEFORE the generic payloadValid gate below: payloadValid
+    // itself depends on the unverified guessed refund fields (RefundAmount/
+    // refundAmount, refundExternalId's PascalCase/lowercase fallbacks), so a
+    // real refund webhook whose actual shape differs from that guess would
+    // otherwise be rejected with 400 INVALID_PROVIDER_PAYLOAD instead of
+    // being acknowledged here — exactly the "never invent provider fields"
+    // violation this gate exists to prevent. Only already-confirmed envelope
+    // facts (a recognized event type, a present event id — both resolved by
+    // parseWebhook independently of the guessed body-field shape) gate this
+    // branch. Finalizing a refund from a guessed shape would risk a silent
+    // amount/reference mismatch on real money movement, so fail closed:
+    // acknowledge so ChariPay stops retrying, but require authenticated
+    // provider-status reconciliation (lib/orders/refundReconciliation.ts's
+    // getRefundStatus() poll) or manual attention instead of auto-finalizing
+    // from this webhook. Flip CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED once a
+    // real refund.* delivery is captured and parseWebhook is corrected
+    // against it.
+    if (isRefundEvent && !CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED && event.externalEventId) {
+      await prisma.auditLog.create({
+        data: {
+          actorType: "system",
+          action: "refund.webhook_shape_unverified",
+          entityType: "PaymentProvider",
+          entityId: provider.name,
+          metadata: {
+            externalEventId: event.externalEventId,
+            eventType: event.type,
+            raw: event.raw as Prisma.InputJsonValue,
+          },
+        },
+      });
+      return NextResponse.json({ ok: true, reconciliationRequired: true }, { status: 202 });
+    }
+
     if (!event.payloadValid) {
       const rawKeys = event.raw && typeof event.raw === "object" && !Array.isArray(event.raw)
         ? Object.keys(event.raw as Record<string, unknown>).sort()
@@ -121,38 +157,8 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "INVALID_PROVIDER_PAYLOAD" }, { status: 400 });
     }
 
-    const isRefundEvent = event.type === "refund.succeeded" || event.type === "refund.failed";
     let refund = null as Awaited<ReturnType<typeof prisma.refund.findUnique>>;
     let payment = null as Awaited<ReturnType<typeof prisma.payment.findUnique>>;
-
-    if (isRefundEvent && !CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED) {
-      // Refund webhook field-name casing (RefundAmount/refundAmount,
-      // RefundReference/refundReference, RefundId/refundId, even
-      // metadata.onlyliveRefundId) has NOT been confirmed against a real
-      // signed delivery — only payment.succeeded has been captured so far
-      // (see charipayProvider.ts's parseWebhook comments and
-      // docs/CHARIPAY.md). Finalizing a refund from a guessed shape would
-      // violate this project's "never invent provider fields" rule and
-      // risk a silent amount/reference mismatch on real money movement.
-      // Fail closed: acknowledge so ChariPay stops retrying, but require
-      // manual reconciliation instead of auto-finalizing. Flip the flag
-      // above once a real refund.* delivery is captured and parseWebhook
-      // is corrected against it.
-      await prisma.auditLog.create({
-        data: {
-          actorType: "system",
-          action: "refund.webhook_shape_unverified",
-          entityType: "PaymentProvider",
-          entityId: provider.name,
-          metadata: {
-            externalEventId: event.externalEventId,
-            eventType: event.type,
-            raw: event.raw as Prisma.InputJsonValue,
-          },
-        },
-      });
-      return NextResponse.json({ ok: true, reconciliationRequired: true }, { status: 202 });
-    }
 
     if (isRefundEvent) {
       if (!event.refundExternalId) {

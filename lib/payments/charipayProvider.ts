@@ -340,9 +340,10 @@ export class ChariPayProvider implements PaymentProvider {
       ? metadata.onlylivePaymentId
       : undefined;
 
-    // Second, independent reconciliation invariant from the same confirmed
-    // echoed-back metadata object — the route cross-checks this against
-    // payment.orderId alongside paymentExternalId vs. payment.id.
+    // Second, required reconciliation invariant from the same confirmed
+    // echoed-back metadata object — payloadValid below requires this for
+    // payment events (not just paymentExternalId), and the route cross-checks
+    // it against payment.orderId alongside paymentExternalId vs. payment.id.
     const orderExternalId = typeof metadata.onlyliveOrderId === "string"
       ? metadata.onlyliveOrderId
       : undefined;
@@ -381,11 +382,16 @@ export class ChariPayProvider implements PaymentProvider {
         ? payload.refundId
         : undefined;
 
+    // A real captured payment.succeeded delivery confirmed metadata carries
+    // BOTH onlylivePaymentId and onlyliveOrderId (createPayment() sends both
+    // in the same metadata object — see createPayment() above), so a payment
+    // event is only valid when both are present: orderExternalId is a
+    // required second reconciliation invariant, not an optional bonus check.
     const payloadValid = Boolean(
       eventId
       && supported.has(eventTypeRaw as PaymentWebhookEventType)
       && normalizedAmount !== undefined
-      && (eventType.startsWith("refund.") ? refundExternalId : paymentExternalId),
+      && (eventType.startsWith("refund.") ? refundExternalId : (paymentExternalId && orderExternalId)),
     );
 
     return {
