@@ -1,22 +1,19 @@
 const API_BASE = "https://api-psp.charipay.ma";
 const ENDPOINT_ID = "77e21777-0e04-44df-9489-c9084671bc84";
+const DELIVERY_ID = "74eb5c63-e365-4030-be13-4fe215adce02";
 const apiKey = process.env.CHARIPAY_API_KEY?.trim();
 
 if (!apiKey) {
-  console.log("CHARIPAY_SYNTHETIC_TEST=" + JSON.stringify({ ok: false, error: "missing_api_key" }));
+  console.log("CHARIPAY_SYNTHETIC_RECHECK=" + JSON.stringify({ ok: false, error: "missing_api_key" }));
   process.exit(0);
 }
 
-async function request(path, init = {}) {
+async function get(path) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10000);
   try {
     const response = await fetch(API_BASE + path, {
-      ...init,
-      headers: {
-        "X-CHARI-PAY-API-KEY": apiKey,
-        ...(init.headers || {}),
-      },
+      headers: { "X-CHARI-PAY-API-KEY": apiKey },
       signal: controller.signal,
     });
     const text = await response.text();
@@ -28,54 +25,37 @@ async function request(path, init = {}) {
   }
 }
 
-function safeEvent(body) {
-  if (!body || typeof body !== "object") return null;
-  return {
-    id: body.id ?? null,
-    eventId: body.eventId ?? null,
-    eventType: body.eventType ?? null,
-    endpointId: body.endpointId ?? null,
-    status: body.status ?? null,
-    attemptCount: body.attemptCount ?? null,
-    maxAttempts: body.maxAttempts ?? null,
-    errorMessage: body.errorMessage ?? null,
-    lastAttemptAt: body.lastAttemptAt ?? null,
-    nextRetryAt: body.nextRetryAt ?? null,
-    responseStatus: body.responseStatus ?? body.httpStatus ?? null,
-  };
-}
+const [endpoint, event] = await Promise.all([
+  get(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}`),
+  get(`/api/v1/partner/webhooks/events/${DELIVERY_ID}`),
+]);
 
-const startedAt = Date.now();
-const queued = await request(`/api/v1/partner/webhooks/endpoints/${ENDPOINT_ID}/test`, { method: "POST" });
-let deliveryId = queued.body?.deliveryId ?? queued.body?.id ?? null;
-
-if (!deliveryId) {
-  const list = await request("/api/v1/partner/webhooks/events?page=0&size=20");
-  const events = Array.isArray(list.body?.content) ? list.body.content : [];
-  const candidate = events
-    .filter((event) => event?.endpointId === ENDPOINT_ID)
-    .filter((event) => {
-      const ts = Date.parse(event?.createdAt ?? "");
-      return Number.isFinite(ts) && ts >= startedAt - 15000;
-    })
-    .sort((a, b) => Date.parse(b.createdAt ?? "") - Date.parse(a.createdAt ?? ""))[0];
-  deliveryId = candidate?.id ?? null;
-}
-
-let latest = null;
-if (deliveryId) {
-  for (let i = 0; i < 12; i++) {
-    await new Promise((resolve) => setTimeout(resolve, 2500));
-    const detail = await request(`/api/v1/partner/webhooks/events/${deliveryId}`);
-    latest = { httpStatus: detail.status, event: safeEvent(detail.body) };
-    const status = detail.body?.status;
-    if (status && !["pending", "retrying", "queued"].includes(status)) break;
-  }
-}
-
-console.log("CHARIPAY_SYNTHETIC_TEST=" + JSON.stringify({
-  queueHttpStatus: queued.status,
-  queueResponseKeys: queued.body && typeof queued.body === "object" ? Object.keys(queued.body) : [],
-  deliveryIdPresent: Boolean(deliveryId),
-  latest,
+console.log("CHARIPAY_SYNTHETIC_RECHECK=" + JSON.stringify({
+  endpointHttpStatus: endpoint.status,
+  endpoint: endpoint.body && typeof endpoint.body === "object" ? {
+    id: endpoint.body.id ?? null,
+    enabled: endpoint.body.enabled ?? null,
+    status: endpoint.body.status ?? null,
+    consecutiveFailures: endpoint.body.consecutiveFailures ?? null,
+    totalDeliveries: endpoint.body.totalDeliveries ?? null,
+    successfulDeliveries: endpoint.body.successfulDeliveries ?? null,
+    failedDeliveries: endpoint.body.failedDeliveries ?? null,
+    lastDeliveryAt: endpoint.body.lastDeliveryAt ?? null,
+    lastSuccessAt: endpoint.body.lastSuccessAt ?? null,
+    lastFailureAt: endpoint.body.lastFailureAt ?? null,
+    lastError: endpoint.body.lastError ?? null,
+  } : null,
+  eventHttpStatus: event.status,
+  event: event.body && typeof event.body === "object" ? {
+    id: event.body.id ?? null,
+    eventId: event.body.eventId ?? null,
+    eventType: event.body.eventType ?? null,
+    endpointId: event.body.endpointId ?? null,
+    status: event.body.status ?? null,
+    attemptCount: event.body.attemptCount ?? null,
+    maxAttempts: event.body.maxAttempts ?? null,
+    errorMessage: event.body.errorMessage ?? null,
+    lastAttemptAt: event.body.lastAttemptAt ?? null,
+    nextRetryAt: event.body.nextRetryAt ?? null,
+  } : null,
 }));
