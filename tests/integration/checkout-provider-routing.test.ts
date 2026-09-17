@@ -93,7 +93,8 @@ describe("checkout provider-specific customer requirements", () => {
     expect(createPaymentSpy).toHaveBeenCalledTimes(1);
     const input = createPaymentSpy.mock.calls[0]![0];
     expect(input.returnUrl).toMatch(/^https:\/\/preview\.onlylive\.test\/orders\//);
-    const webhookUrl = new URL(input.webhookUrl);
+    expect(input.webhookUrl).toBeDefined();
+    const webhookUrl = new URL(input.webhookUrl!);
     expect(webhookUrl.origin).toBe("https://preview.onlylive.test");
     expect(webhookUrl.pathname).toBe("/api/payments/webhook/charipay");
     expect(webhookUrl.searchParams.get("x-vercel-protection-bypass")).toBe("preview bypass/?secret");
