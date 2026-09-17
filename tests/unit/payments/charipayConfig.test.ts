@@ -10,6 +10,7 @@ function configureBase() {
   vi.stubEnv("CHARIPAY_WEBHOOK_SECRET", "unit-placeholder-secret");
   vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.onlylive.example/");
   vi.stubEnv("CRON_SECRET", "unit-cron-secret-1234567890");
+  vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "unit-preview-bypass-secret");
 }
 
 afterEach(() => vi.unstubAllEnvs());
@@ -114,6 +115,18 @@ describe("ChariPay configuration guard", () => {
     expect(url.origin).toBe("https://preview.example.com");
     expect(url.pathname).toBe("/api/payments/webhook/charipay");
     expect(url.searchParams.get("x-vercel-protection-bypass")).toBe("unit bypass/?secret");
+  });
+
+  it("fails closed on Vercel Preview when neither bypass nor explicit ingress is configured", () => {
+    vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.example.com/");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "");
+    vi.stubEnv("CHARIPAY_WEBHOOK_URL", "");
+
+    expect(() => getChariPayWebhookUrl()).toThrow(/VERCEL_AUTOMATION_BYPASS_SECRET/);
+
+    vi.stubEnv("CHARIPAY_WEBHOOK_URL", "https://relay.example.com/charipay");
+    expect(getChariPayWebhookUrl()).toBe("https://relay.example.com/charipay");
   });
 
   it("never auto-attaches the Vercel bypass secret outside Preview", () => {
