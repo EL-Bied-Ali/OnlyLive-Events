@@ -123,14 +123,29 @@ interface ChariPayRefundResponse {
 }
 
 interface ChariPayWebhookBody {
-  externalId?: unknown;
-  amount?: unknown;
-  currency?: unknown;
-  refundId?: unknown;
-  refundReference?: unknown;
-  refundAmount?: unknown;
-  sessionId?: unknown;
+  // Confirmed against a real signed sandbox delivery for payment.succeeded
+  // (captured 2026-09-17 via ChariPay's partner webhook-events API,
+  // GET /api/v1/partner/webhooks/events/{id}). ChariPay's own generated
+  // fields on this webhook are PascalCased (Amount, ExternalId, Reference,
+  // GatewayOrderId, ...) — the nested `metadata` object is the one
+  // exception, echoed back exactly as sent in createPayment()'s request
+  // body, so it keeps our own lowercase field names.
+  Amount?: unknown;
   metadata?: unknown;
+
+  // NOT yet confirmed against a real signed refund.* delivery — only
+  // payment.succeeded has been captured so far (see docs/CHARIPAY.md's
+  // sandbox acceptance checklist, still open for refunds). Both casings
+  // are accepted defensively until a real refund webhook sample pins
+  // this for real; metadata.onlyliveRefundId (see parseWebhook) is the
+  // higher-confidence signal since it directly matches the confirmed
+  // metadata-echo behavior above, rather than a guessed field name.
+  RefundAmount?: unknown;
+  refundAmount?: unknown;
+  RefundReference?: unknown;
+  refundReference?: unknown;
+  RefundId?: unknown;
+  refundId?: unknown;
 }
 
 function isRetryableOrAmbiguousStatus(status: number): boolean {
@@ -307,25 +322,53 @@ export class ChariPayProvider implements PaymentProvider {
     const metadata = payload.metadata && typeof payload.metadata === "object"
       ? payload.metadata as Record<string, unknown>
       : {};
-    const paymentExternalId = typeof payload.externalId === "string"
-      ? payload.externalId
-      : typeof metadata.onlylivePaymentId === "string"
-        ? metadata.onlylivePaymentId
-        : undefined;
-    const refundExternalId = typeof payload.refundReference === "string" ? payload.refundReference : undefined;
+
+    // Only metadata.onlylivePaymentId is trusted to resolve the Payment
+    // row. ChariPay's own ExternalId/Reference/CustomData fields on this
+    // webhook are actually the ORDER id (confirmed against a real
+    // delivery), not the Payment id — despite createPayment() itself
+    // sending `externalId: input.paymentId` in the request, ChariPay's
+    // webhook re-purposes that name for something else entirely.
+    const paymentExternalId = typeof metadata.onlylivePaymentId === "string"
+      ? metadata.onlylivePaymentId
+      : undefined;
+
+    // Unverified — see the ChariPayWebhookBody comment above. metadata's
+    // echo-back behavior is confirmed, so onlyliveRefundId is checked
+    // first; the guessed top-level field names are a fallback only.
+    const refundExternalId = typeof metadata.onlyliveRefundId === "string"
+      ? metadata.onlyliveRefundId
+      : typeof payload.RefundReference === "string"
+        ? payload.RefundReference
+        : typeof payload.refundReference === "string"
+          ? payload.refundReference
+          : undefined;
+
     const normalizedAmount = eventType.startsWith("refund.")
-      ? madToCents(payload.refundAmount)
-      : madToCents(payload.amount);
-    const currency = typeof payload.currency === "string" ? payload.currency : "";
-    const providerPaymentId = typeof payload.sessionId === "string" ? payload.sessionId : "";
-    const providerRefundId = typeof payload.refundId === "string" ? payload.refundId : undefined;
+      ? madToCents(payload.RefundAmount ?? payload.refundAmount)
+      : madToCents(payload.Amount);
+
+    // ChariPay only ever operates in MAD for this integration (enforced at
+    // request time by createPayment()/refund()), and its webhook payload
+    // carries no currency field at all — there is nothing to parse here,
+    // only to assert.
+    const currency = "MAD";
+    // No sessionId-equivalent field exists on a real ChariPay webhook —
+    // the route already falls back to matching by paymentExternalId alone
+    // when this is empty (see "reconciles a payment webhook by externalId
+    // when sessionId is absent").
+    const providerPaymentId = "";
+    const providerRefundId = typeof payload.RefundId === "string"
+      ? payload.RefundId
+      : typeof payload.refundId === "string"
+        ? payload.refundId
+        : undefined;
 
     const payloadValid = Boolean(
       eventId
       && supported.has(eventTypeRaw as PaymentWebhookEventType)
       && normalizedAmount !== undefined
-      && currency === "MAD"
-      && (eventType.startsWith("refund.") ? refundExternalId : paymentExternalId || providerPaymentId),
+      && (eventType.startsWith("refund.") ? refundExternalId : paymentExternalId),
     );
 
     return {

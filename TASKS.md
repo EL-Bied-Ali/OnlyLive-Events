@@ -252,17 +252,33 @@ dismissed without evidence) and fixed:
   financial-integrity checks, sandbox/live deployment guards, asynchronous
   refund reconciliation/replay and historical FakeProvider compatibility.
 - ChariPay reconciliation tests avoid pristine-database assumptions; CI runs the complete Vitest suite three times total (one fresh pass plus two additional passes on the same populated database) to catch pollution/order flakes.
-- **Not production-ready yet:** the exact signed webhook JSON mapping still
-  needs to be pinned against a real sandbox delivery (the public docs expose
-  the signing contract and delivery log, but say the exact signed body is read
-  from an emitted event). PR #13 stays draft until sandbox validation and the
-  final independent audit are complete.
+- **The signed `payment.succeeded` webhook JSON mapping is now pinned
+  against a real sandbox delivery** (captured 2026-09-17 via ChariPay's
+  partner webhook-events API). It revealed the guessed shape used until
+  now was wrong in a way that silently broke every payment: ChariPay's
+  own generated fields are PascalCased, and `ExternalId`/`Reference`/
+  `CustomData` all carry the ORDER id rather than the Payment id despite
+  the misleading name — only `metadata.onlylivePaymentId` reliably
+  resolves the Payment row. `parseWebhook` and both test suites
+  (`charipay-webhook.test.ts`, `charipayProvider.test.ts`) are fixed and
+  re-verified against the real shape; see docs/CHARIPAY.md's "Webhook
+  verification" section for the full mapping.
+- **Not production-ready yet:** the `refund.*` webhook shape is still
+  unverified — only `payment.succeeded` has been captured so far.
+  `parseWebhook` extrapolates PascalCase field names from the confirmed
+  payment convention as a defensive fallback, but this needs its own real
+  captured sample before it can be trusted. PR #13 stays draft until that
+  sandbox validation and the final independent audit are complete.
 
 ## Next
 
-1. Validate PR #13 against a real ChariPay sandbox account: create the
-   webhook endpoint, send a synthetic event, perform one successful/failed
-   hosted checkout and one refund, then pin the exact webhook payload fixtures.
+1. Finish validating PR #13 against the real ChariPay sandbox account: the
+   webhook endpoint is registered, a synthetic event was captured, and a
+   real successful hosted checkout's `payment.succeeded` webhook is now
+   captured and pinned (see above). Still needed: a real payment failure,
+   a real refund success/failure (full and partial) with its webhook
+   payload pinned, and a webhook-delivery/`refundReference` replay test
+   against the real provider.
 2. Finish/review the durable email-outbox work tracked in PR #17, then select
    a real provider (Resend/Postmark/SES/...) and implement its adapter from
    official docs.

@@ -171,14 +171,20 @@ describe("ChariPayProvider", () => {
   });
 
   it("verifies timestamp.rawBody HMAC and extracts provisional immutable webhook facts", async () => {
+    // Matches a real signed sandbox delivery for payment.succeeded
+    // (captured 2026-09-17 via ChariPay's partner webhook-events API):
+    // ChariPay's own generated fields (Amount, ExternalId, Reference, ...)
+    // are PascalCased and ExternalId/Reference carry the ORDER id, not the
+    // Payment id — only metadata.onlylivePaymentId (echoed back verbatim
+    // from our own request) resolves the Payment row. There is no
+    // sessionId-equivalent field on a real delivery.
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-09-14T18:00:00Z"));
     const raw = JSON.stringify({
-      externalId: "payment-123",
-      amount: 250.01,
-      currency: "MAD",
-      sessionId: "ps_test_123",
-      metadata: { onlylivePaymentId: "payment-123" },
+      Amount: 250.01,
+      ExternalId: "order-456",
+      Reference: "order-456",
+      metadata: { onlylivePaymentId: "payment-123", onlyliveOrderId: "order-456" },
     });
     const parsed = await new ChariPayProvider().parseWebhook({
       rawBody: raw,
@@ -187,7 +193,7 @@ describe("ChariPayProvider", () => {
 
     expect(parsed).toMatchObject({
       externalEventId: "event-123",
-      providerPaymentId: "ps_test_123",
+      providerPaymentId: "",
       paymentExternalId: "payment-123",
       type: "payment.succeeded",
       amountCents: 25_001,
@@ -208,14 +214,21 @@ describe("ChariPayProvider", () => {
     expect(parsed.amountCents).toBe(0);
   });
 
-  it("fails closed when a signed financial payload omits currency", async () => {
-    const raw = JSON.stringify({ externalId: "payment-123", amount: 10, sessionId: "ps_test_123" });
+  it("fails closed when a signed payment payload has Amount but no metadata.onlylivePaymentId", async () => {
+    // ExternalId/Reference alone must never be treated as the payment id —
+    // on a real ChariPay delivery they carry the ORDER id, not the
+    // Payment id (see charipayProvider.ts's parseWebhook comments and the
+    // "verifies ... webhook facts" test above). ChariPay's webhook also
+    // carries no currency field at all, so there is nothing to "omit" —
+    // currency is always asserted as "MAD", never parsed.
+    const raw = JSON.stringify({ Amount: 10, ExternalId: "order-123", Reference: "order-123" });
     const parsed = await new ChariPayProvider().parseWebhook({
       rawBody: raw,
-      headers: webhookHeaders(raw, "payment.succeeded", "event-no-currency"),
+      headers: webhookHeaders(raw, "payment.succeeded", "event-no-metadata"),
     });
     expect(parsed.signatureValid).toBe(true);
-    expect(parsed.currency).toBe("");
+    expect(parsed.currency).toBe("MAD");
+    expect(parsed.paymentExternalId).toBeUndefined();
     expect(parsed.payloadValid).toBe(false);
   });
 

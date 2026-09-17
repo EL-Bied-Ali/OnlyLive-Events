@@ -52,9 +52,9 @@ Browser return is display/navigation only, never proof of payment. The customer 
 - Delivery is at-least-once and may be out of order.
 - A correctly signed payload is still schema/integrity-validated before mutation.
 
-Payment events reconcile by OnlyLive `externalId` and, when supplied, provider `sessionId`. A missing optional session id does not force a mismatch.
+**Confirmed against a real signed sandbox delivery (2026-09-17, via `GET /api/v1/partner/webhooks/events/{id}`):** a `payment.succeeded` webhook's own generated fields (`Amount`, `ExternalId`, `Reference`, `CustomData`, `GatewayOrderId`, `GatewayReferenceId`, `GatewayTrackId`, `OperationId`, `OperationStatus`, `OperationType`, `WebhookEventId`) are PascalCased — except the nested `metadata` object, which is echoed back verbatim exactly as sent in `createPayment()`'s request body. Critically, **`ExternalId`/`Reference`/`CustomData` all carry the ORDER id, not the Payment id**, despite `createPayment()` sending `externalId: input.paymentId` in its own request — ChariPay's webhook re-purposes that name for something else entirely. Payment events therefore reconcile by **`metadata.onlylivePaymentId` only**; there is no `sessionId`-equivalent field on a real delivery (the route falls back to matching by that alone), and no `currency` field at all — ChariPay only ever operates in MAD for this integration, so `parseWebhook` asserts it rather than parsing it.
 
-Refund events must match stored refund amount, MAD currency, Payment and any provider/external identifiers supplied. Evidence is rechecked under DB locks in the finalizer transaction.
+Refund events must match stored refund amount, Payment and any provider/external identifiers supplied — currency is asserted (`"MAD"`), never parsed, same as payments. **Refund webhook field names are NOT yet confirmed against a real signed delivery** — only `payment.succeeded` has been captured so far (see the sandbox acceptance checklist below, item 5 is done for payments, still open for refunds). `parseWebhook` checks `metadata.onlyliveRefundId` first (the higher-confidence signal, since the metadata-echo behavior is confirmed) and falls back to guessed PascalCase/lowercase top-level field names defensively until a real refund delivery pins this for real. Evidence is rechecked under DB locks in the finalizer transaction.
 
 A signed synthetic endpoint test (`Test:true`) is acknowledged with no financial mutation and is recorded in AuditLog.
 
@@ -140,8 +140,8 @@ Before setting `CHARIPAY_PROVIDER_VERIFIED=true`:
 2. deploy a deliberate public HTTPS OnlyLive preview with its own non-production database;
 3. register the webhook endpoint with explicit allowlist and pinned `apiVersion`;
 4. store the signing secret outside Git;
-5. send the real synthetic signed test event, then fetch its delivery record/body from the ChariPay event log;
-6. complete real sandbox hosted checkout + 3-D Secure success;
+5. send the real synthetic signed test event, then fetch its delivery record/body from the ChariPay event log; **done for `payment.succeeded`** (captured 2026-09-17 via `GET /api/v1/partner/webhooks/events/{id}` — see "Webhook verification" above), still open for `refund.*`;
+6. complete real sandbox hosted checkout + 3-D Secure success; **done** — sandbox only accepts one documented test card (`4918914107195005`, CVV `123`, 3DS code `555`; other cards, including `4242...`-style ones, are rejected upstream even though the hosted UI still reaches an ACS page). A real signed `payment.succeeded` webhook was captured and the parser fixed against its actual body; end-to-end replay against the fixed code is the next step;
 7. exercise a real payment failure;
 8. exercise full and partial refund success/failure;
 9. replay a webhook delivery and the same `refundReference`;
@@ -151,7 +151,7 @@ Before setting `CHARIPAY_PROVIDER_VERIFIED=true`:
 13. capture `GET /v1/transactions` responses needed for payment-loss reconciliation;
 14. capture Payment Session lookup/cancel responses and exact status values needed to release an expired checkout safely;
 15. verify the provider's actual secret-rotation behavior and perform one coordinated rotation test;
-16. replace/pin test fixtures to the exact signed provider bodies observed;
+16. replace/pin test fixtures to the exact signed provider bodies observed; **done for `payment.succeeded`** (`tests/integration/charipay-webhook.test.ts`, `tests/unit/payments/charipayProvider.test.ts`), still open for `refund.*`;
 17. configure a commercial reconciliation cadence materially faster than the current daily Hobby cron without exceeding the measured provider budget.
 
 Production also requires ChariPay KYB/live enablement. No code path may enable live credentials outside Vercel Production.

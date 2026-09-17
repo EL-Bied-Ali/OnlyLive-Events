@@ -54,13 +54,18 @@ async function createChariPendingOrder(options: { quantity?: number; priceCents?
   return { ...fixture, payment };
 }
 
-function paymentPayload(paymentId: string, providerPaymentId: string, amountCents: number, currency = "MAD") {
+// Matches a real signed sandbox delivery for payment.succeeded (captured
+// 2026-09-17 via ChariPay's partner webhook-events API). ChariPay's own
+// generated fields are PascalCased; ExternalId/Reference/CustomData all
+// carry the ORDER id (not the payment id), and there is no sessionId or
+// currency field at all — see charipayProvider.ts's parseWebhook.
+function paymentPayload(paymentId: string, orderId: string, amountCents: number) {
   return {
-    externalId: paymentId,
-    sessionId: providerPaymentId,
-    amount: amountCents / 100,
-    currency,
-    metadata: { onlylivePaymentId: paymentId },
+    Amount: amountCents / 100,
+    ExternalId: orderId,
+    Reference: orderId,
+    CustomData: orderId,
+    metadata: { onlylivePaymentId: paymentId, onlyliveOrderId: orderId },
   };
 }
 
@@ -85,7 +90,7 @@ describe("ChariPay webhook route", () => {
     const fixture = await createChariPendingOrder();
     enableChariPay();
     const response = await chariWebhookPost(signedRequest(
-      paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents),
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
       "payment.succeeded",
       crypto.randomUUID(),
       "0".repeat(64),
@@ -113,7 +118,7 @@ describe("ChariPay webhook route", () => {
     vi.stubEnv("PAYMENT_PROVIDER", "fake");
 
     const response = await chariWebhookPost(signedRequest(
-      paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents),
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
       "payment.succeeded",
     ));
 
@@ -129,7 +134,7 @@ describe("ChariPay webhook route", () => {
     const fixture = await createChariPendingOrder();
     enableChariPay();
     const response = await chariWebhookPost(signedRequest(
-      { externalId: fixture.payment.id, sessionId: fixture.payment.providerPaymentId },
+      { ExternalId: fixture.order.id, Reference: fixture.order.id },
       "payment.succeeded",
     ));
     expect(response.status).toBe(400);
@@ -140,7 +145,7 @@ describe("ChariPay webhook route", () => {
     const fixture = await createChariPendingOrder({ quantity: 2, priceCents: 12_500 });
     enableChariPay();
     const eventId = crypto.randomUUID();
-    const payload = paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents);
+    const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
 
     const first = await chariWebhookPost(signedRequest(payload, "payment.succeeded", eventId));
     expect(first.status).toBe(200);
@@ -161,14 +166,21 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(2);
   });
 
-  it("reconciles a payment webhook by externalId when sessionId is absent", async () => {
+  it("resolves the payment via metadata.onlylivePaymentId, even though ExternalId/Reference/CustomData are actually the order id", async () => {
+    // The exact, real-world confusing case that broke the original
+    // parser: a real ChariPay delivery's ExternalId/Reference/CustomData
+    // all carry OnlyLive's ORDER id, not the Payment id — despite
+    // createPayment() sending `externalId: input.paymentId`. Only
+    // metadata.onlylivePaymentId (echoed back verbatim from our own
+    // request) reliably resolves the Payment row.
     const fixture = await createChariPendingOrder({ quantity: 1, priceCents: 8_500 });
     enableChariPay();
     const response = await chariWebhookPost(signedRequest({
-      externalId: fixture.payment.id,
-      amount: fixture.payment.amountCents / 100,
-      currency: fixture.payment.currency,
-      metadata: { onlylivePaymentId: fixture.payment.id },
+      Amount: fixture.payment.amountCents / 100,
+      ExternalId: fixture.order.id,
+      Reference: fixture.order.id,
+      CustomData: fixture.order.id,
+      metadata: { onlylivePaymentId: fixture.payment.id, onlyliveOrderId: fixture.order.id },
     }, "payment.succeeded"));
 
     expect(response.status).toBe(200);
@@ -180,18 +192,25 @@ describe("ChariPay webhook route", () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
     const response = await chariWebhookPost(signedRequest(
-      paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents + 100),
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents + 100),
       "payment.succeeded",
     ));
     expect(response.status).toBe(409);
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
   });
 
-  it("rejects signed refund amount, currency, and payment-reference mismatches before finalization", async () => {
+  it("rejects signed refund amount and payment-reference mismatches before finalization", async () => {
+    // Currency and providerPaymentId ("sessionId") mismatch scenarios that
+    // used to be tested here no longer apply: a real ChariPay webhook
+    // carries no currency field at all (parseWebhook asserts "MAD", never
+    // parses it from the payload) and no sessionId-equivalent field
+    // (providerPaymentId is always ""), so there is nothing in the
+    // payload an attacker or bug could set wrong for either — see
+    // charipayProvider.ts's parseWebhook comments.
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
     expect((await chariWebhookPost(signedRequest(
-      paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents),
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
       "payment.succeeded",
     ))).status).toBe(200);
 
@@ -205,20 +224,15 @@ describe("ChariPay webhook route", () => {
     });
 
     const base = {
-      externalId: fixture.payment.id,
-      sessionId: fixture.payment.providerPaymentId,
-      refundId: "rf_integrity",
-      refundReference: initiated.refundId,
-      refundAmount: fixture.payment.amountCents / 100,
-      currency: "MAD",
+      RefundId: "rf_integrity",
+      RefundAmount: fixture.payment.amountCents / 100,
+      metadata: { onlyliveRefundId: initiated.refundId, onlylivePaymentId: fixture.payment.id },
     };
     for (const type of ["refund.succeeded", "refund.failed"] as const) {
       for (const { payload, expectedStatus } of [
-        { payload: { ...base, refundAmount: base.refundAmount + 1 }, expectedStatus: 409 },
-        { payload: { ...base, currency: "EUR" }, expectedStatus: 400 },
-        { payload: { ...base, externalId: crypto.randomUUID() }, expectedStatus: 409 },
-        { payload: { ...base, sessionId: "ps_wrong" }, expectedStatus: 409 },
-        { payload: { ...base, refundId: "rf_wrong" }, expectedStatus: 409 },
+        { payload: { ...base, RefundAmount: base.RefundAmount + 1 }, expectedStatus: 409 },
+        { payload: { ...base, metadata: { ...base.metadata, onlylivePaymentId: crypto.randomUUID() } }, expectedStatus: 409 },
+        { payload: { ...base, RefundId: "rf_wrong" }, expectedStatus: 409 },
       ]) {
         const response = await chariWebhookPost(signedRequest(payload, type));
         expect(response.status).toBe(expectedStatus);
@@ -233,10 +247,9 @@ describe("ChariPay webhook route", () => {
     const unknownReference = crypto.randomUUID();
     const eventId = crypto.randomUUID();
     const response = await chariWebhookPost(signedRequest({
-      refundReference: unknownReference,
-      refundId: `rf_${crypto.randomUUID()}`,
-      refundAmount: 10,
-      currency: "MAD",
+      metadata: { onlyliveRefundId: unknownReference },
+      RefundId: `rf_${crypto.randomUUID()}`,
+      RefundAmount: 10,
     }, "refund.succeeded", eventId));
 
     expect(response.status).toBe(202);
@@ -250,7 +263,7 @@ describe("ChariPay webhook route", () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
     expect((await chariWebhookPost(signedRequest(
-      paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents),
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
       "payment.succeeded",
     ))).status).toBe(200);
 
@@ -264,9 +277,8 @@ describe("ChariPay webhook route", () => {
     });
 
     const response = await chariWebhookPost(signedRequest({
-      refundReference: initiated.refundId,
-      refundAmount: fixture.payment.amountCents / 100,
-      currency: fixture.payment.currency,
+      metadata: { onlyliveRefundId: initiated.refundId },
+      RefundAmount: fixture.payment.amountCents / 100,
     }, "refund.succeeded"));
     expect(response.status).toBe(200);
     await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "succeeded" });
@@ -276,7 +288,7 @@ describe("ChariPay webhook route", () => {
     const fixture = await createChariPendingOrder({ quantity: 1, priceCents: 10_000 });
     enableChariPay();
     expect((await chariWebhookPost(signedRequest(
-      paymentPayload(fixture.payment.id, fixture.payment.providerPaymentId!, fixture.payment.amountCents),
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
       "payment.succeeded",
     ))).status).toBe(200);
 
@@ -290,12 +302,9 @@ describe("ChariPay webhook route", () => {
     });
     const inventoryBefore = await prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } });
     const refundPayload = {
-      externalId: fixture.payment.id,
-      sessionId: fixture.payment.providerPaymentId,
-      refundId: "rf_webhook_1",
-      refundReference: initiated.refundId,
-      refundAmount: fixture.payment.amountCents / 100,
-      currency: fixture.payment.currency,
+      metadata: { onlyliveRefundId: initiated.refundId, onlylivePaymentId: fixture.payment.id },
+      RefundId: "rf_webhook_1",
+      RefundAmount: fixture.payment.amountCents / 100,
     };
     const eventId = crypto.randomUUID();
 
