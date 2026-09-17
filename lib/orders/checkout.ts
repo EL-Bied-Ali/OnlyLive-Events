@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { CHECKOUT_EXTENSION_MS } from "@/lib/inventory";
-import { getOnlyLivePublicUrl, getPaymentProvider, getPaymentProviderByName } from "@/lib/payments";
+import { getChariPayWebhookUrl, getOnlyLivePublicUrl, getPaymentProvider, getPaymentProviderByName } from "@/lib/payments";
 import { ProviderInputError, ProviderRequestError } from "@/lib/payments/provider";
 import { ApiError } from "@/lib/http/errors";
 import { failOrderPayment } from "@/lib/orders/fulfillment";
@@ -171,6 +171,9 @@ async function claimAndInitializeProvider(
       // migration must never reroute an existing payment initialization retry.
       const provider = getPaymentProviderByName(payment.provider);
       const callbackBaseUrl = provider.name === "charipay" ? getOnlyLivePublicUrl() : requestBaseUrl;
+      const webhookUrl = provider.name === "charipay"
+        ? getChariPayWebhookUrl()
+        : `${requestBaseUrl}/api/payments/webhook/${provider.name}`;
       const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { email: true, name: true, phone: true } });
       const providerExpiresAt = order.expiresAt
         ? new Date(order.expiresAt.getTime() - PROVIDER_EXPIRY_GUARD_MS)
@@ -189,7 +192,7 @@ async function claimAndInitializeProvider(
         customerName: user.name,
         customerPhone: user.phone,
         returnUrl: `${callbackBaseUrl}/orders/${order.id}`,
-        webhookUrl: `${callbackBaseUrl}/api/payments/webhook/${provider.name}`,
+        webhookUrl,
         expiresAt: providerExpiresAt,
       });
 
