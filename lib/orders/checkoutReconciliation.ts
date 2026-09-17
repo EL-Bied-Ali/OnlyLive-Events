@@ -1,8 +1,12 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { getPaymentProviderByName } from "@/lib/payments";
-import { ProviderRequestError } from "@/lib/payments/provider";
-import { failOrderPayment } from "@/lib/orders/fulfillment";
+import { ProviderRequestError, type PaymentStatusLookupResult } from "@/lib/payments/provider";
+import { confirmOrderPayment, failOrderPayment } from "@/lib/orders/fulfillment";
+import {
+  enqueueOrderConfirmationEmail,
+  enqueueReconciliationAlertEmail,
+} from "@/lib/email/notifications";
 
 const DEFAULT_BATCH_SIZE = 10;
 const MAX_BATCH_SIZE = 50;
@@ -14,6 +18,8 @@ interface CheckoutCandidate {
   order_id: string;
   provider: string;
   provider_payment_id: string | null;
+  amount_cents: number;
+  currency: string;
 }
 
 export interface CheckoutReconciliationSummary {
@@ -68,7 +74,9 @@ async function claimNextExpiredCheckoutPayment(): Promise<CheckoutCandidate | nu
       RETURNING p.id AS payment_id,
                 p.order_id,
                 p.provider,
-                p.provider_payment_id
+                p.provider_payment_id,
+                p.amount_cents,
+                p.currency
     `;
     return rows[0] ?? null;
   });
@@ -126,6 +134,58 @@ async function recordAttention(
  * Payment.status is already `paid` and this becomes a no-op — inventory is
  * never released underneath a captured payment.
  */
+async function finalizeRecoveredCheckoutPayment(
+  candidate: CheckoutCandidate,
+  evidence: PaymentStatusLookupResult,
+): Promise<boolean> {
+  return prisma.$transaction(async (tx) => {
+    const paymentRows = await tx.$queryRaw<{ status: string }[]>`
+      SELECT status FROM payments WHERE id = ${candidate.payment_id} FOR UPDATE
+    `;
+    const payment = paymentRows[0];
+    if (!payment || (payment.status !== "pending" && payment.status !== "awaiting_payment")) {
+      return payment?.status === "paid";
+    }
+
+    const outcome = await confirmOrderPayment(candidate.order_id, tx);
+    if (
+      outcome !== "paid"
+      && outcome !== "paid_but_unfulfillable"
+      && outcome !== "reconciliation_required"
+    ) {
+      return false;
+    }
+
+    await tx.payment.update({
+      where: { id: candidate.payment_id },
+      data: { status: "paid", providerInitAt: null },
+    });
+
+    if (outcome === "paid") {
+      await enqueueOrderConfirmationEmail(tx, candidate.order_id);
+    } else {
+      await enqueueReconciliationAlertEmail(tx, candidate.order_id);
+    }
+
+    await tx.auditLog.create({
+      data: {
+        actorType: "system",
+        action: "payment.reconciled_from_provider_transaction",
+        entityType: "Payment",
+        entityId: candidate.payment_id,
+        metadata: {
+          orderId: candidate.order_id,
+          provider: candidate.provider,
+          providerOperationId: evidence.providerOperationId ?? null,
+          providerStatus: evidence.providerStatus ?? null,
+          outcome,
+        },
+      },
+    });
+    return true;
+  });
+}
+
 async function finalizeClosedCheckout(candidate: CheckoutCandidate): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<{ status: string }[]>`
@@ -184,6 +244,67 @@ export async function reconcileExpiredCheckouts(
     if (!candidate) break;
     summary.checked += 1;
 
+    let provider;
+    try {
+      provider = getPaymentProviderByName(candidate.provider);
+    } catch (error) {
+      summary.errors += 1;
+      await recordAttention(candidate, "provider_reconciliation_configuration_failed");
+      await deferPayment(candidate.payment_id);
+      continue;
+    }
+
+    if (provider.lookupPaymentStatus) {
+      try {
+        const lookup = await provider.lookupPaymentStatus({
+          orderExternalId: candidate.order_id,
+          amountCents: candidate.amount_cents,
+          currency: candidate.currency,
+        });
+
+        if (lookup.status === "succeeded") {
+          if (await finalizeRecoveredCheckoutPayment(candidate, lookup)) {
+            continue;
+          }
+
+          summary.unresolved += 1;
+          await recordAttention(candidate, "provider_transaction_success_local_state_ambiguous", {
+            providerStatus: lookup.providerStatus,
+            providerOperationId: lookup.providerOperationId,
+          });
+          await deferPayment(candidate.payment_id);
+          continue;
+        }
+
+        if (lookup.status === "pending" || lookup.status === "ambiguous") {
+          summary.unresolved += 1;
+          await recordAttention(
+            candidate,
+            lookup.status === "pending"
+              ? "provider_transaction_still_pending"
+              : "provider_transaction_lookup_ambiguous",
+            {
+              providerStatus: lookup.providerStatus,
+              providerOperationId: lookup.providerOperationId,
+            },
+          );
+          await deferPayment(candidate.payment_id);
+          continue;
+        }
+        // failed/cancelled/not_found are not enough on their own to release
+        // inventory. Continue to the provider's explicit session-close proof.
+      } catch (error) {
+        summary.errors += 1;
+        const providerError = error instanceof ProviderRequestError ? error : null;
+        await recordAttention(candidate, "provider_transaction_lookup_failed", {
+          status: providerError?.status,
+          correlationId: providerError?.correlationId,
+        });
+        await deferPayment(candidate.payment_id, providerError?.retryAfterMs);
+        continue;
+      }
+    }
+
     if (!candidate.provider_payment_id) {
       summary.unresolved += 1;
       await recordAttention(candidate, "provider_reference_missing_after_checkout_expiry");
@@ -192,7 +313,6 @@ export async function reconcileExpiredCheckouts(
     }
 
     try {
-      const provider = getPaymentProviderByName(candidate.provider);
       const result = await provider.closePaymentSession(
         candidate.provider_payment_id,
         `checkout-reconcile-${candidate.payment_id}`,
