@@ -240,7 +240,6 @@ export class ChariPayProvider implements PaymentProvider {
     const customerName = chariCustomerName(input.customerName);
     const customerPhone = chariCustomerPhone(input.customerPhone);
     const returnUrl = requireHttpsUrl(input.returnUrl, "returnUrl");
-    const webhookUrl = requireHttpsUrl(input.webhookUrl, "webhookUrl");
     if (!input.expiresAt || input.expiresAt <= new Date()) {
       throw new Error("ChariPay requires a future checkout expiry");
     }
@@ -267,7 +266,11 @@ export class ChariPayProvider implements PaymentProvider {
             email: input.customerEmail,
             phone: customerPhone,
           },
-          urls: { accept: returnUrl, decline: returnUrl, notification: webhookUrl },
+          // Webhooks are delivered through the separately registered partner
+          // endpoint. Supplying a per-session notification URL makes ChariPay
+          // auto-register a duplicate endpoint and can alter/drop URL query
+          // parameters, so it is deliberately omitted here.
+          urls: { accept: returnUrl, decline: returnUrl },
         },
         metadata: { onlylivePaymentId: input.paymentId, onlyliveOrderId: input.orderId },
       }),
