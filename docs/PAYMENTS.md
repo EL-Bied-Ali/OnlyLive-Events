@@ -133,6 +133,13 @@ the local Order/Reservation deadline. That guard window gives webhook/provider
 reconciliation time before local expiry; local expiry alone still never
 authorizes releasing order-linked inventory.
 
+A successful refund also enqueues a refund-confirmation row via
+`lib/email/notifications.ts::enqueueRefundConfirmationEmail`, inside the
+same transaction as the refund's own state change and audit log — see
+docs/ARCHITECTURE.md's transactional email section. The admin-entered
+`reason` is an internal note and is never included in that email's
+customer-facing text.
+
 ## Payment webhook authentication and idempotency
 
 Provider adapters authenticate raw HTTP data before business state is changed.

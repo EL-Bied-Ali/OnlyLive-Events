@@ -158,17 +158,129 @@ dismissed without evidence) and fixed:
 - Provider failures are recorded/audited without blocking a later retry.
 - `/admin/orders/[orderId]` exposes payment/refund/ticket history.
 
-## Completed (transactional email)
+## Completed (transactional email — superseded by the durable outbox below)
 
 - Swappable email-provider interface with a console-only sandbox provider.
-- Idempotent order-confirmation, payment-failure and refund-confirmation
-  triggers using `EmailLog` uniqueness.
-- Notifications run after the business transaction commits; email failure
-  never rolls back money/ticket state.
-- Known durability gap: the current `EmailLog` claim-before-send flow prevents
-  duplicates but is not crash-safe exactly-once delivery. Durable outbox/retry
-  work is tracked separately in PR #17 and must land before production email
-  delivery is considered reliable.
+- Original design: idempotent order-confirmation/payment-failure/refund-
+  confirmation triggers using `EmailLog` uniqueness, sent after the
+  business transaction committed. An independent audit found this could
+  silently lose a notification forever (a crash or a thrown error between
+  commit and send left no record an email was ever owed) — replaced by the
+  durable outbox described next.
+
+## Completed (durable email outbox — branch fix/email-outbox-durable)
+
+A production-safe outbox foundation for transactional email — **not** a
+real email provider integration, which remains selected-provider work in
+`Next` below.
+
+- `EmailOutbox` replaces `EmailLog`: the same `(type, entityType,
+  entityId)` idempotency key, plus `status`
+  (`pending`/`processing`/`sent`/`failed`), `attemptCount`,
+  `nextAttemptAt`, `processingStartedAt` and `lastErrorCode`.
+- The webhook handler and `initiateRefund` now `enqueue*` a row inside the
+  **same** database transaction as the payment/refund state change itself
+  (`app/api/payments/webhook/fake/route.ts`, `lib/orders/refund.ts`) —
+  closing the commit-then-crash gap: once the business fact commits, the
+  obligation to notify is durably recorded with it, never sent from a
+  post-commit code path that could fail to run.
+- `lib/email/dispatcher.ts` — a separate, out-of-band dispatcher
+  (`dispatchPendingEmails`, invoked by the internal
+  `/api/internal/dispatch-emails` endpoint on the same auth pattern as
+  `sweep-expired-holds`, meant to run on a schedule):
+  - Atomically claims a batch with `SELECT ... FOR UPDATE SKIP LOCKED` so
+    overlapping/concurrent invocations never double-send.
+  - Reclaims a row stuck in `processing` past a lease timeout (a crashed
+    worker never finished it) instead of leaving it stuck forever.
+  - Re-validates business state fresh at send time rather than trusting
+    the enqueue-time snapshot — a row is not sent (and marked `failed`
+    with `entity_state_no_longer_valid`) if the order/refund has since
+    moved to a state the enqueued email no longer describes (e.g. a paid
+    order that was fully refunded before its confirmation email went out).
+  - Bounded exponential backoff with jitter on transient provider failure,
+    up to 8 attempts before a row is marked permanently `failed`.
+  - Passes the outbox row's own id as the provider's `idempotencyKey`, so
+    a retried send can never double-send at the provider's own layer once
+    a real provider is integrated.
+  - Never logs a raw recipient address (a truncated SHA-256 hash only) or
+    a full error object (a bounded message only); the refund
+    confirmation email omits the admin-entered internal `reason` text.
+- `lib/appUrl.ts` centralizes absolute-URL construction for email content
+  (ticket links), requiring HTTPS in production except for local-loopback
+  hosts (exempted for the Playwright/CI `next start` run).
+- `isConsoleEmailAllowed()` mirrors the existing fake-payments guard:
+  the console provider is refused in production unless
+  `ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=true` is explicitly set; validated at
+  server boot (`instrumentation.ts`).
+
+## Completed (email outbox audit fixes — same branch)
+
+An independent audit (GPT) at `2ec4dd4` found two functional defects in the
+outbox foundation above and several non-blocking go-live gates. Both
+defects fixed, verified against actual code (none dismissed):
+
+1. **HIGH — a partial refund permanently discarded the queued order
+   confirmation.** `renderOrderConfirmation()` only accepted `order.status
+   === "paid"`, but `lib/orders/refund.ts` moves a partially refunded
+   order to `partially_refunded` while only a *full* refund cancels
+   tickets. A partial refund landing before the dispatcher ran would mark
+   the still-valid confirmation `failed`/`entity_state_no_longer_valid`
+   and the customer would never receive it. Fixed: `partially_refunded` is
+   now accepted alongside `paid`; `refunded` (and everything else) still
+   is not. New test: a partial refund before dispatch still gets both the
+   order and refund confirmation sent, each exactly once.
+2. **MEDIUM — a single row's rendering exception poisoned the whole
+   claimed batch.** `dispatchPendingEmails()` called `renderEmail(row)`
+   *before* the per-row `try/catch`, so a transient DB error or a
+   misconfigured `absoluteAppUrl()` while rendering one row threw out of
+   the loop entirely, stranding every other already-claimed row in
+   `processing` until the 5-minute lease timeout. Fixed: rendering now
+   runs inside the same per-row try/catch as the provider send, so a
+   render exception is retried on its own like a send failure and never
+   blocks the rest of the batch. New test: one row's simulated render
+   failure doesn't stop a second row in the same batch from sending.
+3. Also corrected `renderPaymentFailed()`'s wording, which asserted
+   `"Aucun montant n'a été débité"` (no amount was debited) — a fact this
+   provider-neutral foundation cannot universally guarantee once a real
+   PSP is behind it. Now matches the safer wording already established
+   during the ChariPay integration audit: payment not confirmed, don't
+   pay again if a debit appears until it's verified.
+
+Tracked as pre-real-provider/deployment gates, not fixed here (agreed
+non-blocking while only the instant `ConsoleEmailProvider` exists):
+claiming releases the row before `send()` completes, so a real provider
+call exceeding the 5-minute lease could let a second worker reclaim and
+double-send, and a stale worker could then overwrite the second worker's
+result — needs a request timeout shorter than the lease plus a fencing/
+conditional-finalization mechanism before a real provider is wired in.
+`errorCode()`'s stored/logged error message isn't guaranteed free of
+provider-specific sensitive data — needs a typed provider error with a
+safe machine code before a real provider is wired in. Native Vercel Cron
+needs `vercel.json` + `CRON_SECRET`, not this route's custom header
+contract — an external scheduler works today but must actually be
+provisioned before dispatch can be relied on to run. The HTTP-loopback
+exemption in `lib/appUrl.ts` (`NODE_ENV=production` still permits `http://`
+when the hostname is `localhost`/`127.0.0.1`/`::1`, for the Playwright/CI
+`next start` run) would also silently accept a genuine production
+deployment accidentally misconfigured with a loopback `NEXTAUTH_URL` —
+low-impact (broken email links, not a public HTTP origin) but should gain
+an explicit e2e-only override rather than relying on the hostname alone
+before going further.
+
+A second independent audit (GPT) flagged the `email_outbox` migration's
+`DROP TABLE "email_logs"` as an irreversible loss of historical send
+records rather than a routine follow-up, and asked that this be verified
+rather than assumed. Confirmed: `ConsoleEmailProvider`
+(`lib/email/fakeProvider.ts`) is the only `EmailProvider` implementation
+that has ever existed in this codebase (`lib/email/index.ts`'s factory has
+no other case) — `email_logs` could only ever have been populated by
+local dev/test/e2e runs against that sandbox, never a real customer
+communication, and no environment with a working database existed before
+today's build fix (see the lazy-Prisma-client fix above). There is
+nothing meaningful in that table to migrate. If a real `EmailProvider` is
+ever added retroactively to a version of this app that already has actual
+`email_logs` history, that data would need to be migrated forward before
+running this migration — not a concern for the app's current state.
 
 ## Completed (auth rate limiting — PR #8)
 
@@ -265,7 +377,7 @@ dismissed without evidence) and fixed:
   `metadata.onlyliveOrderId` is now a **required** second reconciliation
   invariant for payment events (not merely an optional cross-check —
   `payloadValid` rejects a payment webhook missing either id).
-  `parseWebhook` and all three affected test suites
+  `parseWebhook` and all four affected test suites
   (`charipay-webhook.test.ts`, `charipayProvider.test.ts`,
   `charipayHardening.test.ts`, `charipayWebhookRotation.test.ts`) are
   fixed and re-verified against the real shape; see docs/CHARIPAY.md's
@@ -307,9 +419,11 @@ dismissed without evidence) and fixed:
    a real refund success/failure (full and partial) with its webhook
    payload pinned, and a webhook-delivery/`refundReference` replay test
    against the real provider.
-2. Finish/review the durable email-outbox work tracked in PR #17, then select
-   a real provider (Resend/Postmark/SES/...) and implement its adapter from
-   official docs.
+2. Select a real email provider (Resend/Postmark/SES/...) and implement its
+   `EmailProvider` adapter from official docs — the durable outbox/dispatcher
+   (batching, retry with backoff, idempotency key) already merged via PR #17
+   and need no change to accept it; only `lib/email/index.ts`'s
+   `getEmailProvider()` factory gains a new case.
 3. Decide the production managed-Postgres provider and document/test the
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
@@ -322,6 +436,13 @@ dismissed without evidence) and fixed:
    real traffic, then tune/enforce without replacing account-level limiting.
 8. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
+9. Before ChariPay go-live: a customer who registered before phone became
+   required (PR #18) has `phone: null` and cannot pay — ChariPay's adapter
+   rejects cleanly (`PAYMENT_CUSTOMER_DETAILS_REQUIRED`), no crash/financial
+   risk, but there's currently no profile page or endpoint letting an
+   existing customer add a phone number. Needs a small "complete your
+   phone" flow, ideally surfaced at the start of checkout. Not a blocker if
+   production has no real historical customers yet by go-live.
 
 ## Blocked
 

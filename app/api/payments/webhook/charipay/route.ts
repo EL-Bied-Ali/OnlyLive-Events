@@ -9,7 +9,7 @@ import {
   finalizeRefundSuccess,
   type RefundProviderEvidence,
 } from "@/lib/orders/refund";
-import { sendOrderConfirmationEmail, sendPaymentFailedEmail } from "@/lib/email/notifications";
+import { enqueueOrderConfirmationEmail, enqueuePaymentFailedEmail } from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -305,9 +305,18 @@ export async function POST(request: NextRequest) {
         if (outcome === "paid" || outcome === "paid_but_unfulfillable" || outcome === "reconciliation_required") {
           await tx.payment.update({ where: { id: payment.id }, data: { status: "paid" } });
         }
+        // Enqueued in this same transaction, not sent after commit: a crash
+        // between commit and send can no longer lose the notification — see
+        // lib/email/notifications.ts and lib/email/dispatcher.ts.
+        if (outcome === "paid") {
+          await enqueueOrderConfirmationEmail(tx, payment.orderId);
+        }
       } else if (event.type === "payment.failed") {
         outcome = await failOrderPayment(payment.orderId, "failed", tx);
-        if (outcome === "failed") await tx.payment.update({ where: { id: payment.id }, data: { status: "failed" } });
+        if (outcome === "failed") {
+          await tx.payment.update({ where: { id: payment.id }, data: { status: "failed" } });
+          await enqueuePaymentFailedEmail(tx, payment.orderId);
+        }
       } else {
         outcome = "ignored";
       }
@@ -325,10 +334,6 @@ export async function POST(request: NextRequest) {
     } else if (result.outcome === "refund.failed" && result.refundId && result.paymentEventId) {
       await finalizeRefundFailure(result.refundId, result.providerRefundId, refundEvidence);
       await prisma.paymentEvent.update({ where: { id: result.paymentEventId }, data: { processedAt: new Date() } });
-    } else if (result.outcome === "paid" && result.orderId) {
-      await sendOrderConfirmationEmail(result.orderId);
-    } else if ((result.outcome === "failed" || result.outcome === "cancelled") && result.orderId) {
-      await sendPaymentFailedEmail(result.orderId);
     }
 
     return NextResponse.json({ ok: true, outcome: result.outcome });

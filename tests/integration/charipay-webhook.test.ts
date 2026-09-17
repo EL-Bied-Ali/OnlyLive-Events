@@ -197,6 +197,42 @@ describe("ChariPay webhook route", () => {
     ));
     expect(response.status).toBe(409);
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+    expect(await prisma.emailOutbox.count({
+      where: { type: "order_confirmation", entityType: "order", entityId: fixture.order.id },
+    })).toBe(0);
+  });
+
+  it("enqueues an order_confirmation row atomically with the payment.succeeded transaction, since the merge with the durable email outbox", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+    ));
+    expect(response.status).toBe(200);
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "paid" });
+    const rows = await prisma.emailOutbox.findMany({
+      where: { type: "order_confirmation", entityType: "order", entityId: fixture.order.id },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("pending");
+    expect(rows[0]!.recipientEmail).toBe(fixture.user.email);
+  });
+
+  it("enqueues a payment_failed row atomically with the payment.failed transaction", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.failed",
+    ));
+    expect(response.status).toBe(200);
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "failed" });
+    const rows = await prisma.emailOutbox.findMany({
+      where: { type: "payment_failed", entityType: "order", entityId: fixture.order.id },
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.status).toBe("pending");
   });
 
   it("fails closed on a payment webhook missing metadata.onlyliveOrderId, even with a correct payment id", async () => {

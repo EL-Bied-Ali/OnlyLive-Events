@@ -4,7 +4,7 @@ import { getPaymentProviderByName } from "@/lib/payments";
 import { ProviderRequestError } from "@/lib/payments/provider";
 import { ApiError } from "@/lib/http/errors";
 import { canTransition, type OrderStatus } from "@/lib/orders/stateMachine";
-import { sendRefundConfirmationEmail } from "@/lib/email/notifications";
+import { enqueueRefundConfirmationEmail } from "@/lib/email/notifications";
 
 export interface InitiateRefundInput {
   paymentId: string;
@@ -242,12 +242,19 @@ export async function finalizeRefundSuccess(
         },
       },
     });
+
+    // Enqueued in this same transaction, not sent after commit — see
+    // lib/email/notifications.ts and lib/email/dispatcher.ts. The finalizer
+    // is idempotent (exactly one call reaches this point with changed=true
+    // for a given refund, since a later call short-circuits above once
+    // status is already "succeeded"), so a retry/replayed webhook can never
+    // enqueue a duplicate confirmation row (enqueue() also does its own
+    // skipDuplicates insert as defense in depth).
+    await enqueueRefundConfirmationEmail(tx, refund.id);
+
     return { changed: true, paymentStatus, orderStatus };
   });
 
-  // The finalizer is idempotent: exactly one transition has changed=true, so
-  // retries/replayed webhooks cannot send duplicate confirmation emails.
-  if (outcome.changed) await sendRefundConfirmationEmail(refundId);
   return { state: "succeeded", ...outcome };
 }
 

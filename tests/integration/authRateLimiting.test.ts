@@ -38,6 +38,7 @@ describe("registration rate limiting", () => {
             email,
             password: "RateLimitTestPassword123!",
             name: "Rate Limit Test",
+            phone: "0612345678",
           },
           "http://localhost/api/customers/register",
         ),
@@ -48,7 +49,7 @@ describe("registration rate limiting", () => {
     const sixth = await registerPost(
       withForwardedFor(
         uniqueIp(),
-        { email, password: "RateLimitTestPassword123!", name: "X" },
+        { email, password: "RateLimitTestPassword123!", name: "X", phone: "0612345678" },
         "http://localhost/api/customers/register",
       ),
     );
@@ -63,7 +64,7 @@ describe("registration rate limiting", () => {
       await registerPost(
         withForwardedFor(
           uniqueIp(),
-          { email: exhaustedEmail, password: "RateLimitTestPassword123!", name: "X" },
+          { email: exhaustedEmail, password: "RateLimitTestPassword123!", name: "X", phone: "0612345678" },
           "http://localhost/api/customers/register",
         ),
       );
@@ -72,7 +73,7 @@ describe("registration rate limiting", () => {
     const response = await registerPost(
       withForwardedFor(
         uniqueIp(),
-        { email: `ratelimit-fresh-${crypto.randomUUID()}@test.onlylive.ma`, password: "RateLimitTestPassword123!", name: "X" },
+        { email: `ratelimit-fresh-${crypto.randomUUID()}@test.onlylive.ma`, password: "RateLimitTestPassword123!", name: "X", phone: "0612345678" },
         "http://localhost/api/customers/register",
       ),
     );
