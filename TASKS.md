@@ -650,6 +650,31 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    captured and pinned (see above). Still needed: a real payment failure,
    a real refund success/failure (full and partial) with its webhook
    payload pinned, and a webhook-delivery/`refundReference` replay test
+
+   **Attempted and inconclusive (2026-09-18):** tried to force a payment
+   failure via a hosted checkout using card `4000000000000002` (shown as
+   a "Refus" test card in ChariPay's own hosted-checkout UI copy), which
+   returned a real browser-return `RESPONSE_CODE=25`/`REASON_CODE=
+   AUTHORISATION REJECTED`. Independently confirmed via GPT (which checked
+   both ChariPay's current published sandbox docs and this project's
+   Vercel runtime logs) that this was the wrong test: **this repo's own
+   existing note two lines above item 6 in the "Required sandbox
+   acceptance" checklist already established that the sandbox only
+   accepts one documented test card (`4918914107195005`/CVV `123`/3DS
+   `555`) and rejects every other PAN upstream** — should have
+   cross-checked that before picking a card from the checkout page's UI
+   hint instead. Vercel logs confirm zero requests ever reached
+   `/api/payments/webhook/charipay` in that window: this was an
+   upstream PAN rejection, not a delayed/stuck webhook delivery, and is
+   not evidence of the provider's documented delivery-queue defect
+   either. No code or docs changed based on this result (correctly, per
+   GPT — the `AUTHORISATION REJECTED` return is real but doesn't
+   represent the kind of failure ChariPay's `notifyOnFailure` /
+   `payment.failed` path is documented to fire for). Next attempt should
+   use the documented success card but a **deliberately wrong 3DS code**
+   (not `555`) or an abandoned/timed-out 3DS challenge, to reach a
+   genuine decline within the recognized card-processing path rather
+   than an upstream PAN rejection.
    against the real provider.
 2. Select a real email provider (Resend/Postmark/SES/...) and implement its
    `EmailProvider` adapter from official docs — the durable outbox/dispatcher
