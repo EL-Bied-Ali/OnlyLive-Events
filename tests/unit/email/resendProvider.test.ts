@@ -83,6 +83,26 @@ describe("ResendEmailProvider", () => {
     });
   });
 
+  it("keeps operator-fixable auth/domain failures retryable", async () => {
+    configure();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(403, {
+      name: "validation_error",
+      message: "domain is not verified",
+    })));
+
+    await expect(new ResendEmailProvider().send({
+      to: "buyer@example.com",
+      subject: "Hi",
+      text: "Body",
+      idempotencyKey: "config-403",
+    })).rejects.toMatchObject({
+      name: "EmailProviderError",
+      retryable: true,
+      status: 403,
+      providerCode: "validation_error",
+    });
+  });
+
   it("treats ordinary 4xx request/config errors as permanent", async () => {
     configure();
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(422, {
