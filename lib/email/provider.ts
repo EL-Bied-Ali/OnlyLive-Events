@@ -1,9 +1,7 @@
 /**
- * No transactional email provider has been selected yet — same rule as
- * lib/payments: never build against a real provider's API speculatively.
- * When one is chosen, its adapter is implemented from that provider's
- * official docs and registered in lib/email/index.ts::getEmailProvider();
- * nothing else in the app should need to change.
+ * Provider-neutral transactional email contract. Resend is the first real
+ * adapter; console remains the local/test implementation. Business code and
+ * the durable outbox depend only on this interface.
  */
 export interface SendEmailInput {
   to: string;
@@ -11,10 +9,10 @@ export interface SendEmailInput {
   text: string;
   /**
    * Stable per-outbox-row key (the EmailOutbox row's id). ConsoleEmailProvider
-   * ignores it since it never makes a real network call, but a real adapter
-   * must forward it to the provider so a retried dispatch attempt (same
-   * outbox row, a later nextAttemptAt) can never send the same email twice
-   * at the provider's own layer, mirroring RefundInput.idempotencyKey.
+   * ignores it; real adapters forward it to their provider's idempotency
+   * mechanism. Provider retention windows still matter operationally — this
+   * is defense against normal retries, not a claim of infinite exactly-once
+   * delivery.
    */
   idempotencyKey: string;
 }
