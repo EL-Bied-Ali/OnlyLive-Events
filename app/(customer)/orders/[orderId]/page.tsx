@@ -44,7 +44,7 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
 
   return (
     <main style={{ maxWidth: 640, margin: "0 auto", padding: "48px 16px" }}>
-      <OrderStatusAutoRefresh active={refreshable} />
+      <OrderStatusAutoRefresh orderId={order.id} status={order.status} />
       <h1 style={{ fontSize: 26, marginBottom: 4 }}>Commande {order.orderNumber}</h1>
       <p style={{ opacity: 0.8, marginBottom: 24 }}>{order.event.title}</p>
 

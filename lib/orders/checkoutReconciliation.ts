@@ -35,6 +35,14 @@ function assertBatchSize(limit: number): void {
   }
 }
 
+/** Identifies the Payment/Order pair a reconciliation attempt is acting on. */
+export interface ReconcilablePayment {
+  paymentId: string;
+  orderId: string;
+  provider: string;
+  providerPaymentId?: string | null;
+}
+
 /**
  * Claim exactly one due checkout immediately before its provider work starts.
  * `updated_at` is the durable lease/backoff cursor. Moving it into the future
@@ -82,6 +90,15 @@ async function claimNextExpiredCheckoutPayment(): Promise<CheckoutCandidate | nu
   });
 }
 
+function toReconcilablePayment(candidate: CheckoutCandidate): ReconcilablePayment {
+  return {
+    paymentId: candidate.payment_id,
+    orderId: candidate.order_id,
+    provider: candidate.provider,
+    providerPaymentId: candidate.provider_payment_id,
+  };
+}
+
 async function deferPayment(paymentId: string, retryAfterMs?: number): Promise<void> {
   const delay = Math.max(retryAfterMs ?? DEFAULT_RETRY_DELAY_MS, 1_000);
   const next = new Date(Date.now() + delay);
@@ -91,8 +108,17 @@ async function deferPayment(paymentId: string, retryAfterMs?: number): Promise<v
   `;
 }
 
-async function recordAttention(
-  candidate: CheckoutCandidate,
+/**
+ * Records (once per payment) that a reconciliation attempt — whether from
+ * the expired-checkout batch worker or the customer-triggered on-demand
+ * path below — hit an unresolved or failed provider lookup. Shared across
+ * both callers so a given payment's stuck state surfaces to admins exactly
+ * once regardless of which path noticed it first, instead of each caller
+ * keeping its own audit trail (and instead of a poll interval spamming a
+ * new row on every attempt).
+ */
+export async function recordPaymentReconciliationAttention(
+  payment: ReconcilablePayment,
   reason: string,
   metadata: Record<string, string | number | boolean | null | undefined> = {},
 ): Promise<void> {
@@ -100,7 +126,7 @@ async function recordAttention(
     where: {
       action: "payment.checkout_reconciliation_required",
       entityType: "Payment",
-      entityId: candidate.payment_id,
+      entityId: payment.paymentId,
     },
     select: { id: true },
   });
@@ -115,11 +141,11 @@ async function recordAttention(
       actorType: "system",
       action: "payment.checkout_reconciliation_required",
       entityType: "Payment",
-      entityId: candidate.payment_id,
+      entityId: payment.paymentId,
       metadata: {
-        orderId: candidate.order_id,
-        provider: candidate.provider,
-        providerPaymentIdPresent: Boolean(candidate.provider_payment_id),
+        orderId: payment.orderId,
+        provider: payment.provider,
+        providerPaymentIdPresent: Boolean(payment.providerPaymentId),
         reason,
         ...safeMetadata,
       },
@@ -132,21 +158,28 @@ async function recordAttention(
  * the same Payment -> Order lock order and fulfillment primitives as webhooks.
  * A concurrent signed webhook either wins first (making this a safe no-op) or
  * waits for this transaction, then observes the already-paid state.
+ *
+ * Shared by the expired-checkout batch worker below and by the
+ * customer-triggered on-demand reconciliation path
+ * (lib/orders/paymentReconciliation.ts) — both are just different ways of
+ * *finding* a payment with confirmed ledger evidence; once found, applying
+ * that evidence is the same operation and must go through the same
+ * lock/idempotency guarantees, never a parallel implementation.
  */
-async function finalizeRecoveredCheckoutPayment(
-  candidate: CheckoutCandidate,
+export async function finalizeRecoveredPayment(
+  payment: ReconcilablePayment,
   evidence: PaymentStatusLookupResult,
 ): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<{ status: string }[]>`
-      SELECT status FROM payments WHERE id = ${candidate.payment_id} FOR UPDATE
+      SELECT status FROM payments WHERE id = ${payment.paymentId} FOR UPDATE
     `;
-    const payment = paymentRows[0];
-    if (!payment || (payment.status !== "pending" && payment.status !== "awaiting_payment")) {
-      return payment?.status === "paid";
+    const current = paymentRows[0];
+    if (!current || (current.status !== "pending" && current.status !== "awaiting_payment")) {
+      return current?.status === "paid";
     }
 
-    const outcome = await confirmOrderPayment(candidate.order_id, tx);
+    const outcome = await confirmOrderPayment(payment.orderId, tx);
     if (
       outcome !== "paid"
       && outcome !== "paid_but_unfulfillable"
@@ -156,14 +189,14 @@ async function finalizeRecoveredCheckoutPayment(
     }
 
     await tx.payment.update({
-      where: { id: candidate.payment_id },
+      where: { id: payment.paymentId },
       data: { status: "paid", providerInitAt: null },
     });
 
     if (outcome === "paid") {
-      await enqueueOrderConfirmationEmail(tx, candidate.order_id);
+      await enqueueOrderConfirmationEmail(tx, payment.orderId);
     } else {
-      await enqueueReconciliationAlertEmail(tx, candidate.order_id);
+      await enqueueReconciliationAlertEmail(tx, payment.orderId);
     }
 
     await tx.auditLog.create({
@@ -171,10 +204,10 @@ async function finalizeRecoveredCheckoutPayment(
         actorType: "system",
         action: "payment.reconciled_from_provider_transaction",
         entityType: "Payment",
-        entityId: candidate.payment_id,
+        entityId: payment.paymentId,
         metadata: {
-          orderId: candidate.order_id,
-          provider: candidate.provider,
+          orderId: payment.orderId,
+          provider: payment.provider,
           providerOperationId: evidence.providerOperationId ?? null,
           providerStatus: evidence.providerStatus ?? null,
           outcome,
@@ -256,7 +289,7 @@ export async function reconcileExpiredCheckouts(
       provider = getPaymentProviderByName(candidate.provider);
     } catch {
       summary.errors += 1;
-      await recordAttention(candidate, "provider_reconciliation_configuration_failed");
+      await recordPaymentReconciliationAttention(toReconcilablePayment(candidate), "provider_reconciliation_configuration_failed");
       await deferPayment(candidate.payment_id);
       continue;
     }
@@ -270,12 +303,12 @@ export async function reconcileExpiredCheckouts(
         });
 
         if (lookup.status === "succeeded") {
-          if (await finalizeRecoveredCheckoutPayment(candidate, lookup)) {
+          if (await finalizeRecoveredPayment(toReconcilablePayment(candidate), lookup)) {
             continue;
           }
 
           summary.unresolved += 1;
-          await recordAttention(candidate, "provider_transaction_success_local_state_ambiguous", {
+          await recordPaymentReconciliationAttention(toReconcilablePayment(candidate), "provider_transaction_success_local_state_ambiguous", {
             providerStatus: lookup.providerStatus,
             providerOperationId: lookup.providerOperationId,
           });
@@ -285,8 +318,8 @@ export async function reconcileExpiredCheckouts(
 
         if (lookup.status === "pending" || lookup.status === "ambiguous") {
           summary.unresolved += 1;
-          await recordAttention(
-            candidate,
+          await recordPaymentReconciliationAttention(
+            toReconcilablePayment(candidate),
             lookup.status === "pending"
               ? "provider_transaction_still_pending"
               : "provider_transaction_lookup_ambiguous",
@@ -303,7 +336,7 @@ export async function reconcileExpiredCheckouts(
       } catch (error) {
         summary.errors += 1;
         const providerError = error instanceof ProviderRequestError ? error : null;
-        await recordAttention(candidate, "provider_transaction_lookup_failed", {
+        await recordPaymentReconciliationAttention(toReconcilablePayment(candidate), "provider_transaction_lookup_failed", {
           status: providerError?.status,
           correlationId: providerError?.correlationId,
         });
@@ -314,7 +347,7 @@ export async function reconcileExpiredCheckouts(
 
     if (!candidate.provider_payment_id) {
       summary.unresolved += 1;
-      await recordAttention(candidate, "provider_reference_missing_after_checkout_expiry");
+      await recordPaymentReconciliationAttention(toReconcilablePayment(candidate), "provider_reference_missing_after_checkout_expiry");
       await deferPayment(candidate.payment_id);
       continue;
     }
@@ -331,7 +364,7 @@ export async function reconcileExpiredCheckouts(
       }
 
       summary.unresolved += 1;
-      await recordAttention(candidate, "provider_session_state_ambiguous", {
+      await recordPaymentReconciliationAttention(toReconcilablePayment(candidate), "provider_session_state_ambiguous", {
         providerStatus: result.providerStatus,
         correlationId: result.correlationId,
       });
@@ -339,7 +372,7 @@ export async function reconcileExpiredCheckouts(
     } catch (error) {
       summary.errors += 1;
       const providerError = error instanceof ProviderRequestError ? error : null;
-      await recordAttention(candidate, "provider_reconciliation_request_failed", {
+      await recordPaymentReconciliationAttention(toReconcilablePayment(candidate), "provider_reconciliation_request_failed", {
         status: providerError?.status,
         correlationId: providerError?.correlationId,
       });
