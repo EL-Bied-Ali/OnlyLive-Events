@@ -76,11 +76,11 @@ export async function GET(request: NextRequest) {
           // committed, so abort the response body rather than silently
           // pretending the export completed successfully.
           controller.error(error);
-          await batches.return?.();
+          await batches.return?.(undefined);
         }
       },
       async cancel() {
-        await batches.return?.();
+        await batches.return?.(undefined);
       },
     });
 
