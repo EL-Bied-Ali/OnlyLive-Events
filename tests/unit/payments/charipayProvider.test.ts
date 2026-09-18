@@ -327,7 +327,28 @@ describe("ChariPayProvider", () => {
       throw new Error("expected provider failure");
     } catch (error) {
       expect(error).toBeInstanceOf(ProviderRequestError);
-      expect(error).toMatchObject({ outcomeUnknown: false, status: 400 });
+      expect(error).toMatchObject({ outcomeUnknown: false, status: 400, providerCode: "BAD_REQUEST" });
+    }
+  });
+
+  it("parses the provider's own machine error code onto providerCode for diagnostics", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response({ error: { code: "ORIGINAL_PAYMENT_NOT_FOUND", message: "no matching payment" } }, 400)),
+    );
+    try {
+      await new ChariPayProvider().refund({
+        providerPaymentId: "ps",
+        paymentExternalId: "payment",
+        amountCents: 1000,
+        currency: "MAD",
+        reason: "test",
+        idempotencyKey: "refund-not-found",
+      });
+      throw new Error("expected provider failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      expect(error).toMatchObject({ outcomeUnknown: false, status: 400, providerCode: "ORIGINAL_PAYMENT_NOT_FOUND" });
     }
   });
 });

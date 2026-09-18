@@ -258,10 +258,19 @@ export async function finalizeRefundSuccess(
   return { state: "succeeded", ...outcome };
 }
 
+export interface ProviderRejectionMeta {
+  provider: string;
+  providerStatus?: number;
+  /** ChariPay's own short machine error code (e.g. "BAD_REQUEST"). Never the raw provider message — that text is provider-controlled and could echo request details. */
+  providerCode?: string;
+  correlationId?: string;
+}
+
 export async function finalizeRefundFailure(
   refundId: string,
   providerRefundId?: string | null,
   evidence?: RefundProviderEvidence,
+  rejectionMeta?: ProviderRejectionMeta,
 ): Promise<{ changed: boolean }> {
   return prisma.$transaction(async (tx) => {
     const rows = await tx.$queryRaw<{ id: string; payment_id: string; amount_cents: number; status: string; provider_refund_id: string | null }[]>`
@@ -288,7 +297,12 @@ export async function finalizeRefundFailure(
         action: "refund.failed",
         entityType: "refund",
         entityId: refund.id,
-        metadata: { providerRefundId: resolvedProviderRefundId },
+        // rejectionMeta is folded into this SAME atomic transaction as the
+        // failed status write, rather than a separate pre-finalization audit
+        // insert — a diagnostic-only write must never be able to fail
+        // independently and leave a definitively-rejected refund stuck in
+        // `processing` (independent audit (GPT) caught this).
+        metadata: { providerRefundId: resolvedProviderRefundId, ...rejectionMeta },
       },
     });
     return { changed: true };
@@ -308,6 +322,10 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
       idempotencyKey: prepared.refundId,
     });
   } catch (error) {
+    // providerCode is the provider's own short machine error code (e.g.
+    // "BAD_REQUEST") — safe to log/audit (never card data). The raw provider
+    // message is deliberately never logged: it is provider-controlled text
+    // that could echo request details back, unlike a fixed enum-like code.
     console.error(
       "provider.refund submission failed",
       error instanceof ProviderRequestError
@@ -317,6 +335,7 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
             outcomeUnknown: error.outcomeUnknown,
             retryAfterMs: error.retryAfterMs,
             correlationId: error.correlationId,
+            providerCode: error.providerCode,
           }
         : { name: "unknown" },
     );
@@ -326,7 +345,17 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
       (error instanceof ProviderRequestError && !error.outcomeUnknown);
 
     if (definitiveRejection) {
-      await finalizeRefundFailure(prepared.refundId);
+      // Previously missing entirely from this path, which left no queryable
+      // record of why a real sandbox refund attempt was rejected (see
+      // TASKS.md's ChariPay acceptance #8 writeup) — folded into
+      // finalizeRefundFailure's own atomic transaction rather than a
+      // separate pre-finalization audit insert (see its doc comment).
+      await finalizeRefundFailure(prepared.refundId, undefined, undefined, {
+        provider: provider.name,
+        providerStatus: error instanceof ProviderRequestError ? error.status : undefined,
+        providerCode: error instanceof ProviderRequestError ? error.providerCode : undefined,
+        correlationId: error instanceof ProviderRequestError ? error.correlationId : undefined,
+      });
       throw new ApiError(502, "PROVIDER_REFUND_FAILED", "The payment provider rejected the refund");
     }
 

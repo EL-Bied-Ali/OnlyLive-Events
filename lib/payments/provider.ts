@@ -145,6 +145,8 @@ export class ProviderRequestError extends Error {
     public readonly retryAfterMs?: number,
     /** Provider correlation/request id for support diagnostics; never a secret. */
     public readonly correlationId?: string,
+    /** Provider's own short machine error code (e.g. "BAD_REQUEST"), when parseable. Never a secret. */
+    public readonly providerCode?: string,
   ) {
     super(message);
     this.name = "ProviderRequestError";
