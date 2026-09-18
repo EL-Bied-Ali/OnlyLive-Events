@@ -6,6 +6,7 @@ import { FakeProvider, signFakeWebhookPayload } from "@/lib/payments/fakeProvide
 import { ChariPayProvider } from "@/lib/payments/charipayProvider";
 import { POST as fakeWebhookPost } from "@/app/api/payments/webhook/fake/route";
 import { finalizeRefundSuccess, initiateRefund, reconcileProcessingRefunds } from "@/lib/orders/refund";
+import { ProviderRequestError } from "@/lib/payments/provider";
 import { createOrderAwaitingPayment } from "../helpers/fixtures";
 
 function fakeWebhookRequest(payload: unknown) {
@@ -149,6 +150,28 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     expect(processing.status).toBe("processing");
     await expect(initiateRefund({ paymentId: fixture.payment.id, amountCents: 4_000, reason: "Must remain reserved", actorId: admin.id }))
       .rejects.toMatchObject({ code: "REFUND_EXCEEDS_REMAINING", status: 409 });
+  });
+
+  it("persists the provider's rejection code/correlation id atomically when a refund is definitively rejected", async () => {
+    const fixture = await createPaidOrderForChariPay({ priceCents: 10_000 });
+    const admin = await createAdmin();
+    enableChariPay();
+    vi.spyOn(ChariPayProvider.prototype, "refund").mockRejectedValue(
+      new ProviderRequestError("ChariPay ORIGINAL_PAYMENT_NOT_FOUND: no matching payment", false, 400, undefined, "corr-def-rejected", "ORIGINAL_PAYMENT_NOT_FOUND"),
+    );
+    await expect(initiateRefund({ paymentId: fixture.payment.id, amountCents: 5_000, reason: "Definitive rejection", actorId: admin.id }))
+      .rejects.toMatchObject({ code: "PROVIDER_REFUND_FAILED", status: 502 });
+    const refund = await prisma.refund.findFirstOrThrow({ where: { paymentId: fixture.payment.id } });
+    expect(refund.status).toBe("failed");
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { entityType: "refund", entityId: refund.id, action: "refund.failed" },
+    });
+    expect(audit.metadata).toMatchObject({
+      provider: "charipay",
+      providerStatus: 400,
+      providerCode: "ORIGINAL_PAYMENT_NOT_FOUND",
+      correlationId: "corr-def-rejected",
+    });
   });
 
   it("leaves a pending provider refund processing without replaying it", async () => {
