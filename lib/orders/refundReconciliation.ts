@@ -154,6 +154,8 @@ export async function reconcileProcessingRefundsFair(
       const replay = await provider.refund({
         providerPaymentId: refund.payment.providerPaymentId,
         paymentExternalId: refund.payment.id,
+        orderExternalId: refund.payment.orderId,
+        paymentAmountCents: refund.payment.amountCents,
         amountCents: refund.amountCents,
         currency: refund.payment.currency,
         reason: refund.reason,
