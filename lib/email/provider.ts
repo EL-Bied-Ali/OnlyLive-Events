@@ -23,6 +23,19 @@ export interface SendEmailResult {
   providerMessageId: string;
 }
 
+
+export class EmailProviderError extends Error {
+  constructor(
+    message: string,
+    public readonly retryable: boolean,
+    public readonly status?: number,
+    public readonly providerCode?: string,
+  ) {
+    super(message);
+    this.name = "EmailProviderError";
+  }
+}
+
 export interface EmailProvider {
   readonly name: string;
   send(input: SendEmailInput): Promise<SendEmailResult>;
