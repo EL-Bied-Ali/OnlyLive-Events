@@ -74,6 +74,8 @@ export interface ParsedWebhookEvent {
 export interface RefundInput {
   providerPaymentId: string;
   paymentExternalId: string;
+  /** Canonical provider ledger operation id when independently resolved. */
+  providerOperationId?: string;
   amountCents: number;
   currency: string;
   reason: string;
