@@ -25,7 +25,7 @@ describe("ChariPay expired checkout reconciliation", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const result = await new ChariPayProvider().closePaymentSession("ps_123", "req-123");
-    expect(result).toEqual({ state: "non_payable", providerStatus: "CANCELLED", correlationId: "corr-ok" });
+    expect(result).toEqual({ state: "non_payable", providerStatus: "CANCELLED", correlationId: "corr-ok", httpStatus: 200 });
     expect(fetchMock).toHaveBeenCalledWith(
       "https://api-psp.charipay.ma/v1/payment-sessions/ps_123/cancel",
       expect.objectContaining({
@@ -38,6 +38,37 @@ describe("ChariPay expired checkout reconciliation", () => {
     );
   });
 
+  it("preserves the real observed status string on a successful cancel instead of a hardcoded value", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { status: "SESSION_CLOSED" }, { "x-request-id": "corr-observed" })));
+
+    await expect(new ChariPayProvider().closePaymentSession("ps_observed", "req-observed")).resolves.toEqual({
+      state: "non_payable",
+      providerStatus: "SESSION_CLOSED",
+      correlationId: "corr-observed",
+      httpStatus: 200,
+    });
+  });
+
+  it("still returns non_payable when a successful cancel has an empty or non-JSON body", async () => {
+    const emptyBody = new Response("", { status: 200, headers: { "x-request-id": "corr-empty" } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(emptyBody));
+    await expect(new ChariPayProvider().closePaymentSession("ps_empty", "req-empty")).resolves.toEqual({
+      state: "non_payable",
+      providerStatus: "CANCELLED",
+      correlationId: "corr-empty",
+      httpStatus: 200,
+    });
+
+    const nonJsonBody = new Response("not json", { status: 200, headers: { "x-request-id": "corr-nonjson" } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(nonJsonBody));
+    await expect(new ChariPayProvider().closePaymentSession("ps_nonjson", "req-nonjson")).resolves.toEqual({
+      state: "non_payable",
+      providerStatus: "CANCELLED",
+      correlationId: "corr-nonjson",
+      httpStatus: 200,
+    });
+  });
+
   it("treats SESSION_EXPIRED as non-payable", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(410, {
       error: { code: "SESSION_EXPIRED", message: "expired" },
@@ -46,6 +77,8 @@ describe("ChariPay expired checkout reconciliation", () => {
     await expect(new ChariPayProvider().closePaymentSession("ps_expired", "req-expired")).resolves.toMatchObject({
       state: "non_payable",
       providerStatus: "SESSION_EXPIRED",
+      httpStatus: 410,
+      providerCode: "SESSION_EXPIRED",
     });
   });
 
@@ -61,6 +94,8 @@ describe("ChariPay expired checkout reconciliation", () => {
     await expect(new ChariPayProvider().closePaymentSession("ps_ambiguous", "req-ambiguous")).resolves.toMatchObject({
       state: "unknown",
       providerStatus: code,
+      httpStatus: status,
+      providerCode: code,
     });
   });
 

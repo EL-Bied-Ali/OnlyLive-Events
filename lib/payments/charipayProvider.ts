@@ -615,9 +615,28 @@ export class ChariPayProvider implements PaymentProvider {
 
     // The endpoint contract is explicit: a successful cancel makes the session
     // non-payable. The response body is informational and is deliberately not
-    // trusted to widen this authorization to release inventory.
+    // trusted to widen this authorization to release inventory — only the
+    // diagnostic fields below (never `state`) reflect what it actually said.
     if (response.ok) {
-      return { state: "non_payable", providerStatus: "CANCELLED", correlationId };
+      // Best-effort only: a malformed/empty body on an already-successful
+      // (2xx) cancel must never turn a definitive success into an ambiguous
+      // failure — this is diagnostic pinning of ChariPay's real sandbox
+      // response shape (see TASKS.md's ChariPay acceptance #14 writeup), not
+      // a new source of authorization.
+      let observedStatus: string | undefined;
+      try {
+        const successBody = await readJsonResponse(response);
+        if (typeof successBody.status === "string") observedStatus = successBody.status;
+      } catch {
+        // Ignore: absence of a parseable body tells us nothing new and must
+        // not affect the outcome.
+      }
+      return {
+        state: "non_payable",
+        providerStatus: observedStatus ?? "CANCELLED",
+        correlationId,
+        httpStatus: response.status,
+      };
     }
 
     let body: Record<string, unknown>;
@@ -634,7 +653,7 @@ export class ChariPayProvider implements PaymentProvider {
     // guess which one. 404 can also indicate environment/key drift. Both remain
     // fail-closed until a signed webhook or human reconciliation resolves them.
     if (response.status === 410 && code === "SESSION_EXPIRED") {
-      return { state: "non_payable", providerStatus: code, correlationId };
+      return { state: "non_payable", providerStatus: code, correlationId, httpStatus: response.status, providerCode: code };
     }
     if (
       (response.status === 409 && (code === "SESSION_ALREADY_CONSUMED" || code === "SESSION_NOT_ACTIVE"))
@@ -645,6 +664,8 @@ export class ChariPayProvider implements PaymentProvider {
         providerStatus: code,
         correlationId,
         retryAfterMs: parseRetryAfterMs(response.headers.get("retry-after")),
+        httpStatus: response.status,
+        providerCode: code,
       };
     }
 
@@ -656,6 +677,7 @@ export class ChariPayProvider implements PaymentProvider {
       response.status,
       parseRetryAfterMs(response.headers.get("retry-after")),
       correlationId,
+      code,
     );
   }
 }

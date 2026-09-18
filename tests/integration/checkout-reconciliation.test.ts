@@ -143,6 +143,81 @@ describe("expired hosted checkout reconciliation", () => {
     expect(attention).not.toBeNull();
   });
 
+  it("persists ChariPay's diagnostic cancel-response fields without letting them authorize release", async () => {
+    const fixture = await setupExpiredCheckout();
+    configureChariPayReconciliation();
+    await prisma.payment.update({ where: { id: fixture.payment.id }, data: { provider: "charipay" } });
+
+    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({ status: "not_found" });
+    vi.spyOn(ChariPayProvider.prototype, "closePaymentSession").mockResolvedValue({
+      state: "unknown",
+      providerStatus: "SESSION_NOT_ACTIVE",
+      correlationId: "corr-diagnostic",
+      httpStatus: 409,
+      providerCode: "SESSION_NOT_ACTIVE",
+    });
+
+    await reconcileExpiredCheckouts(1);
+
+    const [reservation, inventory, attention] = await Promise.all([
+      prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),
+      prisma.inventory.findUniqueOrThrow({ where: { ticketCategoryId: fixture.category.id } }),
+      prisma.auditLog.findFirst({
+        where: {
+          action: "payment.checkout_reconciliation_required",
+          entityType: "Payment",
+          entityId: fixture.payment.id,
+        },
+      }),
+    ]);
+    // The diagnostic fields (httpStatus/providerCode) are recorded for
+    // observability only — this ambiguous provider state must still keep
+    // inventory reserved exactly like any other "unknown" result.
+    expect(reservation.status).toBe("active");
+    expect(inventory.reservedQuantity).toBe(1);
+    expect(attention?.metadata).toMatchObject({
+      providerStatus: "SESSION_NOT_ACTIVE",
+      httpStatus: 409,
+      providerCode: "SESSION_NOT_ACTIVE",
+      correlationId: "corr-diagnostic",
+    });
+  });
+
+  it("persists ChariPay's diagnostic cancel-response fields on a confirmed non-payable close", async () => {
+    const fixture = await setupExpiredCheckout();
+    configureChariPayReconciliation();
+    await prisma.payment.update({ where: { id: fixture.payment.id }, data: { provider: "charipay" } });
+
+    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({ status: "not_found" });
+    vi.spyOn(ChariPayProvider.prototype, "closePaymentSession").mockResolvedValue({
+      state: "non_payable",
+      providerStatus: "SESSION_EXPIRED",
+      correlationId: "corr-closed",
+      httpStatus: 410,
+      providerCode: "SESSION_EXPIRED",
+    });
+
+    await reconcileExpiredCheckouts(1);
+
+    const [payment, closedAudit] = await Promise.all([
+      prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } }),
+      prisma.auditLog.findFirst({
+        where: {
+          action: "payment.expired_checkout_closed",
+          entityType: "Payment",
+          entityId: fixture.payment.id,
+        },
+      }),
+    ]);
+    expect(payment.status).toBe("cancelled");
+    expect(closedAudit?.metadata).toMatchObject({
+      providerStatus: "SESSION_EXPIRED",
+      httpStatus: 410,
+      providerCode: "SESSION_EXPIRED",
+      correlationId: "corr-closed",
+    });
+  });
+
   it("leases provider work so a concurrent worker cannot close the same checkout twice", async () => {
     const fixture = await setupExpiredCheckout();
     let resolveClose!: (value: { state: "unknown"; providerStatus: string }) => void;

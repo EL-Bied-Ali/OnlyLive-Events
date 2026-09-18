@@ -116,6 +116,10 @@ export interface ClosePaymentSessionResult {
   providerStatus?: string;
   correlationId?: string;
   retryAfterMs?: number;
+  /** Diagnostic-only: the provider's raw HTTP status for this cancel call. Never changes `state`. */
+  httpStatus?: number;
+  /** Diagnostic-only: ChariPay's own short machine error code, when the response carried one. Never changes `state`. */
+  providerCode?: string;
 }
 
 export class ProviderInputError extends Error {

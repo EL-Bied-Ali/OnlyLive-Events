@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { getPaymentProviderByName } from "@/lib/payments";
-import { ProviderRequestError, type PaymentStatusLookupResult } from "@/lib/payments/provider";
+import { ProviderRequestError, type ClosePaymentSessionResult, type PaymentStatusLookupResult } from "@/lib/payments/provider";
 import { confirmOrderPayment, failOrderPayment } from "@/lib/orders/fulfillment";
 import {
   enqueueOrderConfirmationEmail,
@@ -233,7 +233,7 @@ export async function finalizeRecoveredPayment(
  * Payment.status is already `paid` and this becomes a no-op — inventory is
  * never released underneath a captured payment.
  */
-async function finalizeClosedCheckout(candidate: CheckoutCandidate): Promise<boolean> {
+async function finalizeClosedCheckout(candidate: CheckoutCandidate, result: ClosePaymentSessionResult): Promise<boolean> {
   return prisma.$transaction(async (tx) => {
     const paymentRows = await tx.$queryRaw<{ status: string }[]>`
       SELECT status FROM payments WHERE id = ${candidate.payment_id} FOR UPDATE
@@ -260,6 +260,14 @@ async function finalizeClosedCheckout(candidate: CheckoutCandidate): Promise<boo
           orderId: candidate.order_id,
           provider: candidate.provider,
           reason: "provider_session_confirmed_non_payable",
+          // Diagnostic pinning of ChariPay's real sandbox cancel response
+          // (see TASKS.md's ChariPay acceptance #14 writeup) — never used to
+          // authorize this transition, which only runs once `result.state`
+          // is already "non_payable".
+          providerStatus: result.providerStatus ?? null,
+          httpStatus: result.httpStatus ?? null,
+          providerCode: result.providerCode ?? null,
+          correlationId: result.correlationId ?? null,
         },
       },
     });
@@ -367,7 +375,7 @@ export async function reconcileExpiredCheckouts(
       );
 
       if (result.state === "non_payable") {
-        if (await finalizeClosedCheckout(candidate)) summary.closed += 1;
+        if (await finalizeClosedCheckout(candidate, result)) summary.closed += 1;
         continue;
       }
 
@@ -375,6 +383,8 @@ export async function reconcileExpiredCheckouts(
       await recordPaymentReconciliationAttention(toReconcilablePayment(candidate), "provider_session_state_ambiguous", {
         providerStatus: result.providerStatus,
         correlationId: result.correlationId,
+        httpStatus: result.httpStatus,
+        providerCode: result.providerCode,
       });
       await deferPayment(candidate.payment_id, result.retryAfterMs);
     } catch (error) {
@@ -383,6 +393,7 @@ export async function reconcileExpiredCheckouts(
       await recordPaymentReconciliationAttention(toReconcilablePayment(candidate), "provider_reconciliation_request_failed", {
         status: providerError?.status,
         correlationId: providerError?.correlationId,
+        providerCode: providerError?.providerCode,
       });
       await deferPayment(candidate.payment_id, providerError?.retryAfterMs);
     }
