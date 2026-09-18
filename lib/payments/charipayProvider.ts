@@ -437,11 +437,25 @@ export class ChariPayProvider implements PaymentProvider {
 
     const parseOperationId = (value: string): number => {
       if (!/^\d+$/.test(value)) {
-        throw new ProviderInputError("INVALID_PROVIDER_OPERATION_ID", "ChariPay operationId must be a positive integer");
+        throw new ProviderRequestError(
+          "ChariPay returned an invalid operationId before refund submission",
+          false,
+          undefined,
+          undefined,
+          undefined,
+          "INVALID_PROVIDER_OPERATION_ID",
+        );
       }
       const parsed = Number(value);
       if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-        throw new ProviderInputError("INVALID_PROVIDER_OPERATION_ID", "ChariPay operationId is outside the supported integer range");
+        throw new ProviderRequestError(
+          "ChariPay operationId is outside the supported integer range",
+          false,
+          undefined,
+          undefined,
+          undefined,
+          "INVALID_PROVIDER_OPERATION_ID",
+        );
       }
       return parsed;
     };
