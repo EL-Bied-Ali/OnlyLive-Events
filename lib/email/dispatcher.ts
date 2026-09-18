@@ -214,13 +214,20 @@ async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId" | "recipie
  * multiple concurrent dispatcher invocations (e.g. overlapping cron
  * triggers) each get a disjoint batch instead of double-processing the
  * same rows or blocking on each other.
+ *
+ * `next_attempt_at` is a naive `timestamp` column, always written as a JS
+ * `Date` (true UTC digits) — both at enqueue time (`lib/email/notifications.ts`)
+ * and on every backoff reschedule below. Comparing it against a bare `now()`
+ * would implicitly cast that `timestamptz` through the session's `TimeZone`
+ * GUC, letting retried (and freshly enqueued) rows fire up to that offset
+ * early whenever the server isn't UTC.
  */
 async function claimBatch(): Promise<EmailOutbox[]> {
   const leaseCutoff = new Date(Date.now() - LEASE_TIMEOUT_MS);
   return prisma.$transaction(async (tx) => {
     const claimable = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM email_outbox
-      WHERE (status = 'pending' AND next_attempt_at <= now())
+      WHERE (status = 'pending' AND next_attempt_at <= (now() AT TIME ZONE 'UTC'))
          OR (status = 'processing' AND processing_started_at < ${leaseCutoff})
       ORDER BY next_attempt_at ASC
       LIMIT ${BATCH_SIZE}

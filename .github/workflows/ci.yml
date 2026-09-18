@@ -16,6 +16,20 @@ jobs:
           POSTGRES_USER: onlylive
           POSTGRES_PASSWORD: onlylive
           POSTGRES_DB: onlylive_ci
+          # Deliberately non-UTC: every DateTime column in this schema is a
+          # naive `timestamp` (no migration uses `timestamptz`), so any
+          # raw-SQL `now()` compared against one of those columns is
+          # silently wrong by the server's UTC offset unless explicitly cast
+          # with `AT TIME ZONE 'UTC'`. A UTC-default CI Postgres can never
+          # catch that class of bug — it was found locally against a
+          # Casablanca-timezone cluster, not CI. Asia/Kolkata rather than
+          # Africa/Casablanca as the permanent sentinel here: this only
+          # needs a reliably nonzero, DST-free offset (independent audit
+          # (GPT) flagged Casablanca's own DST history as a less certain
+          # choice for that specific job), and the larger +05:30 offset
+          # makes a regression harder to miss against short windows like the
+          # 15-minute hold or 30-second reconciliation lease.
+          TZ: Asia/Kolkata
         ports:
           - 5432:5432
         options: >-

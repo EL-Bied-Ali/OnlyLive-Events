@@ -260,9 +260,14 @@ export async function POST(request: NextRequest) {
       await tx.$queryRaw`SELECT id FROM payments WHERE id = ${paymentId} FOR UPDATE`;
 
       const newEventId = crypto.randomUUID();
+      // A JS Date parameter, not raw-SQL now() — received_at is a naive
+      // `timestamp` column; every other naive-timestamp write in this
+      // codebase uses this same true-UTC-digits convention (see
+      // TASKS.md's naive-timestamp-vs-now() writeup) rather than a
+      // server-computed value subject to the session's TimeZone GUC.
       const claimed = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO payment_events (id, payment_id, provider, external_event_id, event_type, raw_payload, signature_valid, received_at)
-        VALUES (${newEventId}, ${paymentId}, ${provider.name}, ${event.externalEventId}, ${event.type}, ${JSON.stringify(event.raw)}::jsonb, true, now())
+        VALUES (${newEventId}, ${paymentId}, ${provider.name}, ${event.externalEventId}, ${event.type}, ${JSON.stringify(event.raw)}::jsonb, true, ${new Date()})
         ON CONFLICT (provider, external_event_id) DO NOTHING
         RETURNING id
       `;

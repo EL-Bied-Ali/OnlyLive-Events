@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { createHold } from "@/lib/inventory";
@@ -52,7 +52,38 @@ function configureChariPayReconciliation() {
   vi.stubEnv("VERCEL_ENV", "preview");
 }
 
+/**
+ * claimNextExpiredCheckoutPayment() claims globally (oldest-due-first),
+ * not scoped to any one test's own fixture — and this suite's shared,
+ * non-isolated test database is never truncated between local runs. Every
+ * test here backdates its fixture's updated_at to 2001, so a leftover row
+ * from an earlier run/session can still be claimed ahead of the current
+ * test's own fixture (same created_at ordering), non-deterministically
+ * stealing reconcileExpiredCheckouts(1)'s single claim slot. Confirmed:
+ * this produced exactly this file's two ledger-reconciliation tests'
+ * symptoms (a stale FakeProvider payment silently closed instead of the
+ * current ChariPay fixture being reconciled). Push every pre-existing
+ * candidate outside the claim query's eligibility window before each test
+ * — 2999, not deleted, so this never races a concurrent test run.
+ */
+async function quarantineExistingExpiredCheckoutCandidates(): Promise<void> {
+  await prisma.$executeRaw`
+    UPDATE payments p
+    SET updated_at = TIMESTAMP '2999-01-01 00:00:00'
+    FROM orders o
+    WHERE p.order_id = o.id
+      AND o.status = 'pending_payment'
+      AND o.expires_at IS NOT NULL
+      AND o.expires_at < (now() AT TIME ZONE 'UTC')
+      AND p.status IN ('pending', 'awaiting_payment')
+  `;
+}
+
 describe("expired hosted checkout reconciliation", () => {
+  beforeEach(async () => {
+    await quarantineExistingExpiredCheckoutCandidates();
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
@@ -192,13 +223,19 @@ describe("expired hosted checkout reconciliation", () => {
 
     const result = await reconcileExpiredCheckouts(1);
 
-    expect(result).toMatchObject({ checked: 1, closed: 0, unresolved: 0, errors: 0 });
+    // Asserted before the result shape below: if the claim ever picks up a
+    // stale candidate instead of this fixture (see
+    // quarantineExistingExpiredCheckoutCandidates's doc comment), these
+    // spy assertions fail with which payment/provider actually got called,
+    // instead of just a generic { unresolved: 1 } mismatch.
+    expect(lookupSpy).toHaveBeenCalledTimes(1);
     expect(lookupSpy).toHaveBeenCalledWith({
       orderExternalId: fixture.orderId,
       amountCents: fixture.payment.amountCents,
       currency: fixture.payment.currency,
     });
     expect(closeSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ checked: 1, closed: 0, unresolved: 0, errors: 0 });
 
     const [reservation, order, payment, inventory, tickets, audit, email] = await Promise.all([
       prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),
@@ -240,7 +277,7 @@ describe("expired hosted checkout reconciliation", () => {
       data: { provider: "charipay" },
     });
 
-    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+    const lookupSpy = vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
       status: "pending",
       providerOperationId: "300",
       providerStatus: "PENDING_3DS",
@@ -249,8 +286,16 @@ describe("expired hosted checkout reconciliation", () => {
 
     const result = await reconcileExpiredCheckouts(1);
 
-    expect(result).toMatchObject({ checked: 1, closed: 0, unresolved: 1, errors: 0 });
+    // Same reasoning as the "succeeded" test above: assert which payment
+    // was actually looked up before the generic result-shape check.
+    expect(lookupSpy).toHaveBeenCalledTimes(1);
+    expect(lookupSpy).toHaveBeenCalledWith({
+      orderExternalId: fixture.orderId,
+      amountCents: fixture.payment.amountCents,
+      currency: fixture.payment.currency,
+    });
     expect(closeSpy).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ checked: 1, closed: 0, unresolved: 1, errors: 0 });
 
     const [reservation, order, payment, inventory] = await Promise.all([
       prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } }),

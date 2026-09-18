@@ -151,12 +151,22 @@ async function claimAndInitializeProvider(
       return { orderId: order.id, redirectUrl: current.redirectUrl };
     }
 
+    // provider_init_at is a naive `timestamp` column. Both the write and the
+    // compare use the DB's own clock ((now() AT TIME ZONE 'UTC')) rather than
+    // mixing it with the application clock — this claim previously used a
+    // bare `now()` on both sides (self-consistent, but fragile: see
+    // TASKS.md's naive-timestamp-vs-now() writeup) and writing a JS `Date()`
+    // for one side while comparing against Postgres's clock on the other
+    // would make the lease's effective timeout sensitive to app/DB clock
+    // skew (independent audit (GPT) flagged this) — a concurrent caller
+    // could reclaim the lease early and invoke provider.createPayment()
+    // twice for the same payment.
     const claimed = await prisma.$queryRaw<{ id: string }[]>`
       UPDATE payments
-      SET provider_init_at = now()
+      SET provider_init_at = (now() AT TIME ZONE 'UTC')
       WHERE id = ${payment.id}
         AND provider_payment_id IS NULL
-        AND (provider_init_at IS NULL OR provider_init_at < now() - (${PROVIDER_INIT_CLAIM_TIMEOUT_MS} || ' milliseconds')::interval)
+        AND (provider_init_at IS NULL OR provider_init_at < (now() AT TIME ZONE 'UTC') - (${PROVIDER_INIT_CLAIM_TIMEOUT_MS} || ' milliseconds')::interval)
       RETURNING id
     `;
 

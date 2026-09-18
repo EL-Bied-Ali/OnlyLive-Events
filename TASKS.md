@@ -487,8 +487,163 @@ running this migration — not a concern for the app's current state.
   real refund delivery is captured, the flag flips, and the final
   independent audit is complete.
 
+## Completed (naive-timestamp vs now() skew — branch fix/naive-timestamp-now-skew)
+
+Found while setting up a local test database for the first time in this
+environment (no `TEST_DATABASE_URL`/Postgres had ever been available here
+before): `npm test` failed 11 tests on a freshly `initdb`'d local Postgres
+16 cluster, all in the purchase-limit/hold-expiry/inventory-concurrency
+area — the exact tests CLAUDE.md calls out as mandatory. CI was, and still
+is as of this writing, green on the same code.
+
+Root cause: every `DateTime` column in `prisma/schema.prisma` maps to a
+Postgres `timestamp` **without** time zone (confirmed: zero
+`@db.Timestamptz` usages in the schema, and every migration emits
+`TIMESTAMP(3)`, e.g. `reservations.expires_at`). Several raw-SQL queries
+across the codebase compare or write that kind of column using bare
+`now()`, which returns `timestamptz`. Comparing/assigning a `timestamptz`
+to a naive `timestamp` implicitly casts it through the **session's
+`TimeZone` GUC** first. My local cluster's `initdb` picked up this
+machine's OS locale and defaulted to `Africa/Casablanca` (UTC+1) — CI's
+`postgres:16` container defaults to UTC, which is why this was invisible
+there. Concretely, with a naive `timestamp` value `X` written the normal
+way (a JS `Date`, via Prisma, always true UTC digits):
+- `X < now()` implicitly becomes `X < now()::timestamp`, and `now()::timestamp`
+  is the **session-timezone wall-clock** reading of the current instant —
+  1 hour ahead of true UTC here. A reservation that still has 14 minutes
+  left before its real 15-minute expiry already looked expired.
+- The inverse direction (`X >= now()`) under-counts active holds by the
+  same mechanism — this is exactly why the purchase-limit tests failed:
+  `createHold`'s per-user total query counted zero of the customer's
+  already-active holds, so the cap could never trip.
+
+Verified fixed, not just silenced: reverting each fix individually
+reproduces the original 11 failures again; `git stash`-testing confirmed
+one separately-observed failure (`checkout-reconciliation.test.ts`'s
+"leases provider work" test, a hang) reproduces identically with or
+without this fix and is a pre-existing flake unrelated to this bug —
+tracked below, not fixed here.
+
+Fixed by rewriting the bare `now()` at each vulnerable site (mixing a
+JS-Date-written column with a raw-SQL comparison/write) to
+`(now() AT TIME ZONE 'UTC')`, which is correct regardless of the server's
+configured `TimeZone`:
+- `lib/inventory.ts` — `releaseExpiredAndLock` (hold-expiry sweep inside
+  `createHold`'s critical section), the per-user purchase-limit total
+  query, and `sweepExpiredHolds`.
+- `lib/orders/checkoutReconciliation.ts` — the expired-checkout claim's
+  `expires_at`/lease checks (the lease-skew direction could have let a
+  second worker reclaim a payment before its lease truly expired — a
+  double-reconciliation risk, not just a wrong-answer one).
+- `lib/orders/refundReconciliation.ts` — the claim lease write (was
+  writing skewed values, delaying a stuck refund's next retry by the
+  server's UTC offset).
+- `lib/email/dispatcher.ts` — retried rows' `nextAttemptAt` readiness
+  check (backoff could fire early by the offset).
+- `lib/admin/catalog.ts` — both committed-quantity queries gating a
+  purchase-cap/phase-limit decrease (an admin could have lowered a cap
+  below what customers actually held).
+
+Deliberately **not** changed: `lib/orders/checkout.ts`'s
+`provider_init_at` claim writes and compares using bare `now()` on
+**both** sides consistently, so the skew cancels in the subtraction —
+confirmed by direct calculation, left as-is per "don't rewrite working
+code without reason." An independent audit (GPT) confirmed this reasoning
+is sound but flagged it as violating the codebase's own UTC-digits
+invariant (fragile, not incorrect today) — tracked below, not fixed here.
+
+Durable regression guard: `.github/workflows/ci.yml`'s Postgres service
+now sets a deliberately non-UTC `TZ` instead of the image's UTC default,
+so CI's existing test suite — not a new, narrower unit test — continues to
+exercise this exact scenario for any future code, not just today's fixed
+sites. Initially set to `Africa/Casablanca`; the same audit pointed out
+this only needs a reliably nonzero, DST-free offset and Morocco's own DST
+history makes it a less certain permanent choice for that specific job, so
+switched to `Asia/Kolkata` (fixed +05:30, no DST) — also a bigger offset,
+making a regression harder to miss against short windows like the
+15-minute hold or 30-second reconciliation lease. `tests/setup.ts` now
+also asserts (CI only, via `CI=true`; never enforced on a contributor's
+own local database) that `current_setting('TimeZone')` is genuinely
+non-UTC, so this guard cannot silently regress to UTC without a test
+failure — an independent audit (GPT) suggested this after noting the
+protection itself needs its own regression guard. (A lower-level
+standalone regression test was attempted and discarded: it used `pg` to
+bind a raw SQL parameter directly, which is cast differently than how
+Prisma actually serializes a `DateTime` write, so it didn't faithfully
+reproduce the real code path and would have given misleading signal.)
+
+**Independent audit (GPT) of this fix caught one more real bug it
+introduced**: fixing `lib/email/dispatcher.ts`'s claim query to
+`next_attempt_at <= (now() AT TIME ZONE 'UTC')` is correct for *retried*
+rows (rescheduled from JS, true UTC) but newly *enqueued* rows relied on
+the schema's `@default(now())` — `CURRENT_TIMESTAMP`, evaluated
+server-side and subject to the exact same skew. Left as a bare comparison
+fix alone, a brand-new email on a positive-offset server would look
+scheduled up to that offset **in the future**, delaying its first dispatch
+attempt. Fixed: `lib/email/notifications.ts`'s `enqueue()` and
+`enqueueReconciliationAlertEmail()` now pass `nextAttemptAt: new Date()`
+explicitly at insert time (both `emailOutbox.createMany` call sites),
+matching the retry path's convention instead of relying on the DB default.
+
+Typecheck, lint and the full Vitest suite (including
+`tests/integration/notifications.test.ts`) verified locally against the
+non-UTC cluster (301/301 excluding the pre-existing flake below).
+
+**Follow-ups from the same audit, since fixed** (both were lower severity
+and didn't block the P1 fix, but were quick and low-risk once identified):
+- `app/api/payments/webhook/charipay/route.ts` and
+  `app/api/payments/webhook/fake/route.ts` both wrote
+  `payment_events.received_at` using bare `now()` — an audit-log
+  timestamp-accuracy skew, not a business-logic bug (nothing compares
+  `received_at` against another value), but inconsistent with the
+  UTC-digits convention everywhere else. Now pass an explicit JS `Date`
+  parameter, like every other naive-timestamp write in the codebase.
+- `lib/orders/checkout.ts`'s `provider_init_at` claim (self-consistent
+  before, not actually broken — see above) now writes via JS `Date` and
+  compares via `(now() AT TIME ZONE 'UTC')`, so the invariant "naive
+  timestamps here are always UTC digits" is actually true rather than
+  true-by-coincidence. Full Vitest suite re-verified after both changes
+  (301/301 excluding the pre-existing flake below).
+
+**Still not fixed, deliberately deferred**:
+- Longer-term: seriously consider migrating instant-like columns
+  (`expires_at`, `updated_at`, `next_attempt_at`, etc.) to
+  `@db.Timestamptz(3)`, which would make this entire bug class impossible
+  by construction instead of relying on every raw-SQL site remembering
+  `AT TIME ZONE 'UTC'`. Any such migration needs an explicit
+  UTC-preserving `USING ... AT TIME ZONE 'UTC'` for existing data, not
+  Postgres's session-dependent default conversion — a real migration to
+  plan deliberately, not a quick follow-up.
+
 ## Next
 
+0. **Resolved, was never a code bug**: an earlier draft of this file
+   reported `checkout-reconciliation.test.ts`'s "leases provider work"
+   test hanging/misbehaving non-deterministically and speculated about a
+   `@prisma/adapter-pg` connection-pool issue. Actual root cause, found
+   while resyncing this branch with the real remote history and running
+   the full suite for the first time against it: `reconcileExpiredCheckouts`
+   claims its batch (`claimNextExpiredCheckoutPayment`, batch size 1,
+   oldest-due-first) from the **whole** `orders`/`payments` table, not
+   scoped to any one test's own fixture. A local dev Postgres instance that
+   is never truncated between runs accumulates a large backlog of
+   already-expired "checkout" rows from previous test runs (121 found here
+   after a full day of testing) — enough of them satisfy the claim query
+   that a `reconcileExpiredCheckouts(1)` call in a later test can claim a
+   **stale row from an earlier run** instead of the fixture the current
+   test just created, producing exactly the "sometimes right, sometimes
+   wrong, order-dependent" symptom observed (confirmed: `TRUNCATE`ing the
+   transactional tables in the local test database made every run — full
+   suite and isolated — pass consistently, including two other
+   ledger-reconciliation tests that briefly looked broken while this was
+   diagnosed). Not a codebase defect; a local test-environment hygiene gap
+   (this repo's own test database is otherwise treated as ephemeral/CI-only
+   and normally never accumulates a real backlog). No code change made.
+   Worth a follow-up at some point: either `claimNextExpiredCheckoutPayment`
+   could scope more defensively, or (simpler) local dev docs should note
+   that a long-lived local Postgres for this suite should be truncated
+   periodically — genuinely low priority, since CI's disposable database
+   never has this problem.
 1. Finish validating PR #13 against the real ChariPay sandbox account: the
    webhook endpoint is registered, a synthetic event was captured, and a
    real successful hosted checkout's `payment.succeeded` webhook is now
