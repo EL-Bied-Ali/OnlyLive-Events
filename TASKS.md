@@ -548,21 +548,67 @@ Deliberately **not** changed: `lib/orders/checkout.ts`'s
 `provider_init_at` claim writes and compares using bare `now()` on
 **both** sides consistently, so the skew cancels in the subtraction —
 confirmed by direct calculation, left as-is per "don't rewrite working
-code without reason."
+code without reason." An independent audit (GPT) confirmed this reasoning
+is sound but flagged it as violating the codebase's own UTC-digits
+invariant (fragile, not incorrect today) — tracked below, not fixed here.
 
 Durable regression guard: `.github/workflows/ci.yml`'s Postgres service
-now sets `TZ: Africa/Casablanca` (matching OnlyLive's own locale) instead
-of the image's UTC default, so CI's existing test suite — not a new,
-narrower unit test — continues to exercise this exact scenario for any
-future code, not just today's fixed sites. (A lower-level standalone
-regression test was attempted and discarded: it used `pg` to bind a raw
-SQL parameter directly, which is cast differently than how Prisma actually
-serializes a `DateTime` write, so it didn't faithfully reproduce the real
-code path and would have given misleading signal.)
+now sets a deliberately non-UTC `TZ` instead of the image's UTC default,
+so CI's existing test suite — not a new, narrower unit test — continues to
+exercise this exact scenario for any future code, not just today's fixed
+sites. Initially set to `Africa/Casablanca`; the same audit pointed out
+this only needs a reliably nonzero, DST-free offset and Morocco's own DST
+history makes it a less certain permanent choice for that specific job, so
+switched to `Asia/Kolkata` (fixed +05:30, no DST) — also a bigger offset,
+making a regression harder to miss against short windows like the
+15-minute hold or 30-second reconciliation lease. `tests/setup.ts` now
+also asserts (CI only, via `CI=true`; never enforced on a contributor's
+own local database) that `current_setting('TimeZone')` is genuinely
+non-UTC, so this guard cannot silently regress to UTC without a test
+failure — an independent audit (GPT) suggested this after noting the
+protection itself needs its own regression guard. (A lower-level
+standalone regression test was attempted and discarded: it used `pg` to
+bind a raw SQL parameter directly, which is cast differently than how
+Prisma actually serializes a `DateTime` write, so it didn't faithfully
+reproduce the real code path and would have given misleading signal.)
 
-Typecheck, lint and the full Vitest suite verified locally against the
-Casablanca-timezone cluster (301/301 excluding the pre-existing flake
-below).
+**Independent audit (GPT) of this fix caught one more real bug it
+introduced**: fixing `lib/email/dispatcher.ts`'s claim query to
+`next_attempt_at <= (now() AT TIME ZONE 'UTC')` is correct for *retried*
+rows (rescheduled from JS, true UTC) but newly *enqueued* rows relied on
+the schema's `@default(now())` — `CURRENT_TIMESTAMP`, evaluated
+server-side and subject to the exact same skew. Left as a bare comparison
+fix alone, a brand-new email on a positive-offset server would look
+scheduled up to that offset **in the future**, delaying its first dispatch
+attempt. Fixed: `lib/email/notifications.ts`'s `enqueue()` and
+`enqueueReconciliationAlertEmail()` now pass `nextAttemptAt: new Date()`
+explicitly at insert time (both `emailOutbox.createMany` call sites),
+matching the retry path's convention instead of relying on the DB default.
+
+Typecheck, lint and the full Vitest suite (including
+`tests/integration/notifications.test.ts`) verified locally against the
+non-UTC cluster (301/301 excluding the pre-existing flake below).
+
+**Follow-ups from the same audit, not fixed here** (lower severity, don't
+block this fix):
+- `app/api/payments/webhook/charipay/route.ts` and
+  `app/api/payments/webhook/fake/route.ts` both write
+  `payment_events.received_at` using bare `now()` — an audit-log
+  timestamp-accuracy skew, not a business-logic bug (nothing currently
+  compares `received_at` against another value), but inconsistent with the
+  UTC-digits convention everywhere else.
+- `lib/orders/checkout.ts`'s `provider_init_at` (see above) should
+  eventually be normalized to the same convention even though it isn't
+  currently broken, so the invariant "naive timestamps here are always UTC
+  digits" becomes actually true rather than true-by-coincidence.
+- Longer-term: seriously consider migrating instant-like columns
+  (`expires_at`, `updated_at`, `next_attempt_at`, etc.) to
+  `@db.Timestamptz(3)`, which would make this entire bug class impossible
+  by construction instead of relying on every raw-SQL site remembering
+  `AT TIME ZONE 'UTC'`. Any such migration needs an explicit
+  UTC-preserving `USING ... AT TIME ZONE 'UTC'` for existing data, not
+  Postgres's session-dependent default conversion — a real migration to
+  plan deliberately, not a quick follow-up.
 
 ## Next
 
