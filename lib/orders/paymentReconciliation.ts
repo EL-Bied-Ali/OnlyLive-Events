@@ -1,7 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
 import { getPaymentProviderByName } from "@/lib/payments";
-import { ProviderRequestError } from "@/lib/payments/provider";
 import {
   finalizeRecoveredPayment,
   recordPaymentReconciliationAttention,
@@ -109,29 +108,27 @@ export async function reconcileOrderPaymentOnDemand(orderId: string): Promise<Or
       return { status: fresh.status, reconciled: finalized };
     }
 
-    if (lookup.status === "pending" || lookup.status === "ambiguous") {
-      await recordPaymentReconciliationAttention(
-        reconcilable,
-        lookup.status === "pending"
-          ? "provider_transaction_still_pending"
-          : "provider_transaction_lookup_ambiguous",
-        { providerStatus: lookup.providerStatus, providerOperationId: lookup.providerOperationId },
-      );
-    }
-
     // pending / ambiguous / failed / cancelled / not_found: none of these are
-    // enough on their own to touch inventory or the payment session. Expiry
-    // and cancellation remain exclusively reconcileExpiredCheckouts's job,
-    // gated on the provider's explicit closePaymentSession proof.
+    // enough on their own to touch inventory or the payment session, and none
+    // of them are admin-actionable on their own either. A payment sitting in
+    // PENDING_3DS (or a single transient lookup hiccup) 5-30 seconds into an
+    // active checkout is completely normal for this fast, frequent polling
+    // path — recording it here would consume the shared, dedup-by-payment
+    // "payment.checkout_reconciliation_required" audit slot (see
+    // recordPaymentReconciliationAttention) and could silently suppress a
+    // later, genuinely important reason (e.g. a confirmed success this same
+    // function could not locally finalize, below). Only the
+    // expired-checkout batch worker — which only ever looks at a payment
+    // whose local deadline has actually passed — records these routine
+    // ledger states; a poll arriving while the checkout is still fresh
+    // never should. Expiry and cancellation stay exclusively that worker's
+    // job, gated on the provider's explicit closePaymentSession proof.
     return { status: order.status, reconciled: false };
-  } catch (error) {
-    const providerError = error instanceof ProviderRequestError ? error : null;
-    await recordPaymentReconciliationAttention(reconcilable, "provider_transaction_lookup_failed", {
-      status: providerError?.status,
-      correlationId: providerError?.correlationId,
-    });
-    // Provider lookup failure/timeout: fail closed. The customer must not
-    // lose their reservation merely because this check failed.
+  } catch {
+    // Provider lookup failure/timeout: fail closed and stay quiet. The
+    // customer must not lose their reservation merely because this check
+    // failed, and a single transient error during active polling is not an
+    // admin-actionable event — see the comment above.
     return { status: order.status, reconciled: false };
   }
 }

@@ -39,6 +39,18 @@ interface Props {
  * `status` flows down from the Server Component's live DB read, so once the
  * order becomes `paid` (or any other terminal state) the next render simply
  * omits this component.
+ *
+ * ChariPay's own provider request timeout (12s) is longer than the 5s poll
+ * interval, so a slow ledger response could otherwise overlap with the next
+ * tick's request. The server-side rate limit (lib/rateLimit.ts, 1/4s per
+ * order) is abuse protection against a client ignoring this interval
+ * entirely or several tabs open on the same order — it is not meant to be
+ * the thing preventing this one browser instance's own normal overlap, so
+ * an in-flight guard here keeps at most one reconcile-payment request
+ * outstanding at a time. An AbortController tied to this effect's own
+ * cleanup makes sure a request still in flight when the component moves on
+ * (status became terminal, or the order id changed) can never act on a
+ * response that arrives afterward.
  */
 export function OrderStatusAutoRefresh({ orderId, status }: Props) {
   const router = useRouter();
@@ -53,6 +65,8 @@ export function OrderStatusAutoRefresh({ orderId, status }: Props) {
     if (!active) return;
     attempts.current = 0;
     startedAt.current = Date.now();
+    const controller = new AbortController();
+    let reconcileInFlight = false;
 
     const tick = async () => {
       attempts.current += 1;
@@ -60,28 +74,39 @@ export function OrderStatusAutoRefresh({ orderId, status }: Props) {
         setDelayed(true);
       }
 
-      if (reconcilable) {
+      if (reconcilable && !reconcileInFlight) {
+        reconcileInFlight = true;
         try {
-          const response = await fetch(`/api/orders/${orderId}/reconcile-payment`, { method: "POST" });
+          const response = await fetch(`/api/orders/${orderId}/reconcile-payment`, {
+            method: "POST",
+            signal: controller.signal,
+          });
           if (response.ok) {
             const body = (await response.json()) as { reconciled?: boolean };
-            if (body.reconciled) {
+            if (body.reconciled && !controller.signal.aborted) {
               router.refresh();
               return;
             }
           }
         } catch {
-          // Network hiccup on a polling request — fail closed and keep
-          // polling on the normal schedule rather than surfacing an error.
+          // Network hiccup, timeout, or this effect's own cleanup aborting
+          // the request — fail closed and keep polling on the normal
+          // schedule rather than surfacing an error.
+        } finally {
+          reconcileInFlight = false;
         }
       }
 
+      if (controller.signal.aborted) return;
       router.refresh();
       if (attempts.current >= MAX_REFRESHES) window.clearInterval(interval);
     };
 
     const interval = window.setInterval(tick, REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(interval);
+    return () => {
+      window.clearInterval(interval);
+      controller.abort();
+    };
   }, [active, reconcilable, orderId, router]);
 
   if (!reconcilable) return null;
@@ -90,7 +115,7 @@ export function OrderStatusAutoRefresh({ orderId, status }: Props) {
     <p style={{ margin: "0 0 24px", opacity: 0.85 }}>
       {delayed
         ? "La vérification du paiement prend plus de temps que prévu. Ne relancez pas le paiement."
-        : "Paiement effectué — confirmation en cours."}
+        : "Confirmation du paiement en cours."}
     </p>
   );
 }

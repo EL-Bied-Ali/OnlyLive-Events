@@ -8,6 +8,16 @@ import { reconcileOrderPaymentOnDemand } from "@/lib/orders/paymentReconciliatio
 import { POST as chariWebhookPost } from "@/app/api/payments/webhook/charipay/route";
 import { createOrderAwaitingPayment } from "../helpers/fixtures";
 
+// Only finalizeRecoveredPayment is ever overridden (and only in one test
+// below, to force its "cannot safely finalize from here" branch on demand
+// without faking a real concurrent state change) — every other export,
+// including recordPaymentReconciliationAttention itself, keeps its real
+// implementation so the dedup/audit behavior under test is genuine.
+vi.mock("@/lib/orders/checkoutReconciliation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/orders/checkoutReconciliation")>();
+  return { ...actual, finalizeRecoveredPayment: vi.fn(actual.finalizeRecoveredPayment) };
+});
+
 const WEBHOOK_SECRET = "order-reconcile-on-demand-webhook-secret";
 
 function enableChariPay() {
@@ -154,6 +164,55 @@ describe("reconcileOrderPaymentOnDemand", () => {
 
     await expect(prisma.reservation.findUniqueOrThrow({ where: { id: fixture.reservationId } })).resolves.toMatchObject({ status: "active" });
     await expect(prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } })).resolves.toMatchObject({ status: "pending_payment" });
+  });
+
+  it("never records reconciliation-required audit noise for routine pending/error polls, and never lets those suppress a later serious reason", async () => {
+    const fixture = await createChariPendingOrder();
+    enableChariPay();
+    const lookup = vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus");
+    const auditFilter = {
+      action: "payment.checkout_reconciliation_required",
+      entityType: "Payment",
+      entityId: fixture.payment.id,
+    } as const;
+
+    // A payment sitting in PENDING_3DS seconds into an active checkout is
+    // completely normal for this fast polling path — must not consume the
+    // shared, dedup-by-payment audit slot.
+    lookup.mockResolvedValueOnce({ status: "pending", providerOperationId: "op-pending", providerStatus: "PENDING_3DS" });
+    await reconcileOrderPaymentOnDemand(fixture.order.id);
+    expect(await prisma.auditLog.count({ where: auditFilter })).toBe(0);
+
+    // An ambiguous ledger match during active polling is likewise routine
+    // fail-closed behavior, not an admin-actionable event on its own.
+    lookup.mockResolvedValueOnce({ status: "ambiguous", providerStatus: "MULTIPLE_EXACT_MATCHES" });
+    await reconcileOrderPaymentOnDemand(fixture.order.id);
+    expect(await prisma.auditLog.count({ where: auditFilter })).toBe(0);
+
+    // A single transient provider error/timeout during active polling is
+    // also routine — the customer must not lose their reservation over it,
+    // and it must not be recorded as if it were a stuck/expired checkout.
+    lookup.mockRejectedValueOnce(new ProviderRequestError("request timed out", true, undefined, undefined, "corr-timeout"));
+    await reconcileOrderPaymentOnDemand(fixture.order.id);
+    expect(await prisma.auditLog.count({ where: auditFilter })).toBe(0);
+
+    // Now the genuinely serious case: the ledger reports SUCCESS but the
+    // payment cannot be safely finalized from here (finalizeRecoveredPayment
+    // is forced to report this once, standing in for the real underlying
+    // condition — e.g. the reservation/order having moved in a way that
+    // makes local fulfillment unsafe — without needing to fabricate that
+    // exact concurrent scenario). This IS admin-actionable and must be
+    // recorded, proving the routine polls above never silently claimed the
+    // one audit slot this serious condition needed.
+    lookup.mockResolvedValueOnce({ status: "succeeded", providerOperationId: "op-ambiguous", providerStatus: "SUCCESS" });
+    const { finalizeRecoveredPayment } = await import("@/lib/orders/checkoutReconciliation");
+    vi.mocked(finalizeRecoveredPayment).mockResolvedValueOnce(false);
+
+    const result = await reconcileOrderPaymentOnDemand(fixture.order.id);
+    expect(result.reconciled).toBe(false);
+    expect(await prisma.auditLog.count({ where: auditFilter })).toBe(1);
+    const [row] = await prisma.auditLog.findMany({ where: auditFilter });
+    expect(row!.metadata).toMatchObject({ reason: "customer_triggered_transaction_success_local_state_ambiguous" });
   });
 
   it("is a harmless no-op on an already-paid order and never calls the provider again", async () => {
