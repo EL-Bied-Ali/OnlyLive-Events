@@ -263,7 +263,11 @@ TASKS.md, tests.json
    renders accented names correctly. The export uses deterministic
    `(createdAt DESC, id DESC)` keyset pagination in 1,000-row batches and
    streams rows as they are fetched, removing the previous silent 20,000-row
-   truncation without buffering the entire export in memory.
+   truncation without buffering the entire export in memory. Because batches
+   are separate database reads, a status-filtered export is a live operational
+   view rather than a repeatable-read accounting snapshot: an order whose
+   status changes while a long export is running may reflect that transition
+   according to which batch observes it.
 
 ## Request/data flow: transactional email (durable outbox)
 
