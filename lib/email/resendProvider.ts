@@ -11,7 +11,7 @@ function requiredEnv(name: "RESEND_API_KEY" | "RESEND_FROM_EMAIL"): string {
 
 function resendFromEmail(): string {
   const value = requiredEnv("RESEND_FROM_EMAIL");
-  if (/[\\r\\n]/.test(value) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+  if (/[\r\n]/.test(value) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
     throw new Error("RESEND_FROM_EMAIL must be a plain email address");
   }
   return value;
