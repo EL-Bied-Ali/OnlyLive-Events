@@ -38,4 +38,9 @@ if (process.env.CI === "true") {
         `regressions; a UTC session would silently hide them again.`,
     );
   }
+  // lib/db's lazy singleton caches its client on globalThis so it survives
+  // vi.resetModules() within a file — left in place, it would leak into
+  // tests/unit/db.test.ts, which resets modules and deletes DATABASE_URL to
+  // assert the client only throws once DATABASE_URL is genuinely absent.
+  delete (globalThis as { __prisma?: unknown }).__prisma;
 }
