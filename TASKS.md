@@ -423,6 +423,17 @@ running this migration — not a concern for the app's current state.
   any database credential that was pasted in plaintext during
   troubleshooting.
 
+## Completed (unbounded orders CSV export)
+
+- Admin order export now keyset-paginates in deterministic
+  `(createdAt DESC, id DESC)` order and streams 1,000-row batches instead of
+  silently truncating at 20,000 rows.
+- CSV escaping/formula-injection protection and UTF-8 BOM behavior are shared
+  between the streaming route and the existing in-memory formatter.
+- Regression coverage forces several orders to the exact same `createdAt`
+  value and crosses multiple tiny batch boundaries to prove no duplicate or
+  dropped rows at the tie boundary.
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
@@ -685,10 +696,9 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
    requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
-5. Paginate the orders CSV export beyond its current most-recent-20,000 cap.
-6. Stage Vercel WAF rate-limit rules in log mode before production, observe
+5. Stage Vercel WAF rate-limit rules in log mode before production, observe
    real traffic, then tune/enforce without replacing account-level limiting.
-7. Before production rollout, smoke-test admin login/logout, catalogue
+6. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
 
 ## Blocked
