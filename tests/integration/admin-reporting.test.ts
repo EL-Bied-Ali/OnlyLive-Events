@@ -130,7 +130,12 @@ describe("admin orders CSV export data", () => {
     // For equal createdAt values, the secondary id DESC ordering is the
     // deterministic order promised by the export query.
     const relative = seenIds.filter((id) => orderIds.includes(id));
-    expect(relative).toEqual([...orderIds].sort().reverse());
+    const expected = await prisma.order.findMany({
+      where: { id: { in: orderIds } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { id: true },
+    });
+    expect(relative).toEqual(expected.map((row) => row.id));
   });
 
   it("rejects an invalid internal batch size instead of issuing a malformed pagination query", async () => {
