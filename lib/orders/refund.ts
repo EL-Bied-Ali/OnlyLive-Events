@@ -24,7 +24,6 @@ interface PreparedRefund {
   refundId: string;
   paymentId: string;
   paymentExternalId: string;
-  orderId: string;
   providerPaymentId: string;
   provider: string;
   amountCents: number;
@@ -131,7 +130,6 @@ async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund
       refundId: refund.id,
       paymentId: payment.id,
       paymentExternalId: payment.id,
-      orderId: payment.order_id,
       providerPaymentId: payment.provider_payment_id,
       provider: payment.provider,
       amountCents: input.amountCents,
@@ -304,13 +302,18 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
     result = await provider.refund({
       providerPaymentId: prepared.providerPaymentId,
       paymentExternalId: prepared.paymentExternalId,
-      orderId: prepared.orderId,
       amountCents: prepared.amountCents,
       currency: prepared.currency,
       reason: prepared.reason,
       idempotencyKey: prepared.refundId,
     });
   } catch (error) {
+    // providerCode/message are the provider's own short machine code and
+    // description (e.g. "BAD_REQUEST: original payment not found") — safe to
+    // log/audit (never card data), and previously missing entirely from the
+    // definitive-rejection path below, which left no queryable record of why
+    // a real sandbox refund attempt was rejected (see TASKS.md's ChariPay
+    // acceptance #8 writeup).
     console.error(
       "provider.refund submission failed",
       error instanceof ProviderRequestError
@@ -320,6 +323,8 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
             outcomeUnknown: error.outcomeUnknown,
             retryAfterMs: error.retryAfterMs,
             correlationId: error.correlationId,
+            providerCode: error.providerCode,
+            message: error.message,
           }
         : { name: "unknown" },
     );
@@ -329,6 +334,20 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
       (error instanceof ProviderRequestError && !error.outcomeUnknown);
 
     if (definitiveRejection) {
+      await prisma.auditLog.create({
+        data: {
+          actorType: "system",
+          action: "refund.provider_rejected",
+          entityType: "refund",
+          entityId: prepared.refundId,
+          metadata: {
+            provider: provider.name,
+            providerStatus: error instanceof ProviderRequestError ? error.status : null,
+            providerCode: error instanceof ProviderRequestError ? error.providerCode ?? null : null,
+            correlationId: error instanceof ProviderRequestError ? error.correlationId ?? null : null,
+          },
+        },
+      });
       await finalizeRefundFailure(prepared.refundId);
       throw new ApiError(502, "PROVIDER_REFUND_FAILED", "The payment provider rejected the refund");
     }

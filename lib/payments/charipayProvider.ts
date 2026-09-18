@@ -233,6 +233,7 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
       response.status,
       parseRetryAfterMs(response.headers.get("retry-after")),
       correlationId,
+      code,
     );
   }
   return body;
@@ -442,16 +443,21 @@ export class ChariPayProvider implements PaymentProvider {
         "X-Request-Id": input.idempotencyKey,
       },
       body: JSON.stringify({
-        // externalId here must reference the ORIGINAL PAYMENT the way
-        // ChariPay itself identifies it — confirmed (both from the real
-        // captured payment.succeeded webhook and from GET /v1/transactions'
-        // externalReference) to be the OnlyLive Order id, not the Payment
-        // id, despite createPayment() itself sending `externalId:
-        // paymentId` at session-creation time. A real sandbox exercise of
-        // this refund() call with the Payment id produced a definitive
-        // HTTP 400 from ChariPay; see TASKS.md's ChariPay acceptance #8
-        // writeup.
-        externalId: input.orderId,
+        // externalId here is the same value passed as `externalId` when
+        // creating the payment session (input.paymentId there) — ChariPay's
+        // refund docs say to identify the original payment by operationId or
+        // "your externalId", i.e. the client-supplied session field, which
+        // is distinct from ChariPay's own orderId/externalReference concept.
+        // A real sandbox exercise of this refund() call using this same
+        // Payment id produced a definitive HTTP 400; an earlier version of
+        // this fix swapped to the Order id on the theory that the webhook's
+        // observed ExternalId/externalReference (which does echo the Order
+        // id) was the same field — independent audit (GPT) found ChariPay's
+        // own docs distinguish those as separate fields and that swap was
+        // unproven, so it was reverted here pending the real provider error
+        // code (see providerCode on ProviderRequestError, and TASKS.md's
+        // ChariPay acceptance #8 writeup for the full diagnosis history).
+        externalId: input.paymentExternalId,
         refundReference: input.idempotencyKey,
         refundAmount: centsToMad(input.amountCents),
         reason: input.reason,

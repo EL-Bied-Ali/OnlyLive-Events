@@ -74,8 +74,6 @@ export interface ParsedWebhookEvent {
 export interface RefundInput {
   providerPaymentId: string;
   paymentExternalId: string;
-  /** Stable OnlyLive Order id; real providers may need this rather than paymentExternalId to reference the original transaction. */
-  orderId: string;
   amountCents: number;
   currency: string;
   reason: string;
@@ -147,6 +145,8 @@ export class ProviderRequestError extends Error {
     public readonly retryAfterMs?: number,
     /** Provider correlation/request id for support diagnostics; never a secret. */
     public readonly correlationId?: string,
+    /** Provider's own short machine error code (e.g. "BAD_REQUEST"), when parseable. Never a secret. */
+    public readonly providerCode?: string,
   ) {
     super(message);
     this.name = "ProviderRequestError";
