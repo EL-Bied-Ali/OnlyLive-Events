@@ -1,4 +1,4 @@
-import type { EmailProvider, SendEmailInput, SendEmailResult } from "@/lib/email/provider";
+import { EmailProviderError, type EmailProvider, type SendEmailInput, type SendEmailResult } from "@/lib/email/provider";
 
 const RESEND_API_URL = "https://api.resend.com/emails";
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -24,23 +24,6 @@ function safeProviderCode(body: unknown): string | undefined {
   return typeof value === "string" && /^[a-z0-9_]{1,64}$/i.test(value) ? value : undefined;
 }
 
-/**
- * Provider-level error classification lets the durable outbox avoid retrying
- * permanent request/configuration failures while still retrying network,
- * throttling and server failures. The message/code are deliberately bounded
- * and never contain the provider's raw response body or recipient content.
- */
-export class ResendEmailProviderError extends Error {
-  constructor(
-    public readonly retryable: boolean,
-    public readonly status?: number,
-    public readonly providerCode?: string,
-  ) {
-    super(providerCode ? `resend_${providerCode}` : status ? `resend_http_${status}` : "resend_request_failed");
-    this.name = "ResendEmailProviderError";
-  }
-}
-
 export class ResendEmailProvider implements EmailProvider {
   readonly name = "resend";
 
@@ -53,7 +36,7 @@ export class ResendEmailProvider implements EmailProvider {
 
   async send(input: SendEmailInput): Promise<SendEmailResult> {
     if (!input.idempotencyKey || input.idempotencyKey.length > 256) {
-      throw new ResendEmailProviderError(false, 400, "invalid_idempotency_key");
+      throw new EmailProviderError("resend_invalid_idempotency_key", false, 400, "invalid_idempotency_key");
     }
 
     const controller = new AbortController();
@@ -77,7 +60,7 @@ export class ResendEmailProvider implements EmailProvider {
         }),
       });
     } catch {
-      throw new ResendEmailProviderError(true);
+      throw new EmailProviderError("resend_request_failed", true);
     } finally {
       clearTimeout(timer);
     }
@@ -87,7 +70,7 @@ export class ResendEmailProvider implements EmailProvider {
       body = await response.json();
     } catch {
       if (response.ok) {
-        throw new ResendEmailProviderError(true, response.status, "malformed_success_response");
+        throw new EmailProviderError("resend_malformed_success_response", true, response.status, "malformed_success_response");
       }
       body = undefined;
     }
@@ -99,7 +82,7 @@ export class ResendEmailProvider implements EmailProvider {
         || response.status === 429
         || response.status >= 500
         || code === "concurrent_idempotent_requests";
-      throw new ResendEmailProviderError(retryable, response.status, code);
+      throw new EmailProviderError(code ? `resend_${code}` : `resend_http_${response.status}`, retryable, response.status, code);
     }
 
     const id =
@@ -109,7 +92,7 @@ export class ResendEmailProvider implements EmailProvider {
     if (typeof id !== "string" || id.length === 0 || id.length > 256) {
       // The provider may have accepted the email, so this is an ambiguous
       // outcome and must remain retryable under the same idempotency key.
-      throw new ResendEmailProviderError(true, response.status, "missing_message_id");
+      throw new EmailProviderError("resend_missing_message_id", true, response.status, "missing_message_id");
     }
 
     return { providerMessageId: id };
