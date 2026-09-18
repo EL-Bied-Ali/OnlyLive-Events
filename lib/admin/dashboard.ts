@@ -1,6 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import type { OrderStatus } from "@prisma/client";
+import type { OrderStatus, Prisma } from "@prisma/client";
 
 const ATTENTION_STATUSES: OrderStatus[] = ["paid_but_unfulfillable", "reconciliation_required"];
 
@@ -86,32 +86,47 @@ export async function getAdminOrders(status?: OrderStatus) {
   });
 }
 
-const EXPORT_ROW_LIMIT = 20_000;
+const EXPORT_BATCH_SIZE = 1_000;
+
+const exportOrderInclude = {
+  user: { select: { name: true, email: true, phone: true } },
+  event: { select: { title: true } },
+  items: { include: { ticketCategory: { select: { name: true } } } },
+  payments: { orderBy: { createdAt: "desc" }, select: { provider: true } },
+} satisfies Prisma.OrderInclude;
+
+export type OrderForExport = Prisma.OrderGetPayload<{ include: typeof exportOrderInclude }>;
 
 /**
- * Same shape as getAdminOrders but without the 100-row display cap, for
- * CSV export. Still bounded — an unbounded query on an append-only table
- * is its own operational risk — so a very large result is silently
- * truncated to the most recent EXPORT_ROW_LIMIT orders rather than ever
- * failing the request; there is no pagination UI for this yet.
+ * Same filter as getAdminOrders but without its 100-row display cap.
+ * Results are yielded in deterministic (createdAt DESC, id DESC) keyset
+ * order so same-millisecond orders cannot be duplicated or skipped at a
+ * batch boundary. The cursor is internal-only and always comes from the
+ * previous fetched batch.
  */
-export async function getOrdersForExport(status?: OrderStatus) {
-  return prisma.order.findMany({
-    where: status ? { status } : undefined,
-    take: EXPORT_ROW_LIMIT,
-    orderBy: { createdAt: "desc" },
-    include: {
-      user: { select: { name: true, email: true, phone: true } },
-      event: { select: { title: true } },
-      items: {
-        include: { ticketCategory: { select: { name: true } } },
-      },
-      payments: {
-        orderBy: { createdAt: "desc" },
-        select: { provider: true },
-      },
-    },
-  });
+export async function* iterateOrdersForExport(
+  status?: OrderStatus,
+  batchSize: number = EXPORT_BATCH_SIZE,
+): AsyncGenerator<OrderForExport[]> {
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new Error("Export batch size must be a positive integer");
+  }
+
+  let cursorId: string | undefined;
+  for (;;) {
+    const batch = await prisma.order.findMany({
+      where: status ? { status } : undefined,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: batchSize,
+      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
+      include: exportOrderInclude,
+    });
+
+    if (batch.length === 0) return;
+    yield batch;
+    if (batch.length < batchSize) return;
+    cursorId = batch[batch.length - 1]!.id;
+  }
 }
 
 export async function getOrderForAdmin(orderId: string) {
