@@ -617,23 +617,33 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
 
 ## Next
 
-0. **Pre-existing flaky test, not caused by the fix above**:
-   `tests/integration/checkout-reconciliation.test.ts`'s "leases provider
-   work so a concurrent worker cannot close the same checkout twice" hangs
-   indefinitely (confirmed: times out even at 30s, not just slow) on this
-   local Windows/Postgres-16/user-mode-cluster setup, non-deterministically
-   (sometimes a wrong-answer failure instead of a hang). Reproduces
-   identically with `git stash` removing the timezone fix, so it's
-   unrelated to that change. Debug logging showed the hang is specifically
-   the *second* `reconcileExpiredCheckouts(1)` call never resolving, after
-   the first worker's claim (which commits in under 100ms) — consistent
-   with a connection-pool or interactive-transaction release issue specific
-   to `@prisma/adapter-pg` 7.10 under concurrent load on this setup rather
-   than app logic (CI passes; the claim/lease SQL itself was manually
-   verified correct). Needs a maintainer with the same local setup, or
-   upgrading `@prisma/adapter-pg`, to chase further — not chased down
-   further here to stay focused on the confirmed, higher-severity bug
-   above.
+0. **Resolved, was never a code bug**: an earlier draft of this file
+   reported `checkout-reconciliation.test.ts`'s "leases provider work"
+   test hanging/misbehaving non-deterministically and speculated about a
+   `@prisma/adapter-pg` connection-pool issue. Actual root cause, found
+   while resyncing this branch with the real remote history and running
+   the full suite for the first time against it: `reconcileExpiredCheckouts`
+   claims its batch (`claimNextExpiredCheckoutPayment`, batch size 1,
+   oldest-due-first) from the **whole** `orders`/`payments` table, not
+   scoped to any one test's own fixture. A local dev Postgres instance that
+   is never truncated between runs accumulates a large backlog of
+   already-expired "checkout" rows from previous test runs (121 found here
+   after a full day of testing) — enough of them satisfy the claim query
+   that a `reconcileExpiredCheckouts(1)` call in a later test can claim a
+   **stale row from an earlier run** instead of the fixture the current
+   test just created, producing exactly the "sometimes right, sometimes
+   wrong, order-dependent" symptom observed (confirmed: `TRUNCATE`ing the
+   transactional tables in the local test database made every run — full
+   suite and isolated — pass consistently, including two other
+   ledger-reconciliation tests that briefly looked broken while this was
+   diagnosed). Not a codebase defect; a local test-environment hygiene gap
+   (this repo's own test database is otherwise treated as ephemeral/CI-only
+   and normally never accumulates a real backlog). No code change made.
+   Worth a follow-up at some point: either `claimNextExpiredCheckoutPayment`
+   could scope more defensively, or (simpler) local dev docs should note
+   that a long-lived local Postgres for this suite should be truncated
+   periodically — genuinely low priority, since CI's disposable database
+   never has this problem.
 1. Finish validating PR #13 against the real ChariPay sandbox account: the
    webhook endpoint is registered, a synthetic event was captured, and a
    real successful hosted checkout's `payment.succeeded` webhook is now
