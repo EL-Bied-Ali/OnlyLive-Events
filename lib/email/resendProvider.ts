@@ -77,7 +77,9 @@ export class ResendEmailProvider implements EmailProvider {
     if (!response.ok) {
       const code = safeProviderCode(body);
       const retryable =
-        response.status === 408
+        response.status === 401
+        || response.status === 403
+        || response.status === 408
         || response.status === 429
         || response.status >= 500
         || code === "concurrent_idempotent_requests";
