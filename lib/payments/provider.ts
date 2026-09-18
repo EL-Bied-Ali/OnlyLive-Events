@@ -74,6 +74,8 @@ export interface ParsedWebhookEvent {
 export interface RefundInput {
   providerPaymentId: string;
   paymentExternalId: string;
+  /** Stable OnlyLive Order id; real providers may need this rather than paymentExternalId to reference the original transaction. */
+  orderId: string;
   amountCents: number;
   currency: string;
   reason: string;

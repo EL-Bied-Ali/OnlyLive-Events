@@ -442,7 +442,16 @@ export class ChariPayProvider implements PaymentProvider {
         "X-Request-Id": input.idempotencyKey,
       },
       body: JSON.stringify({
-        externalId: input.paymentExternalId,
+        // externalId here must reference the ORIGINAL PAYMENT the way
+        // ChariPay itself identifies it — confirmed (both from the real
+        // captured payment.succeeded webhook and from GET /v1/transactions'
+        // externalReference) to be the OnlyLive Order id, not the Payment
+        // id, despite createPayment() itself sending `externalId:
+        // paymentId` at session-creation time. A real sandbox exercise of
+        // this refund() call with the Payment id produced a definitive
+        // HTTP 400 from ChariPay; see TASKS.md's ChariPay acceptance #8
+        // writeup.
+        externalId: input.orderId,
         refundReference: input.idempotencyKey,
         refundAmount: centsToMad(input.amountCents),
         reason: input.reason,

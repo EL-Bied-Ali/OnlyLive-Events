@@ -21,6 +21,7 @@ function refundInput(idempotencyKey: string) {
   return {
     providerPaymentId: "ps_123",
     paymentExternalId: "payment-123",
+    orderId: "order-123",
     amountCents: 1_000,
     currency: "MAD",
     reason: "hardening test",

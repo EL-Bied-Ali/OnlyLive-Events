@@ -259,6 +259,7 @@ describe("ChariPayProvider", () => {
     const result = await new ChariPayProvider().refund({
       providerPaymentId: "ps_test_123",
       paymentExternalId: "payment-123",
+      orderId: "order-123",
       amountCents: 12_345,
       currency: "MAD",
       reason: "Customer request",
@@ -268,7 +269,10 @@ describe("ChariPayProvider", () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe("https://api-psp.charipay.ma/v1/refunds");
     expect(JSON.parse(String(init.body))).toMatchObject({
-      externalId: "payment-123",
+      // externalId references the ORIGINAL PAYMENT the way ChariPay itself
+      // identifies it, confirmed to be the Order id, not the Payment id —
+      // see charipayProvider.ts's refund() doc comment.
+      externalId: "order-123",
       refundReference: "refund-row-123",
       refundAmount: 123.45,
     });
@@ -294,6 +298,7 @@ describe("ChariPayProvider", () => {
       await expect(new ChariPayProvider().refund({
         providerPaymentId: "ps",
         paymentExternalId: "payment",
+        orderId: "order",
         amountCents: 1000,
         currency: "MAD",
         reason: "test",
@@ -304,7 +309,7 @@ describe("ChariPayProvider", () => {
 
   it("keeps refund 409 outcomes ambiguous and preserves safe retry diagnostics", async () => {
     const provider = new ChariPayProvider();
-    const input = { providerPaymentId: "ps", paymentExternalId: "payment", amountCents: 1000, currency: "MAD", reason: "test", idempotencyKey: "refund-409" };
+    const input = { providerPaymentId: "ps", paymentExternalId: "payment", orderId: "order", amountCents: 1000, currency: "MAD", reason: "test", idempotencyKey: "refund-409" };
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "SESSION_NOT_ACTIVE" } }, 409)));
     await expect(provider.refund(input)).rejects.toMatchObject({ outcomeUnknown: true, status: 409 });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({ error: { code: "IDEMPOTENCY_CONFLICT" } }, 409)));
@@ -319,6 +324,7 @@ describe("ChariPayProvider", () => {
       await new ChariPayProvider().refund({
         providerPaymentId: "ps",
         paymentExternalId: "payment",
+        orderId: "order",
         amountCents: 1000,
         currency: "MAD",
         reason: "test",

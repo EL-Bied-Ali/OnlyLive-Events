@@ -24,6 +24,7 @@ interface PreparedRefund {
   refundId: string;
   paymentId: string;
   paymentExternalId: string;
+  orderId: string;
   providerPaymentId: string;
   provider: string;
   amountCents: number;
@@ -130,6 +131,7 @@ async function prepareRefund(input: InitiateRefundInput): Promise<PreparedRefund
       refundId: refund.id,
       paymentId: payment.id,
       paymentExternalId: payment.id,
+      orderId: payment.order_id,
       providerPaymentId: payment.provider_payment_id,
       provider: payment.provider,
       amountCents: input.amountCents,
@@ -302,6 +304,7 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
     result = await provider.refund({
       providerPaymentId: prepared.providerPaymentId,
       paymentExternalId: prepared.paymentExternalId,
+      orderId: prepared.orderId,
       amountCents: prepared.amountCents,
       currency: prepared.currency,
       reason: prepared.reason,
