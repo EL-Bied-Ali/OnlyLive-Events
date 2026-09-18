@@ -45,23 +45,42 @@ export async function GET(request: NextRequest) {
     const status = isOrderStatus(statusParam) ? statusParam : undefined;
 
     const encoder = new TextEncoder();
+    const batches = iterateOrdersForExport(status)[Symbol.asyncIterator]();
+    let headerPending = true;
+    let currentBatch: OrderForExport[] = [];
+    let currentIndex = 0;
+
     const stream = new ReadableStream<Uint8Array>({
-      async start(controller) {
+      async pull(controller) {
         try {
-          controller.enqueue(encoder.encode(CSV_BOM + formatCsvRow(HEADERS)));
-          for await (const batch of iterateOrdersForExport(status)) {
-            for (const order of batch) {
-              controller.enqueue(encoder.encode(formatCsvRow(orderToRow(order))));
-            }
+          if (headerPending) {
+            headerPending = false;
+            controller.enqueue(encoder.encode(CSV_BOM + formatCsvRow(HEADERS)));
+            return;
           }
-          controller.close();
+
+          while (currentIndex >= currentBatch.length) {
+            const next = await batches.next();
+            if (next.done) {
+              controller.close();
+              return;
+            }
+            currentBatch = next.value;
+            currentIndex = 0;
+          }
+
+          controller.enqueue(encoder.encode(formatCsvRow(orderToRow(currentBatch[currentIndex++]!))));
         } catch (error) {
           // Auth has already completed before the stream is created. A later
           // DB/read failure cannot change the HTTP status after headers are
-          // committed, so abort the body rather than silently pretending the
-          // export completed successfully.
+          // committed, so abort the response body rather than silently
+          // pretending the export completed successfully.
           controller.error(error);
+          await batches.return?.();
         }
+      },
+      async cancel() {
+        await batches.return?.();
       },
     });
 
