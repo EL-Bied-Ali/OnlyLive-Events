@@ -134,10 +134,6 @@ describe("admin orders CSV export data", () => {
   });
 
   it("rejects an invalid internal batch size instead of issuing a malformed pagination query", async () => {
-    await expect(async () => {
-      for await (const _batch of iterateOrdersForExport("paid", 0)) {
-        // Generator should throw before the first query/yield.
-      }
-    }).rejects.toThrow(/positive integer/);
+    await expect(collectExportedOrders("paid", 0)).rejects.toThrow(/positive integer/);
   });
 });
