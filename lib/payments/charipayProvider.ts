@@ -435,15 +435,61 @@ export class ChariPayProvider implements PaymentProvider {
   async refund(input: RefundInput): Promise<RefundResult> {
     if (input.currency !== "MAD") throw new Error(`ChariPay only supports MAD refunds, got ${input.currency}`);
 
-    let operationId: number | undefined;
-    if (input.providerOperationId !== undefined) {
-      if (!/^\d+$/.test(input.providerOperationId)) {
+    const parseOperationId = (value: string): number => {
+      if (!/^\d+$/.test(value)) {
         throw new ProviderInputError("INVALID_PROVIDER_OPERATION_ID", "ChariPay operationId must be a positive integer");
       }
-      operationId = Number(input.providerOperationId);
-      if (!Number.isSafeInteger(operationId) || operationId <= 0) {
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
         throw new ProviderInputError("INVALID_PROVIDER_OPERATION_ID", "ChariPay operationId is outside the supported integer range");
       }
+      return parsed;
+    };
+
+    let operationId =
+      input.providerOperationId !== undefined
+        ? parseOperationId(input.providerOperationId)
+        : undefined;
+
+    if (
+      operationId === undefined
+      && input.orderExternalId
+      && Number.isInteger(input.paymentAmountCents)
+      && (input.paymentAmountCents ?? 0) > 0
+    ) {
+      let lookup: PaymentStatusLookupResult;
+      try {
+        lookup = await this.lookupPaymentStatus({
+          orderExternalId: input.orderExternalId,
+          amountCents: input.paymentAmountCents!,
+          currency: input.currency,
+        });
+      } catch (error) {
+        const providerError = error instanceof ProviderRequestError ? error : null;
+        // No POST /refunds has happened yet, so the refund outcome is known:
+        // nothing was submitted. Preserve provider diagnostics/backoff but
+        // never classify a pre-submit lookup failure as financially ambiguous.
+        throw new ProviderRequestError(
+          "ChariPay original payment lookup failed before refund submission",
+          false,
+          providerError?.status,
+          providerError?.retryAfterMs,
+          providerError?.correlationId,
+          providerError?.providerCode ?? "ORIGINAL_PAYMENT_LOOKUP_FAILED",
+        );
+      }
+
+      if (lookup.status !== "succeeded" || !lookup.providerOperationId) {
+        throw new ProviderRequestError(
+          "ChariPay original payment could not be verified before refund submission",
+          false,
+          undefined,
+          undefined,
+          undefined,
+          "ORIGINAL_PAYMENT_NOT_VERIFIED",
+        );
+      }
+      operationId = parseOperationId(lookup.providerOperationId);
     }
 
     const response = await fetchWithTimeout(`${CHARIPAY_API_BASE_URL}/v1/refunds`, {
