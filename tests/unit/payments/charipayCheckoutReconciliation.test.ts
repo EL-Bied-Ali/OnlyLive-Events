@@ -49,12 +49,16 @@ describe("ChariPay expired checkout reconciliation", () => {
     });
   });
 
-  it("still returns non_payable when a successful cancel has an empty or non-JSON body", async () => {
+  it("still returns non_payable when a successful cancel has an empty or non-JSON body, without fabricating a status", async () => {
+    // No fallback value: fabricating "CANCELLED" when nothing was actually
+    // observed would record false acceptance evidence and defeat the point
+    // of this diagnostic (independent audit (GPT) caught this) — undefined
+    // (persisted as null) honestly means no parseable status was returned.
     const emptyBody = new Response("", { status: 200, headers: { "x-request-id": "corr-empty" } });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(emptyBody));
     await expect(new ChariPayProvider().closePaymentSession("ps_empty", "req-empty")).resolves.toEqual({
       state: "non_payable",
-      providerStatus: "CANCELLED",
+      providerStatus: undefined,
       correlationId: "corr-empty",
       httpStatus: 200,
     });
@@ -63,7 +67,7 @@ describe("ChariPay expired checkout reconciliation", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(nonJsonBody));
     await expect(new ChariPayProvider().closePaymentSession("ps_nonjson", "req-nonjson")).resolves.toEqual({
       state: "non_payable",
-      providerStatus: "CANCELLED",
+      providerStatus: undefined,
       correlationId: "corr-nonjson",
       httpStatus: 200,
     });

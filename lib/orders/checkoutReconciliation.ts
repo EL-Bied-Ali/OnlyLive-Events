@@ -124,6 +124,17 @@ async function deferPayment(paymentId: string, retryAfterMs?: number): Promise<v
  * once regardless of which path noticed it first, instead of each caller
  * keeping its own audit trail (and instead of a poll interval spamming a
  * new row on every attempt).
+ *
+ * Known limitation (flagged by independent audit (GPT) reviewing the
+ * ChariPay cancel-response diagnostics — see TASKS.md's acceptance #14
+ * writeup): because this is a create-once, no-overwrite row, a later call
+ * with genuinely new diagnostic detail (e.g. a first attempt's transient
+ * lookup failure, followed by a second attempt's real 409 SESSION_NOT_ACTIVE
+ * from the provider) is silently dropped rather than enriching the existing
+ * row. Not fixed here — the fresh sandbox exercise this diagnostic PR exists
+ * for is expected to hit this function at most once per payment, so it does
+ * not block that exercise — but a real recurring case would lose the more
+ * informative later diagnostics.
  */
 export async function recordPaymentReconciliationAttention(
   payment: ReconcilablePayment,

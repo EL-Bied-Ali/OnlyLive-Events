@@ -623,6 +623,11 @@ export class ChariPayProvider implements PaymentProvider {
       // failure — this is diagnostic pinning of ChariPay's real sandbox
       // response shape (see TASKS.md's ChariPay acceptance #14 writeup), not
       // a new source of authorization.
+      // No fallback value here: fabricating a "CANCELLED" providerStatus
+      // when nothing was actually observed would record false acceptance
+      // evidence and defeat the point of pinning ChariPay's real shape
+      // (independent audit (GPT) caught this) — `undefined` (persisted as
+      // `null`) honestly means "this response carried no parseable status".
       let observedStatus: string | undefined;
       try {
         const successBody = await readJsonResponse(response);
@@ -633,7 +638,7 @@ export class ChariPayProvider implements PaymentProvider {
       }
       return {
         state: "non_payable",
-        providerStatus: observedStatus ?? "CANCELLED",
+        providerStatus: observedStatus,
         correlationId,
         httpStatus: response.status,
       };
