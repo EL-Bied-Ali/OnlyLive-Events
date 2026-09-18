@@ -487,8 +487,102 @@ running this migration — not a concern for the app's current state.
   real refund delivery is captured, the flag flips, and the final
   independent audit is complete.
 
+## Completed (naive-timestamp vs now() skew — branch fix/naive-timestamp-now-skew)
+
+Found while setting up a local test database for the first time in this
+environment (no `TEST_DATABASE_URL`/Postgres had ever been available here
+before): `npm test` failed 11 tests on a freshly `initdb`'d local Postgres
+16 cluster, all in the purchase-limit/hold-expiry/inventory-concurrency
+area — the exact tests CLAUDE.md calls out as mandatory. CI was, and still
+is as of this writing, green on the same code.
+
+Root cause: every `DateTime` column in `prisma/schema.prisma` maps to a
+Postgres `timestamp` **without** time zone (confirmed: zero
+`@db.Timestamptz` usages in the schema, and every migration emits
+`TIMESTAMP(3)`, e.g. `reservations.expires_at`). Several raw-SQL queries
+across the codebase compare or write that kind of column using bare
+`now()`, which returns `timestamptz`. Comparing/assigning a `timestamptz`
+to a naive `timestamp` implicitly casts it through the **session's
+`TimeZone` GUC** first. My local cluster's `initdb` picked up this
+machine's OS locale and defaulted to `Africa/Casablanca` (UTC+1) — CI's
+`postgres:16` container defaults to UTC, which is why this was invisible
+there. Concretely, with a naive `timestamp` value `X` written the normal
+way (a JS `Date`, via Prisma, always true UTC digits):
+- `X < now()` implicitly becomes `X < now()::timestamp`, and `now()::timestamp`
+  is the **session-timezone wall-clock** reading of the current instant —
+  1 hour ahead of true UTC here. A reservation that still has 14 minutes
+  left before its real 15-minute expiry already looked expired.
+- The inverse direction (`X >= now()`) under-counts active holds by the
+  same mechanism — this is exactly why the purchase-limit tests failed:
+  `createHold`'s per-user total query counted zero of the customer's
+  already-active holds, so the cap could never trip.
+
+Verified fixed, not just silenced: reverting each fix individually
+reproduces the original 11 failures again; `git stash`-testing confirmed
+one separately-observed failure (`checkout-reconciliation.test.ts`'s
+"leases provider work" test, a hang) reproduces identically with or
+without this fix and is a pre-existing flake unrelated to this bug —
+tracked below, not fixed here.
+
+Fixed by rewriting the bare `now()` at each vulnerable site (mixing a
+JS-Date-written column with a raw-SQL comparison/write) to
+`(now() AT TIME ZONE 'UTC')`, which is correct regardless of the server's
+configured `TimeZone`:
+- `lib/inventory.ts` — `releaseExpiredAndLock` (hold-expiry sweep inside
+  `createHold`'s critical section), the per-user purchase-limit total
+  query, and `sweepExpiredHolds`.
+- `lib/orders/checkoutReconciliation.ts` — the expired-checkout claim's
+  `expires_at`/lease checks (the lease-skew direction could have let a
+  second worker reclaim a payment before its lease truly expired — a
+  double-reconciliation risk, not just a wrong-answer one).
+- `lib/orders/refundReconciliation.ts` — the claim lease write (was
+  writing skewed values, delaying a stuck refund's next retry by the
+  server's UTC offset).
+- `lib/email/dispatcher.ts` — retried rows' `nextAttemptAt` readiness
+  check (backoff could fire early by the offset).
+- `lib/admin/catalog.ts` — both committed-quantity queries gating a
+  purchase-cap/phase-limit decrease (an admin could have lowered a cap
+  below what customers actually held).
+
+Deliberately **not** changed: `lib/orders/checkout.ts`'s
+`provider_init_at` claim writes and compares using bare `now()` on
+**both** sides consistently, so the skew cancels in the subtraction —
+confirmed by direct calculation, left as-is per "don't rewrite working
+code without reason."
+
+Durable regression guard: `.github/workflows/ci.yml`'s Postgres service
+now sets `TZ: Africa/Casablanca` (matching OnlyLive's own locale) instead
+of the image's UTC default, so CI's existing test suite — not a new,
+narrower unit test — continues to exercise this exact scenario for any
+future code, not just today's fixed sites. (A lower-level standalone
+regression test was attempted and discarded: it used `pg` to bind a raw
+SQL parameter directly, which is cast differently than how Prisma actually
+serializes a `DateTime` write, so it didn't faithfully reproduce the real
+code path and would have given misleading signal.)
+
+Typecheck, lint and the full Vitest suite verified locally against the
+Casablanca-timezone cluster (301/301 excluding the pre-existing flake
+below).
+
 ## Next
 
+0. **Pre-existing flaky test, not caused by the fix above**:
+   `tests/integration/checkout-reconciliation.test.ts`'s "leases provider
+   work so a concurrent worker cannot close the same checkout twice" hangs
+   indefinitely (confirmed: times out even at 30s, not just slow) on this
+   local Windows/Postgres-16/user-mode-cluster setup, non-deterministically
+   (sometimes a wrong-answer failure instead of a hang). Reproduces
+   identically with `git stash` removing the timezone fix, so it's
+   unrelated to that change. Debug logging showed the hang is specifically
+   the *second* `reconcileExpiredCheckouts(1)` call never resolving, after
+   the first worker's claim (which commits in under 100ms) — consistent
+   with a connection-pool or interactive-transaction release issue specific
+   to `@prisma/adapter-pg` 7.10 under concurrent load on this setup rather
+   than app logic (CI passes; the claim/lease SQL itself was manually
+   verified correct). Needs a maintainer with the same local setup, or
+   upgrading `@prisma/adapter-pg`, to chase further — not chased down
+   further here to stay focused on the confirmed, higher-severity bug
+   above.
 1. Finish validating PR #13 against the real ChariPay sandbox account: the
    webhook endpoint is registered, a synthetic event was captured, and a
    real successful hosted checkout's `payment.succeeded` webhook is now

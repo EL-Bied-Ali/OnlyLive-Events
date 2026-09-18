@@ -27,6 +27,12 @@ export interface RefundReconciliationStats {
  * SKIP LOCKED still lets concurrent workers take different refunds, while the
  * one-at-a-time claim keeps the short updated_at lease attached to work that is
  * actually about to start.
+ *
+ * `updated_at` is a naive `timestamp` column; the next claim cycle compares it
+ * against a JS-computed cutoff (`new Date(Date.now() - MIN_RECONCILE_AGE_MS)`,
+ * always true UTC). Writing a bare `now()` here would implicitly cast that
+ * `timestamptz` into the session's `TimeZone` GUC, silently delaying every
+ * refund's next eligible retry by that offset whenever the server isn't UTC.
  */
 async function claimNextDueRefundId(): Promise<string | null> {
   const cutoff = new Date(Date.now() - MIN_RECONCILE_AGE_MS);
@@ -42,7 +48,7 @@ async function claimNextDueRefundId(): Promise<string | null> {
         LIMIT 1
       )
       UPDATE refunds AS r
-      SET updated_at = now()
+      SET updated_at = (now() AT TIME ZONE 'UTC')
       FROM candidate AS c
       WHERE r.id = c.id
       RETURNING r.id

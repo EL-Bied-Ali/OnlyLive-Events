@@ -53,6 +53,14 @@ export interface ReconcilablePayment {
  * Claiming one row at a time also avoids pre-leasing a large batch whose later
  * entries could sit idle while earlier provider requests consume most of the
  * lease window.
+ *
+ * `expires_at`/`updated_at` are naive `timestamp` columns populated with true
+ * UTC digits (JS `Date`, including `leaseUntil` below) — comparing them
+ * against a bare `now()` would implicitly cast that `timestamptz` through the
+ * session's `TimeZone` GUC first, skewing both checks by that offset
+ * whenever the server isn't UTC. Skewing the lease check specifically would
+ * let a second worker reclaim a payment before its lease truly expired,
+ * risking a duplicate provider reconciliation attempt.
  */
 async function claimNextExpiredCheckoutPayment(): Promise<CheckoutCandidate | null> {
   const leaseUntil = new Date(Date.now() + CLAIM_LEASE_MS);
@@ -64,9 +72,9 @@ async function claimNextExpiredCheckoutPayment(): Promise<CheckoutCandidate | nu
         JOIN orders o ON o.id = p.order_id
         WHERE o.status = 'pending_payment'
           AND o.expires_at IS NOT NULL
-          AND o.expires_at < now()
+          AND o.expires_at < (now() AT TIME ZONE 'UTC')
           AND p.status IN ('pending', 'awaiting_payment')
-          AND p.updated_at <= now()
+          AND p.updated_at <= (now() AT TIME ZONE 'UTC')
           AND EXISTS (
             SELECT 1 FROM reservations r
             WHERE r.order_id = o.id AND r.status = 'active'

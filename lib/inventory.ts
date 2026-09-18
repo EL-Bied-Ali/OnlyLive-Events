@@ -27,6 +27,14 @@ interface InventorySnapshot {
  * until the enclosing transaction commits or rolls back, so every subsequent
  * statement in this transaction that touches this same Inventory row is fully
  * serialized against any other transaction doing the same.
+ *
+ * `expires_at` is a naive `timestamp` column populated with UTC wall-clock
+ * digits (via JS `Date`, never a raw-SQL default) — comparing it against a
+ * bare `now()` here would implicitly cast that `timestamptz` into the
+ * session's `TimeZone` GUC before comparing, silently skewing every hold's
+ * effective lifetime by that offset whenever the server isn't UTC. `AT TIME
+ * ZONE 'UTC'` makes the comparison timezone-independent instead of relying
+ * on every deployment happening to run Postgres with `TimeZone=UTC`.
  */
 async function releaseExpiredAndLock(tx: Tx, ticketCategoryId: string): Promise<InventorySnapshot> {
   const rows = await tx.$queryRaw<InventorySnapshot[]>`
@@ -36,7 +44,7 @@ async function releaseExpiredAndLock(tx: Tx, ticketCategoryId: string): Promise<
       WHERE ticket_category_id = ${ticketCategoryId}
         AND status = 'active'
         AND order_id IS NULL
-        AND expires_at < now()
+        AND expires_at < (now() AT TIME ZONE 'UTC')
       RETURNING quantity
     )
     UPDATE inventory
@@ -148,7 +156,7 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
         AND tc.event_id = ${event.id}
         AND (
           r.status = 'converted'
-          OR (r.status = 'active' AND (r.expires_at >= now() OR r.order_id IS NOT NULL))
+          OR (r.status = 'active' AND (r.expires_at >= (now() AT TIME ZONE 'UTC') OR r.order_id IS NOT NULL))
         )
     `;
     const currentUserTotal = Number(userTotals[0]?.total ?? 0);
@@ -250,7 +258,7 @@ export async function sweepExpiredHolds(): Promise<{ categoriesAffected: number 
       SET status = 'expired'
       WHERE status = 'active'
         AND order_id IS NULL
-        AND expires_at < now()
+        AND expires_at < (now() AT TIME ZONE 'UTC')
       RETURNING ticket_category_id, quantity
     ),
     agg AS (
