@@ -101,8 +101,9 @@ export type OrderForExport = Prisma.OrderGetPayload<{ include: typeof exportOrde
  * Same filter as getAdminOrders but without its 100-row display cap.
  * Results are yielded in deterministic (createdAt DESC, id DESC) keyset
  * order so same-millisecond orders cannot be duplicated or skipped at a
- * batch boundary. The cursor is internal-only and always comes from the
- * previous fetched batch.
+ * batch boundary. Pagination uses the last row's sort values directly
+ * rather than Prisma's row cursor, so a later page does not depend on the
+ * cursor row still existing or still matching the export filter.
  */
 export async function* iterateOrdersForExport(
   status?: OrderStatus,
@@ -112,20 +113,33 @@ export async function* iterateOrdersForExport(
     throw new Error("Export batch size must be a positive integer");
   }
 
-  let cursorId: string | undefined;
+  let cursor: { createdAt: Date; id: string } | undefined;
   for (;;) {
+    const afterCursor: Prisma.OrderWhereInput | undefined = cursor
+      ? {
+          OR: [
+            { createdAt: { lt: cursor.createdAt } },
+            { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+          ],
+        }
+      : undefined;
+
     const batch = await prisma.order.findMany({
-      where: status ? { status } : undefined,
+      where: {
+        ...(status ? { status } : {}),
+        ...(afterCursor ?? {}),
+      },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: batchSize,
-      ...(cursorId ? { cursor: { id: cursorId }, skip: 1 } : {}),
       include: exportOrderInclude,
     });
 
     if (batch.length === 0) return;
     yield batch;
     if (batch.length < batchSize) return;
-    cursorId = batch[batch.length - 1]!.id;
+
+    const last = batch[batch.length - 1]!;
+    cursor = { createdAt: last.createdAt, id: last.id };
   }
 }
 
