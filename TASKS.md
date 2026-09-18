@@ -589,18 +589,23 @@ Typecheck, lint and the full Vitest suite (including
 `tests/integration/notifications.test.ts`) verified locally against the
 non-UTC cluster (301/301 excluding the pre-existing flake below).
 
-**Follow-ups from the same audit, not fixed here** (lower severity, don't
-block this fix):
+**Follow-ups from the same audit, since fixed** (both were lower severity
+and didn't block the P1 fix, but were quick and low-risk once identified):
 - `app/api/payments/webhook/charipay/route.ts` and
-  `app/api/payments/webhook/fake/route.ts` both write
+  `app/api/payments/webhook/fake/route.ts` both wrote
   `payment_events.received_at` using bare `now()` — an audit-log
-  timestamp-accuracy skew, not a business-logic bug (nothing currently
-  compares `received_at` against another value), but inconsistent with the
-  UTC-digits convention everywhere else.
-- `lib/orders/checkout.ts`'s `provider_init_at` (see above) should
-  eventually be normalized to the same convention even though it isn't
-  currently broken, so the invariant "naive timestamps here are always UTC
-  digits" becomes actually true rather than true-by-coincidence.
+  timestamp-accuracy skew, not a business-logic bug (nothing compares
+  `received_at` against another value), but inconsistent with the
+  UTC-digits convention everywhere else. Now pass an explicit JS `Date`
+  parameter, like every other naive-timestamp write in the codebase.
+- `lib/orders/checkout.ts`'s `provider_init_at` claim (self-consistent
+  before, not actually broken — see above) now writes via JS `Date` and
+  compares via `(now() AT TIME ZONE 'UTC')`, so the invariant "naive
+  timestamps here are always UTC digits" is actually true rather than
+  true-by-coincidence. Full Vitest suite re-verified after both changes
+  (301/301 excluding the pre-existing flake below).
+
+**Still not fixed, deliberately deferred**:
 - Longer-term: seriously consider migrating instant-like columns
   (`expires_at`, `updated_at`, `next_attempt_at`, etc.) to
   `@db.Timestamptz(3)`, which would make this entire bug class impossible

@@ -151,12 +151,18 @@ async function claimAndInitializeProvider(
       return { orderId: order.id, redirectUrl: current.redirectUrl };
     }
 
+    // provider_init_at is a naive `timestamp` column; writing/comparing it
+    // with a JS Date and (now() AT TIME ZONE 'UTC') keeps it on the same
+    // true-UTC-digits convention as every other naive timestamp in this
+    // codebase, instead of the bare `now()` this claim previously used on
+    // both sides (self-consistent — the skew cancelled in the subtraction —
+    // but fragile: see TASKS.md's naive-timestamp-vs-now() writeup).
     const claimed = await prisma.$queryRaw<{ id: string }[]>`
       UPDATE payments
-      SET provider_init_at = now()
+      SET provider_init_at = ${new Date()}
       WHERE id = ${payment.id}
         AND provider_payment_id IS NULL
-        AND (provider_init_at IS NULL OR provider_init_at < now() - (${PROVIDER_INIT_CLAIM_TIMEOUT_MS} || ' milliseconds')::interval)
+        AND (provider_init_at IS NULL OR provider_init_at < (now() AT TIME ZONE 'UTC') - (${PROVIDER_INIT_CLAIM_TIMEOUT_MS} || ' milliseconds')::interval)
       RETURNING id
     `;
 
