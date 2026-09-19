@@ -583,9 +583,10 @@ running this migration — not a concern for the app's current state.
   fields over time; storing the whole signed body created unnecessary
   long-lived data exposure.
 - New ChariPay event records retain only versioned evidence: a SHA-256
-  fingerprint of canonical JSON plus sorted top-level field names. That is
-  sufficient for duplicate/event-collision consistency checks and shape
-  diagnostics without retaining provider values.
+  fingerprint of canonical JSON plus the top-level field count. Even JSON
+  property names are provider-controlled, so no provider field names or values
+  are retained. The fingerprint is sufficient for duplicate/event-collision
+  consistency checks; exact shape diagnostics come from ChariPay's journal.
 - Collision/replay logic is backward compatible with historical rows that
   contain the old full JSON: those legacy values are fingerprinted on read, so
   no data migration is required and an old event can still be retried safely.
@@ -593,7 +594,8 @@ running this migration — not a concern for the app's current state.
   available from ChariPay's own authenticated webhook-events journal rather
   than being duplicated indefinitely in OnlyLive.
 - Integration coverage proves verified events, payment.failed shape evidence
-  and refund shape evidence omit injected customer-like values while
+  and refund shape evidence omit injected customer-like values and even
+  customer-like JSON property names while
   duplicate/collision behavior (including a legacy full-body row) is preserved.
 
 
