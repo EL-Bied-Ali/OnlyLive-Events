@@ -161,6 +161,53 @@ describe("ResendEmailProvider", () => {
     });
   });
 
+  it("routes all preview email to the configured Resend test recipient", async () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { id: "email_test_123" }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await new ResendEmailProvider().send({
+      to: "buyer@example.com",
+      subject: "Confirmation",
+      text: "Votre commande est confirmée.",
+      idempotencyKey: "outbox-row-123",
+    });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    expect(init).toMatchObject({
+      headers: {
+        "Idempotency-Key": "test-outbox-row-123",
+      },
+    });
+    expect(JSON.parse(String(init.body))).toEqual({
+      from: "OnlyLive <onboarding@resend.dev>",
+      to: ["owner@example.com"],
+      subject: "Confirmation",
+      text: "Votre commande est confirmée.",
+    });
+  });
+
+  it("refuses the test-recipient override in Vercel Production", () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
+    vi.stubEnv("VERCEL_ENV", "production");
+
+    expect(() => new ResendEmailProvider()).toThrow(/forbidden in Vercel Production/);
+  });
+
+  it("requires an explicit test recipient when using Resend's shared test sender", () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_TEST_RECIPIENT", "");
+    vi.stubEnv("VERCEL_ENV", "preview");
+
+    expect(() => new ResendEmailProvider()).toThrow(/requires RESEND_TEST_RECIPIENT/);
+  });
+
   it("rejects an invalid local idempotency key before network I/O", async () => {
     configure();
     const fetchMock = vi.fn();
