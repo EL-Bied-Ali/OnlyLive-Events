@@ -206,8 +206,8 @@ real email provider integration, which remains selected-provider work in
     a full error object (a bounded message only); the refund
     confirmation email omits the admin-entered internal `reason` text.
 - `lib/appUrl.ts` centralizes absolute-URL construction for email content
-  (ticket links), requiring HTTPS in production except for local-loopback
-  hosts (exempted for the Playwright/CI `next start` run).
+  (ticket links), requiring HTTPS in production; the Playwright/CI
+  `next start` loopback exception now requires an explicit E2E-only opt-in.
 - `isConsoleEmailAllowed()` mirrors the existing fake-payments guard:
   the console provider is refused in production unless
   `ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=true` is explicitly set; validated at
@@ -264,14 +264,9 @@ current Vercel Hobby plan only allows a cron to run once per day, far too
 infrequent for customer-facing order-confirmation/failure emails. An
 external higher-frequency scheduler (or a paid Vercel plan, once
 budgeted) must call this route directly — not provisioned yet, so
-dispatch cannot be relied on to run promptly until it is. The HTTP-loopback
-exemption in `lib/appUrl.ts` (`NODE_ENV=production` still permits `http://`
-when the hostname is `localhost`/`127.0.0.1`/`::1`, for the Playwright/CI
-`next start` run) would also silently accept a genuine production
-deployment accidentally misconfigured with a loopback `NEXTAUTH_URL` —
-low-impact (broken email links, not a public HTTP origin) but should gain
-an explicit e2e-only override rather than relying on the hostname alone
-before going further.
+dispatch cannot be relied on to run promptly until it is. The previous
+hostname-only HTTP-loopback exemption in `lib/appUrl.ts` is now closed by
+the explicit E2E-only production opt-in documented below.
 
 A second independent audit (GPT) flagged the `email_outbox` migration's
 `DROP TABLE "email_logs"` as an irreversible loss of historical send
@@ -541,6 +536,23 @@ running this migration — not a concern for the app's current state.
   mandatory test-recipient guard.
 - Unit coverage exercises direct construction in those unsafe runtimes and the
   case-insensitive shared-sender check.
+
+
+
+## Completed (production app-URL loopback guard — branch fix/app-url-loopback-production-guard)
+
+- Production `NEXTAUTH_URL` now requires HTTPS even for loopback hostnames by
+  default. A loopback hostname no longer silently weakens the production URL
+  invariant.
+- The Playwright `next start` server opts into a narrow
+  `ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION=true` exception explicitly.
+  The exception requires both `http:` and a recognized loopback hostname, so
+  the flag cannot exempt a public host or a different URL scheme.
+- Unit coverage proves loopback HTTP is rejected without the flag, accepted
+  only with the flag, and that neither a public HTTP URL nor a non-HTTP
+  loopback URL can use the escape hatch.
+- `.env.example` documents the flag as browser-test-only and warns never to
+  set it on a real deployment.
 
 
 ## In progress
