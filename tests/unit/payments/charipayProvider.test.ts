@@ -87,6 +87,64 @@ describe("ChariPayProvider", () => {
     });
   });
 
+  it("never exposes provider-controlled API diagnostics through ProviderRequestError", async () => {
+    const sensitiveMessage = "rejected buyer@example.com token=secret-value";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      error: { code: "BAD REQUEST buyer@example.com", message: sensitiveMessage },
+      correlationId: "corr buyer@example.com secret-value",
+    }, 400)));
+
+    await expect(new ChariPayProvider().createPayment({
+      paymentId: "payment-safe-error",
+      orderId: "order-safe-error",
+      amountCents: 1_000,
+      currency: "MAD",
+      idempotencyKey: "idem-safe-error",
+      customerEmail: "buyer@example.com",
+      customerName: "Amine Bennani",
+      customerPhone: "+212600000000",
+      returnUrl: "https://onlylive.ma/orders/order-safe-error",
+      expiresAt: new Date(Date.now() + 60_000),
+    })).rejects.toMatchObject({
+      name: "ProviderRequestError",
+      message: "ChariPay request failed (HTTP_400)",
+      providerCode: "HTTP_400",
+      correlationId: undefined,
+      outcomeUnknown: false,
+    });
+
+    try {
+      await new ChariPayProvider().createPayment({
+        paymentId: "payment-safe-error-2",
+        orderId: "order-safe-error-2",
+        amountCents: 1_000,
+        currency: "MAD",
+        idempotencyKey: "idem-safe-error-2",
+        customerEmail: "buyer@example.com",
+        customerName: "Amine Bennani",
+        customerPhone: "+212600000000",
+        returnUrl: "https://onlylive.ma/orders/order-safe-error-2",
+        expiresAt: new Date(Date.now() + 60_000),
+      });
+    } catch (error) {
+      expect(String((error as Error).message)).not.toContain("buyer@example.com");
+      expect(String((error as Error).message)).not.toContain("secret-value");
+    }
+  });
+
+  it("never exposes provider-controlled cancellation prose through ProviderRequestError.message", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
+      error: { code: "CANCEL_REJECTED", message: "customer=buyer@example.com internal=secret-value" },
+    }, 400)));
+
+    await expect(new ChariPayProvider().closePaymentSession("ps-safe-error", "request-safe-error")).rejects.toMatchObject({
+      name: "ProviderRequestError",
+      message: "ChariPay session cancellation failed (CANCEL_REJECTED)",
+      providerCode: "CANCEL_REJECTED",
+      outcomeUnknown: false,
+    });
+  });
+
   it("keeps ChariPay customer validation inside the adapter", async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
@@ -528,6 +586,9 @@ describe("ChariPayProvider", () => {
     } catch (error) {
       expect(error).toBeInstanceOf(ProviderRequestError);
       const providerError = error as ProviderRequestError;
+      expect(providerError.message).toBe("ChariPay request failed (MISSING_PARAMETER)");
+      expect(providerError.message).not.toContain("buyer@example.com");
+      expect(providerError.message).not.toContain("refund-sensitive");
       expect(providerError.providerMessageHint).toBe(
         "Missing required merchant field. refund=<redacted> reason=<redacted> email=<email> url=<url> uuid=<uuid>",
       );
