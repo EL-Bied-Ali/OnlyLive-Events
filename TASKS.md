@@ -509,6 +509,23 @@ running this migration — not a concern for the app's current state.
   worker reclaiming and completing the same row, then proves the stale worker
   cannot replace the newer provider message id when it resumes.
 
+
+## Completed (privacy-safe email error codes — branch fix/email-outbox-safe-error-codes)
+
+- The outbox dispatcher no longer persists or logs arbitrary `Error.message`
+  text. Render/Prisma/runtime exceptions can contain SQL details, URLs or
+  customer data, so untyped exceptions now collapse to the fixed retryable
+  code `email_dispatch_internal_error`.
+- `EmailProviderError` now enforces a bounded machine-code format. A provider
+  adapter that accidentally passes a raw response body or human error message
+  is sanitized to `email_provider_error` before the value reaches either
+  `lastErrorCode` or application logs.
+- Existing Resend errors already use safe machine codes and keep their
+  retryable/non-retryable semantics unchanged.
+- Regression coverage injects a provider error containing the customer's email
+  and a fake secret and proves neither value is persisted or logged.
+
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
