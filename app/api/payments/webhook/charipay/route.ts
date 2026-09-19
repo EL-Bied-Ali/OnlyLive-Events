@@ -138,6 +138,43 @@ async function auditIntegrityMismatch(
   });
 }
 
+async function auditPaymentWebhookStatusOnce(
+  action: string,
+  paymentId: string,
+  externalEventId: string,
+  metadata: Prisma.InputJsonObject,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    // Provider retries can repeat the same temporary status mismatch/outage.
+    // Serialize by action + provider event id so one delivery cannot create
+    // unbounded duplicate diagnostics while it is being retried.
+    const lockKey = `${action}:${externalEventId}`;
+    await tx.$queryRaw<Array<{ locked: boolean }>>`
+      SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS locked
+    `;
+
+    const existing = await tx.auditLog.findFirst({
+      where: {
+        action,
+        entityType: "Payment",
+        entityId: paymentId,
+        metadata: { path: ["externalEventId"], equals: externalEventId },
+      },
+    });
+    if (existing) return;
+
+    await tx.auditLog.create({
+      data: {
+        actorType: "system",
+        action,
+        entityType: "Payment",
+        entityId: paymentId,
+        metadata: { externalEventId, ...metadata },
+      },
+    });
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     // This provider-specific endpoint must keep accepting historical ChariPay
@@ -385,11 +422,15 @@ export async function POST(request: NextRequest) {
 
       const lookupPaymentStatus = provider.lookupPaymentStatus?.bind(provider);
       if (!lookupPaymentStatus) {
-        await auditIntegrityMismatch("payment.webhook_status_verification_unavailable", payment.id, {
-          externalEventId: event.externalEventId,
-          eventType: event.type,
-          reason: "provider_lookup_not_supported",
-        });
+        await auditPaymentWebhookStatusOnce(
+          "payment.webhook_status_verification_unavailable",
+          payment.id,
+          event.externalEventId,
+          {
+            eventType: event.type,
+            reason: "provider_lookup_not_supported",
+          },
+        );
         return NextResponse.json(
           { error: "PROVIDER_STATUS_VERIFICATION_UNAVAILABLE" },
           { status: 503 },
@@ -404,11 +445,15 @@ export async function POST(request: NextRequest) {
           currency: payment.currency,
         });
       } catch {
-        await auditIntegrityMismatch("payment.webhook_status_verification_unavailable", payment.id, {
-          externalEventId: event.externalEventId,
-          eventType: event.type,
-          reason: "provider_lookup_failed",
-        });
+        await auditPaymentWebhookStatusOnce(
+          "payment.webhook_status_verification_unavailable",
+          payment.id,
+          event.externalEventId,
+          {
+            eventType: event.type,
+            reason: "provider_lookup_failed",
+          },
+        );
         return NextResponse.json(
           { error: "PROVIDER_STATUS_VERIFICATION_UNAVAILABLE" },
           { status: 503 },
@@ -423,12 +468,16 @@ export async function POST(request: NextRequest) {
             : null;
 
       if (expectedProviderStatus && providerStatus.status !== expectedProviderStatus) {
-        await auditIntegrityMismatch("payment.webhook_header_status_mismatch", payment.id, {
-          externalEventId: event.externalEventId,
-          eventType: event.type,
-          expectedProviderStatus,
-          observedProviderStatus: providerStatus.status,
-        });
+        await auditPaymentWebhookStatusOnce(
+          "payment.webhook_header_status_mismatch",
+          payment.id,
+          event.externalEventId,
+          {
+            eventType: event.type,
+            expectedProviderStatus,
+            observedProviderStatus: providerStatus.status,
+          },
+        );
 
         // A terminal opposite outcome is a real contradiction, not a
         // transient lookup failure. Acknowledge it so a relabeled/replayed
