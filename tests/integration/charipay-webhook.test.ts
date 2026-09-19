@@ -203,8 +203,9 @@ describe("ChariPay webhook route", () => {
     lookupSpy.mockRejectedValue(new Error("simulated lookup outage"));
     const eventId = crypto.randomUUID();
 
+    const requestPayload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
     const response = await chariWebhookPost(signedRequest(
-      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      requestPayload,
       "payment.succeeded",
       eventId,
     ));
@@ -215,6 +216,23 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.paymentEvent.count({
       where: { provider: "charipay", externalEventId: eventId },
     })).toBe(0);
+
+    // A provider retry of the same delivery must not append another identical
+    // diagnostic row while the lookup remains unavailable.
+    const retry = await chariWebhookPost(signedRequest(
+      requestPayload,
+      "payment.succeeded",
+      eventId,
+    ));
+    expect(retry.status).toBe(503);
+    expect(await prisma.auditLog.count({
+      where: {
+        action: "payment.webhook_status_verification_unavailable",
+        entityType: "Payment",
+        entityId: fixture.payment.id,
+        metadata: { path: ["externalEventId"], equals: eventId },
+      },
+    })).toBe(1);
   });
 
   it("returns 503 without mutation when the authenticated ledger is not yet conclusive", async () => {
