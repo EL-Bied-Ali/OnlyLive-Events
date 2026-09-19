@@ -502,6 +502,7 @@ describe("ChariPayProvider", () => {
   });
 
   it("redacts known request values and generic PII from a MISSING_PARAMETER diagnostic message", async () => {
+    vi.stubEnv("CHARIPAY_ENV", "sandbox");
     const leakedUuid = "123e4567-e89b-12d3-a456-426614174000";
     vi.stubGlobal(
       "fetch",
@@ -535,6 +536,32 @@ describe("ChariPayProvider", () => {
       expect(providerError.providerMessageHint).not.toContain("refund-sensitive");
       expect(providerError.providerMessageHint).not.toContain("buyer@example.com");
       expect(providerError.providerMessageHint).not.toContain(leakedUuid);
+    }
+  });
+
+  it("never exposes a providerMessageHint outside the ChariPay sandbox", async () => {
+    vi.stubEnv("CHARIPAY_ENV", "live");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response({
+        error: { code: "MISSING_PARAMETER", message: "Missing required merchant field" },
+        correlationId: "corr-live-no-message-hint",
+      }, 400)),
+    );
+
+    try {
+      await new ChariPayProvider().refund({
+        providerPaymentId: "ps-live",
+        paymentExternalId: "payment-live",
+        amountCents: 1000,
+        currency: "MAD",
+        reason: "test",
+        idempotencyKey: "refund-live",
+      });
+      throw new Error("expected provider failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      expect((error as ProviderRequestError).providerMessageHint).toBeUndefined();
     }
   });
 
