@@ -59,33 +59,41 @@ function webhookFingerprint(raw: unknown): string {
   return crypto.createHash("sha256").update(canonicalJson(raw)).digest("hex");
 }
 
-function webhookTopLevelKeys(raw: unknown): string[] {
+function webhookTopLevelFieldCount(raw: unknown): number {
   return raw && typeof raw === "object" && !Array.isArray(raw)
-    ? Object.keys(raw as Record<string, unknown>).sort()
-    : [];
+    ? Object.keys(raw as Record<string, unknown>).length
+    : 0;
 }
 
 /**
  * Persist only non-sensitive evidence needed for replay/collision diagnostics.
- * Exact provider bodies remain available from ChariPay's own webhook-events
- * journal when a new provider shape must be pinned; OnlyLive does not need a
- * second long-lived copy of arbitrary provider/customer fields.
+ * Even JSON property names are provider-controlled and can theoretically carry
+ * customer identifiers, so the evidence keeps only a fingerprint and a count.
+ * Exact provider bodies/field names remain available from ChariPay's own
+ * authenticated webhook-events journal when a new shape must be pinned.
  */
 function webhookEvidence(raw: unknown): Prisma.InputJsonObject {
   return {
     version: CHARIPAY_WEBHOOK_EVIDENCE_VERSION,
     fingerprint: webhookFingerprint(raw),
-    topLevelKeys: webhookTopLevelKeys(raw),
+    topLevelFieldCount: webhookTopLevelFieldCount(raw),
   };
 }
 
 function storedWebhookFingerprint(rawPayload: unknown): string {
   if (rawPayload && typeof rawPayload === "object" && !Array.isArray(rawPayload)) {
     const object = rawPayload as Record<string, unknown>;
+    const keys = Object.keys(object).sort();
     if (
-      object.version === CHARIPAY_WEBHOOK_EVIDENCE_VERSION
+      keys.length === 3
+      && keys[0] === "fingerprint"
+      && keys[1] === "topLevelFieldCount"
+      && keys[2] === "version"
+      && object.version === CHARIPAY_WEBHOOK_EVIDENCE_VERSION
       && typeof object.fingerprint === "string"
       && /^[0-9a-f]{64}$/.test(object.fingerprint)
+      && Number.isSafeInteger(object.topLevelFieldCount)
+      && (object.topLevelFieldCount as number) >= 0
     ) {
       return object.fingerprint;
     }
