@@ -260,8 +260,14 @@ TASKS.md, tests.json
    spreadsheet formula injection (a cell opened by Excel/Sheets starting
    with `=`, `+`, `-`, or `@` can execute as a formula) and RFC4180
    quoting, and prefixes the file with a UTF-8 BOM so Excel on Windows
-   renders accented names correctly. It is bounded to the most recent
-   20,000 orders — there is no pagination UI for the export yet.
+   renders accented names correctly. The export uses deterministic
+   `(createdAt DESC, id DESC)` keyset pagination in 1,000-row batches and
+   streams rows as they are fetched, removing the previous silent 20,000-row
+   truncation without buffering the entire export in memory. Because batches
+   are separate database reads, a status-filtered export is a live operational
+   view rather than a repeatable-read accounting snapshot: an order whose
+   status changes while a long export is running may reflect that transition
+   according to which batch observes it.
 
 ## Request/data flow: transactional email (durable outbox)
 
