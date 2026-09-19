@@ -171,25 +171,39 @@ export async function POST(request: NextRequest) {
     // because this is the only reliable idempotency key available this
     // early: payment_events requires an already-resolved payment_id, which
     // this gate deliberately never resolves from an unverified body shape.
-    if (event.type === "payment.failed" && !CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED && event.externalEventId) {
-      const alreadyRecorded = await prisma.auditLog.findFirst({
-        where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: event.externalEventId },
-      });
-      if (!alreadyRecorded) {
-        await prisma.auditLog.create({
-          data: {
-            actorType: "system",
-            action: "charipay.payment_failed_shape_unverified",
-            entityType: "PaymentProviderEvent",
-            entityId: event.externalEventId,
-            metadata: {
-              provider: provider.name,
-              eventType: event.type,
-              raw: event.raw as Prisma.InputJsonValue,
-            },
-          },
+    if (
+      headers["chari-event-type"] === "payment.failed"
+      && event.type === "payment.failed"
+      && !CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED
+      && event.externalEventId
+    ) {
+      await prisma.$transaction(async (tx) => {
+        // AuditLog has no uniqueness constraint suitable for this one special
+        // evidence action. Serialize by provider event id so two concurrent
+        // deliveries cannot both pass a read-then-create race and violate the
+        // exactly-once evidence guarantee.
+        await tx.$queryRaw`
+          SELECT pg_advisory_xact_lock(hashtextextended(${event.externalEventId}, 0))
+        `;
+        const alreadyRecorded = await tx.auditLog.findFirst({
+          where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: event.externalEventId },
         });
-      }
+        if (!alreadyRecorded) {
+          await tx.auditLog.create({
+            data: {
+              actorType: "system",
+              action: "charipay.payment_failed_shape_unverified",
+              entityType: "PaymentProviderEvent",
+              entityId: event.externalEventId,
+              metadata: {
+                provider: provider.name,
+                eventType: event.type,
+                raw: event.raw as Prisma.InputJsonValue,
+              },
+            },
+          });
+        }
+      });
       return NextResponse.json({ ok: true, reconciliationRequired: true }, { status: 202 });
     }
 
