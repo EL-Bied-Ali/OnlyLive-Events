@@ -158,6 +158,39 @@ describe("ChariPay expired checkout reconciliation", () => {
     );
   });
 
+  it("honors a tighter caller timeout for latency-sensitive payment lookups", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
+        }, { once: true });
+      }));
+      vi.stubGlobal("fetch", fetchMock);
+
+      const lookup = new ChariPayProvider().lookupPaymentStatus({
+        orderExternalId: "order-timeout",
+        amountCents: 1000,
+        currency: "MAD",
+        requestTimeoutMs: 5_000,
+      });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+
+      await expect(lookup).rejects.toMatchObject({
+        name: "ProviderRequestError",
+        outcomeUnknown: true,
+        message: "ChariPay request timed out",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed when the transaction ledger match is ambiguous or immutable facts differ", async () => {
     const provider = new ChariPayProvider();
 
