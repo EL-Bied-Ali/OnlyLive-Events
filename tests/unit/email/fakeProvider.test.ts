@@ -41,4 +41,15 @@ describe("getEmailProvider", () => {
     expect(isConsoleEmailAllowed()).toBe(true);
     expect(() => getEmailProvider()).not.toThrow();
   });
+
+  it("resolves the Resend provider only when its required config is present", () => {
+    vi.stubEnv("EMAIL_PROVIDER", "resend");
+    vi.stubEnv("RESEND_API_KEY", "");
+    vi.stubEnv("RESEND_FROM_EMAIL", "");
+    expect(() => getEmailProvider()).toThrow(/RESEND_API_KEY/);
+
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "tickets@onlylive.test");
+    expect(getEmailProvider().name).toBe("resend");
+  });
 });

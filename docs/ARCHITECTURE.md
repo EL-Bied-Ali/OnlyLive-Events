@@ -271,14 +271,17 @@ TASKS.md, tests.json
 
 ## Request/data flow: transactional email (durable outbox)
 
-A production-safe outbox/dispatcher foundation — no real email provider is
-integrated yet (see Known scope limitations below).
+A production-safe outbox/dispatcher foundation with a Resend production
+adapter; account/domain activation remains operational work (see Known scope
+limitations below).
 
 1. `lib/email/provider.ts` defines the same kind of swappable interface as
-   payments — `lib/email/fakeProvider.ts` (`ConsoleEmailProvider`) just
-   logs the message and returns a fake id. `SendEmailInput` carries an
-   `idempotencyKey` (mirroring `RefundInput`'s), so a retried send of the
-   same outbox row can never double-send at a real provider's own layer.
+   payments. `ConsoleEmailProvider` is local/test-only; `ResendEmailProvider`
+   sends plain-text transactional email through Resend's REST API.
+   `SendEmailInput.idempotencyKey` is the stable EmailOutbox row id and is
+   forwarded as Resend's Idempotency-Key. Resend retains idempotency keys for
+   24 hours, so this protects the normal retry/lease-reclaim window rather
+   than claiming infinite exactly-once delivery.
 2. `lib/email/notifications.ts::enqueue*` (`enqueueOrderConfirmationEmail`,
    `enqueuePaymentFailedEmail`, `enqueueRefundConfirmationEmail`,
    `enqueueReconciliationAlertEmail`) each take a `Prisma.TransactionClient`
@@ -434,14 +437,11 @@ historical rather than future.
   multi-device reconciliation is not implemented.
 - **Real payment provider** — no Moroccan PSP is integrated; only the
   `fake` sandbox provider. See docs/PAYMENTS.md.
-- **Real email provider** — the durable outbox/dispatcher foundation is in
-  place (idempotent enqueue in the same transaction as the business fact,
-  batched claiming, lease-timeout reclaim, retry with backoff, business-
-  state re-validation at send time), but sending still only goes through
-  the `console` sandbox provider (logs the message, no real delivery) — no
-  real provider (Resend/Postmark/SES/...) is integrated yet. Adding one is
-  a new `EmailProvider` implementation plus a `getEmailProvider()` case; no
-  change to the outbox/dispatcher is expected.
+- **Real email delivery** — the durable outbox/dispatcher foundation and
+  a Resend adapter are implemented. Production activation still requires a
+  Resend account, verified sender domain, `RESEND_API_KEY` and
+  `RESEND_FROM_EMAIL`, followed by a real delivery/bounce smoke test. The
+  console provider remains local/test-only.
 - **Rate limiting** — implemented in the application per IP and per
   account/email on registration, admin login, and customer login
   (`lib/rateLimit.ts`). Production WAF rules and final thresholds still

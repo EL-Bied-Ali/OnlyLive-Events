@@ -2,6 +2,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { getEmailProvider } from "@/lib/email";
+import { EmailProviderError } from "@/lib/email/provider";
 import { absoluteAppUrl } from "@/lib/appUrl";
 import { money } from "@/lib/email/notifications";
 import type { EmailOutbox } from "@prisma/client";
@@ -300,7 +301,8 @@ export async function dispatchPendingEmails(): Promise<DispatchSummary> {
         `[email:dispatch] processing failed type=${row.type} outboxId=${row.id} recipientHash=${hashRecipient(row.recipientEmail)} attempt=${nextAttemptCount} error=${code}`,
       );
 
-      if (nextAttemptCount >= MAX_ATTEMPTS) {
+      const retryable = !(error instanceof EmailProviderError) || error.retryable;
+      if (!retryable || nextAttemptCount >= MAX_ATTEMPTS) {
         await prisma.emailOutbox.update({
           where: { id: row.id },
           data: { status: "failed", attemptCount: nextAttemptCount, lastErrorCode: code },

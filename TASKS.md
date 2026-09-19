@@ -713,11 +713,12 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    genuine decline within the recognized card-processing path rather
    than an upstream PAN rejection.
    against the real provider.
-2. Select a real email provider (Resend/Postmark/SES/...) and implement its
-   `EmailProvider` adapter from official docs — the durable outbox/dispatcher
-   (batching, retry with backoff, idempotency key) already merged via PR #17
-   and need no change to accept it; only `lib/email/index.ts`'s
-   `getEmailProvider()` factory gains a new case.
+2. Activate the Resend transactional-email account/domain and run a real
+   delivery/bounce smoke test. The provider adapter is now implemented from
+   Resend's official API contract, forwards the EmailOutbox id as the provider
+   idempotency key, and distinguishes retryable from permanent provider
+   failures. Production still needs RESEND_API_KEY + a verified
+   RESEND_FROM_EMAIL; no real credentials are committed.
 3. Decide the production managed-Postgres provider and document/test the
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
@@ -737,7 +738,7 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   new credentials. Real production go-live additionally requires OnlyLive
   merchant/KYB approval and live credentials; no production secret should
   be committed or pasted here.
-- Real email delivery is blocked on OnlyLive selecting a provider.
+- Real email delivery is blocked on creating/configuring the Resend account, verifying the sending domain, and adding production credentials.
 - Legal document drafting is blocked on legal/accountant review and ChariPay's
   final merchant/go-live requirements.
 

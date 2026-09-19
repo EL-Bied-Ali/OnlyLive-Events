@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
 import { ConsoleEmailProvider } from "@/lib/email/fakeProvider";
+import { EmailProviderError } from "@/lib/email/provider";
 import { POST as webhookPost } from "@/app/api/payments/webhook/fake/route";
 import { initiateRefund } from "@/lib/orders/refund";
 import {
@@ -309,6 +310,29 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     sendSpy.mockClear();
     await dispatchPendingEmails();
     expect(sendSpy.mock.calls.some((args) => args[0].to === fixture.user.email)).toBe(false);
+  });
+
+  it("permanently fails a row immediately when the provider says the request is non-retryable", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await postWebhook(fixture, "payment.succeeded");
+
+    const originalSend = ConsoleEmailProvider.prototype.send;
+    vi.spyOn(ConsoleEmailProvider.prototype, "send").mockImplementation(function (this: ConsoleEmailProvider, input) {
+      if (input.to === fixture.user.email) {
+        return Promise.reject(new EmailProviderError("validation_error", false, 422, "validation_error"));
+      }
+      return originalSend.call(this, input);
+    });
+
+    const summary = await dispatchPendingEmails();
+    expect(summary.permanentlyFailed).toBeGreaterThanOrEqual(1);
+
+    const row = await prisma.emailOutbox.findFirstOrThrow({
+      where: { type: "order_confirmation", entityType: "order", entityId: fixture.order.id },
+    });
+    expect(row.status).toBe("failed");
+    expect(row.attemptCount).toBe(1);
+    expect(row.lastErrorCode).toBe("validation_error");
   });
 
   it("a rendering exception for one row is retried on its own and never blocks another row in the same batch", async () => {

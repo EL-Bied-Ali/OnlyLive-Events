@@ -1,4 +1,5 @@
 import { ConsoleEmailProvider } from "@/lib/email/fakeProvider";
+import { ResendEmailProvider } from "@/lib/email/resendProvider";
 import type { EmailProvider } from "@/lib/email/provider";
 
 /**
@@ -19,7 +20,7 @@ export function isConsoleEmailAllowed(): boolean {
 }
 
 export function getEmailProvider(): EmailProvider {
-  const provider = process.env.EMAIL_PROVIDER ?? "console";
+  const provider = process.env.EMAIL_PROVIDER?.trim() || "console";
 
   if (provider === "console" && !isConsoleEmailAllowed()) {
     throw new Error(
@@ -30,7 +31,9 @@ export function getEmailProvider(): EmailProvider {
   switch (provider) {
     case "console":
       return new ConsoleEmailProvider();
+    case "resend":
+      return new ResendEmailProvider();
     default:
-      throw new Error(`Unknown EMAIL_PROVIDER: ${provider}. Only "console" is implemented so far.`);
+      throw new Error(`Unknown EMAIL_PROVIDER: ${provider}. Supported providers: "console", "resend".`);
   }
 }
