@@ -893,7 +893,9 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    provisioning, a >=7-day PITR target, daily independent logical backups,
    RPO/RTO targets, and a mandatory restore drill. A read-only
    `scripts/recovery-smoke.sql` validates core inventory/ticket/payment
-   invariants after restore, and `.gitignore` blocks common dump artifacts.
+   invariants after restore; CI executes it on a freshly migrated empty test
+   database to catch schema/SQL drift, and `.gitignore` blocks common dump
+   artifacts.
    Still required before go-live: provision the separate production Neon
    project, choose/verify its region against Vercel, configure paid recovery
    retention + independent backup storage, and complete a timed restore drill.
