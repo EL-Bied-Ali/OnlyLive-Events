@@ -526,6 +526,23 @@ running this migration — not a concern for the app's current state.
   and a fake secret and proves neither value is persisted or logged.
 
 
+
+## Completed (direct Resend runtime guard — branch fix/resend-direct-runtime-guard)
+
+- The Preview-only `RESEND_TEST_RECIPIENT` policy now lives in one shared
+  runtime helper used by both `getEmailProvider()` and
+  `ResendEmailProvider` itself. Direct construction can no longer bypass
+  the factory's fail-closed environment matrix.
+- The provider now rejects the redirect in non-Vercel production, Vercel
+  Production, and custom Vercel targets; standard Vercel Preview and explicit
+  local development/test runtimes remain allowed.
+- The provider's shared `@resend.dev` sender check is case-insensitive, matching
+  the factory's behavior, so an uppercase/mixed-case sender cannot bypass the
+  mandatory test-recipient guard.
+- Unit coverage exercises direct construction in those unsafe runtimes and the
+  case-insensitive shared-sender check.
+
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
