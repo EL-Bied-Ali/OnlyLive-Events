@@ -1,4 +1,5 @@
 import { EmailProviderError, type EmailProvider, type SendEmailInput, type SendEmailResult } from "@/lib/email/provider";
+import { isResendTestRecipientAllowed } from "@/lib/email/runtime";
 
 const RESEND_API_URL = "https://api.resend.com/emails";
 const REQUEST_TIMEOUT_MS = 10_000;
@@ -24,8 +25,10 @@ function resendTestRecipient(): string | undefined {
   const value = process.env.RESEND_TEST_RECIPIENT?.trim();
   if (!value) return undefined;
 
-  if (process.env.VERCEL_ENV === "production") {
-    throw new Error("RESEND_TEST_RECIPIENT is forbidden in Vercel Production");
+  if (!isResendTestRecipientAllowed()) {
+    throw new Error(
+      "RESEND_TEST_RECIPIENT is only allowed on the standard Vercel Preview target or in an explicit local development/test runtime",
+    );
   }
 
   return plainEmail(value, "RESEND_TEST_RECIPIENT");
@@ -47,7 +50,7 @@ export class ResendEmailProvider implements EmailProvider {
     const from = resendFromEmail();
     const testRecipient = resendTestRecipient();
 
-    if (from.endsWith("@resend.dev") && !testRecipient) {
+    if (from.toLowerCase().endsWith("@resend.dev") && !testRecipient) {
       throw new Error("A resend.dev test sender requires RESEND_TEST_RECIPIENT");
     }
   }

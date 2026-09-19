@@ -196,12 +196,32 @@ describe("ResendEmailProvider", () => {
     vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
     vi.stubEnv("VERCEL_ENV", "production");
 
-    expect(() => new ResendEmailProvider()).toThrow(/forbidden in Vercel Production/);
+    expect(() => new ResendEmailProvider()).toThrow(/only allowed on the standard Vercel Preview target/);
+  });
+
+  it("refuses the test-recipient override when constructed directly in non-Vercel production", () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("NODE_ENV", "production");
+
+    expect(() => new ResendEmailProvider()).toThrow(/only allowed on the standard Vercel Preview target/);
+  });
+
+  it("refuses the test-recipient override on a custom Vercel target", () => {
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_TARGET_ENV", "staging");
+
+    expect(() => new ResendEmailProvider()).toThrow(/only allowed on the standard Vercel Preview target/);
   });
 
   it("requires an explicit test recipient when using Resend's shared test sender", () => {
     vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
-    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_FROM_EMAIL", "ONBOARDING@RESEND.DEV");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "");
     vi.stubEnv("VERCEL_ENV", "preview");
 
