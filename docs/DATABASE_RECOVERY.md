@@ -4,11 +4,16 @@
 
 **Production PostgreSQL target: Neon.**
 
-OnlyLive already uses a separate Neon project for the ChariPay sandbox, the
-application is deployed on Vercel, and Neon provides pooled Postgres
-connections, point-in-time restore/branching, and a native Vercel integration.
-Using the same managed Postgres family for production reduces operational
-variance without reusing any sandbox data or credentials.
+OnlyLive is deployed on Vercel, and Neon provides pooled Postgres connections,
+point-in-time restore/branching, and a native Vercel integration. This is a
+good fit for the existing Prisma/PostgreSQL architecture without adding
+database features the application does not use.
+
+A connected Neon project named for the ChariPay sandbox does exist, but a
+read-only inspection on 2026-09-19 found no application tables in it. It is
+therefore **not** treated as proof of which database the current Vercel Preview
+uses. The production-provider decision below stands on the target architecture
+and recovery capabilities, not on that unverified runtime assumption.
 
 This is a provider decision, **not** permission to create the production
 database yet. Production must be a separate Neon project with separate
@@ -210,7 +215,9 @@ a documentation-only warning.
 
 As of 2026-09-19:
 
-- the connected OnlyLive ChariPay sandbox database is Neon/Postgres;
+- a connected Neon project named for the ChariPay sandbox exists, but currently
+  contains no application tables and is not assumed to be Vercel Preview's
+  runtime database;
 - no separate OnlyLive production Neon project has been provisioned through
   this workflow;
 - production recovery objectives have therefore **not** yet been drill-tested.
