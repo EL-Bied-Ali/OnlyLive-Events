@@ -53,7 +53,7 @@ describe("PATCH /api/customers/phone", () => {
     await expect(prisma.user.findUniqueOrThrow({ where: { id: user.id } })).resolves.toMatchObject({ phone: user.phone });
   });
 
-  it("updates the signed-in customer's own phone and writes an audit log entry", async () => {
+  it("updates the signed-in customer's own phone (stored in canonical E.164) and writes an audit log entry", async () => {
     const user = await createTestUser("phone-update");
     await prisma.user.update({ where: { id: user.id }, data: { phone: null } });
     const { requireCustomer } = await import("@/lib/auth/customer");
@@ -63,7 +63,11 @@ describe("PATCH /api/customers/phone", () => {
     const response = await PATCH(request({ phone: "0612345678" }));
     expect(response.status).toBe(200);
 
-    await expect(prisma.user.findUniqueOrThrow({ where: { id: user.id } })).resolves.toMatchObject({ phone: "0612345678" });
+    // Stored as canonical E.164, not the raw local-format input — this is
+    // exactly what lib/payments/charipayProvider.ts's own normalizer
+    // produces, so a value this endpoint accepts can never later be rejected
+    // by the ChariPay adapter at checkout time (see lib/validation/phone.ts).
+    await expect(prisma.user.findUniqueOrThrow({ where: { id: user.id } })).resolves.toMatchObject({ phone: "+212612345678" });
 
     const auditRow = await prisma.auditLog.findFirst({
       where: { action: "customer.phone_updated", entityType: "User", entityId: user.id },
@@ -82,7 +86,44 @@ describe("PATCH /api/customers/phone", () => {
     const response = await PATCH(request({ phone: "0699999999" }));
     expect(response.status).toBe(200);
 
-    await expect(prisma.user.findUniqueOrThrow({ where: { id: owner.id } })).resolves.toMatchObject({ phone: "0699999999" });
+    await expect(prisma.user.findUniqueOrThrow({ where: { id: owner.id } })).resolves.toMatchObject({ phone: "+212699999999" });
     await expect(prisma.user.findUniqueOrThrow({ where: { id: other.id } })).resolves.toMatchObject({ phone: other.phone });
+  });
+
+  it("rejects a value the loose old rule would have accepted but ChariPay's adapter would reject", async () => {
+    // Regression test for a real finding from an independent audit (GPT):
+    // the schema and the ChariPay adapter used to be two separately
+    // maintained regexes. "1234567890" has 10 digits and only allowed
+    // characters, so the old character/digit-count-only rule accepted it —
+    // but it is neither a recognized Moroccan local number nor a
+    // country-coded one, so ChariPay's adapter would reject it at payment
+    // time with no way for the customer to fix it (the form disappears once
+    // phone is non-null). It must be rejected here too, now that both share
+    // lib/validation/phone.ts's normalizePhone.
+    const user = await createTestUser("phone-would-have-passed-old-rule");
+    const { requireCustomer } = await import("@/lib/auth/customer");
+    vi.mocked(requireCustomer).mockResolvedValue({ id: user.id, email: user.email, name: user.name });
+
+    const { PATCH } = await importRoute();
+    const response = await PATCH(request({ phone: "1234567890" }));
+    expect(response.status).toBe(400);
+    await expect(prisma.user.findUniqueOrThrow({ where: { id: user.id } })).resolves.toMatchObject({ phone: user.phone });
+  });
+
+  it("rate-limits repeated updates for one account", async () => {
+    const user = await createTestUser("phone-rate-limited");
+    const { requireCustomer } = await import("@/lib/auth/customer");
+    vi.mocked(requireCustomer).mockResolvedValue({ id: user.id, email: user.email, name: user.name });
+
+    const { PATCH } = await importRoute();
+    for (let i = 0; i < 10; i += 1) {
+      const response = await PATCH(request({ phone: `06${(10000000 + i).toString().slice(0, 8)}` }));
+      expect(response.status).toBe(200);
+    }
+
+    const eleventh = await PATCH(request({ phone: "0611111199" }));
+    expect(eleventh.status).toBe(429);
+    const body = await eleventh.json();
+    expect(body.error).toBe("RATE_LIMITED");
   });
 });
