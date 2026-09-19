@@ -2,18 +2,22 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireCustomerForPage } from "@/lib/auth/customer";
+import { OrderStatusAutoRefresh } from "./OrderStatusAutoRefresh";
 
 export const dynamic = "force-dynamic";
 
 const STATUS_LABELS: Record<string, string> = {
-  pending_payment: "En attente de paiement",
+  pending_payment: "En attente de confirmation du paiement",
   paid: "Payée",
   failed: "Paiement échoué",
   cancelled: "Annulée",
   refunded: "Remboursée",
   partially_refunded: "Partiellement remboursée",
-  paid_but_unfulfillable: "Payée — en cours de traitement par notre équipe",
+  paid_but_unfulfillable: "Paiement reçu — traitement manuel en cours",
+  reconciliation_required: "Paiement reçu — vérification en cours",
 };
+
+const REFRESHABLE_STATUSES = new Set(["pending_payment", "paid_but_unfulfillable", "reconciliation_required"]);
 
 export default async function OrderPage({ params }: { params: Promise<{ orderId: string }> }) {
   const { orderId } = await params;
@@ -36,13 +40,17 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
     notFound();
   }
 
+  const refreshable = REFRESHABLE_STATUSES.has(order.status);
+
   return (
     <main style={{ maxWidth: 640, margin: "0 auto", padding: "48px 16px" }}>
+      <OrderStatusAutoRefresh orderId={order.id} status={order.status} />
       <h1 style={{ fontSize: 26, marginBottom: 4 }}>Commande {order.orderNumber}</h1>
       <p style={{ opacity: 0.8, marginBottom: 24 }}>{order.event.title}</p>
 
       <p style={{ marginBottom: 24 }}>
         Statut : <strong>{STATUS_LABELS[order.status] ?? order.status}</strong>
+        {refreshable ? <><br /><small>Cette page se met à jour automatiquement pendant la confirmation.</small></> : null}
       </p>
 
       <div style={{ display: "grid", gap: 16 }}>

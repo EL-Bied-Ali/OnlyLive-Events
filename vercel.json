@@ -1,0 +1,10 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "npm run vercel-build",
+  "crons": [
+    {
+      "path": "/api/internal/sweep-expired-holds",
+      "schedule": "0 3 * * *"
+    }
+  ]
+}

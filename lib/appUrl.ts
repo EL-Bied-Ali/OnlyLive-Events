@@ -1,6 +1,6 @@
 import "server-only";
 
-const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
  * Single source of truth for building absolute application URLs (e.g. a
@@ -9,12 +9,11 @@ const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
  * NEXTAUTH_URL — already a required env var describing this deployment's
  * own public URL — rather than introducing a second, easily-desynced one.
  *
- * Requires https in production, except for local-loopback hostnames: the
- * Playwright e2e suite deliberately runs `next start` (always
- * NODE_ENV=production) against `http://localhost:PORT` with no reverse
- * proxy (see playwright.config.ts) — this is exactly the
- * non-production-traffic case this exemption exists for, never a real
- * deployment.
+ * Requires https in production. The only exception is an explicit
+ * E2E-only opt-in for a local-loopback URL: Playwright deliberately runs
+ * `next start` (always NODE_ENV=production) against
+ * `http://localhost:PORT` with no reverse proxy. A loopback hostname by
+ * itself is never enough to weaken the production invariant.
  */
 export function getAppBaseUrl(): string {
   const raw = process.env.NEXTAUTH_URL;
@@ -29,10 +28,17 @@ export function getAppBaseUrl(): string {
     throw new Error(`NEXTAUTH_URL must be a valid URL (got "${raw}").`);
   }
 
-  if (process.env.NODE_ENV === "production" && url.protocol !== "https:" && !LOCAL_HOSTNAMES.has(url.hostname)) {
-    throw new Error(
-      `NEXTAUTH_URL must use https in production (got "${raw}"). Local loopback hosts are exempt only for non-production-traffic runs (e.g. the Playwright e2e suite's next start).`,
-    );
+  if (process.env.NODE_ENV === "production" && url.protocol !== "https:") {
+    const explicitLoopbackE2e =
+      url.protocol === "http:"
+      && LOCAL_HOSTNAMES.has(url.hostname)
+      && process.env.ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION === "true";
+
+    if (!explicitLoopbackE2e) {
+      throw new Error(
+        `NEXTAUTH_URL must use https in production (got "${raw}"). HTTP loopback is allowed only with ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION=true for isolated E2E runs.`,
+      );
+    }
   }
 
   return url.origin;

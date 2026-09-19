@@ -73,8 +73,47 @@ look for a `headless_shell` build that isn't preinstalled here. Elsewhere,
 a normal `npx playwright install` (or an already-correct preinstalled
 browser) makes this unnecessary — leave the env var unset.
 
-Production deployment should target a managed Postgres
-(Neon/Supabase/RDS — **not yet decided**) compatible with Vercel.
+Production managed Postgres target is **Neon**, provisioned as a project
+separate from every Preview/sandbox database. The production project itself is
+not provisioned yet; recovery objectives, PITR/logical-backup layers and the
+mandatory pre-go-live restore drill are defined in
+`docs/DATABASE_RECOVERY.md`.
+
+## Deployment migrations
+
+Vercel builds Next.js projects with `next build` by default, which never
+runs `prisma migrate deploy` — a schema change merged to a branch only
+reached whichever database someone remembered to migrate by hand. This bit
+us in practice: the Preview database was missing `email_outbox` for days
+after PR #17 merged, silently rolling back every real ChariPay webhook's
+`$transaction` (order confirmation included) on the `P2021` it threw.
+
+Fixed by adding a `vercel-build` script (`package.json`) — Vercel runs this
+instead of `build` automatically whenever it's present:
+
+```
+"vercel-build": "prisma migrate deploy && next build"
+```
+
+`prisma migrate deploy` runs against the same `DATABASE_URL` the app
+already uses at runtime; there is no separate pooled/direct-URL split in
+this project. (Older Prisma versions supported a `directUrl` field in
+`schema.prisma`'s `datasource` block specifically so migrations could use
+a session-level connection while runtime queries went through a
+transaction-mode pooler — Prisma 7's config-file-based setup removed that
+field entirely: `schema.prisma` now rejects `directUrl` outright, and
+`prisma.config.ts`'s own `Datasource` type only has `url`/`shadowDatabaseUrl`.
+If `DATABASE_URL` in some environment turns out to be a pooled connection
+that can't hold the advisory lock `migrate deploy` needs, that will surface
+as its own distinct, actionable Prisma error at deploy time — not something
+to pre-emptively guess a workaround for now.)
+
+A build with no pending migrations is a no-op (`No pending migrations to
+apply`); an unreachable or misconfigured `DATABASE_URL` now fails the build
+loudly instead of shipping code the database can't support — verified
+locally end-to-end against a from-scratch database (all 9 migrations
+applied, then `next build` succeeded) and confirmed idempotent on a
+second run.
 
 ## Folder structure
 
@@ -224,19 +263,28 @@ TASKS.md, tests.json
    spreadsheet formula injection (a cell opened by Excel/Sheets starting
    with `=`, `+`, `-`, or `@` can execute as a formula) and RFC4180
    quoting, and prefixes the file with a UTF-8 BOM so Excel on Windows
-   renders accented names correctly. It is bounded to the most recent
-   20,000 orders — there is no pagination UI for the export yet.
+   renders accented names correctly. The export uses deterministic
+   `(createdAt DESC, id DESC)` keyset pagination in 1,000-row batches and
+   streams rows as they are fetched, removing the previous silent 20,000-row
+   truncation without buffering the entire export in memory. Because batches
+   are separate database reads, a status-filtered export is a live operational
+   view rather than a repeatable-read accounting snapshot: an order whose
+   status changes while a long export is running may reflect that transition
+   according to which batch observes it.
 
 ## Request/data flow: transactional email (durable outbox)
 
-A production-safe outbox/dispatcher foundation — no real email provider is
-integrated yet (see Known scope limitations below).
+A production-safe outbox/dispatcher foundation with a Resend production
+adapter; account/domain activation remains operational work (see Known scope
+limitations below).
 
 1. `lib/email/provider.ts` defines the same kind of swappable interface as
-   payments — `lib/email/fakeProvider.ts` (`ConsoleEmailProvider`) just
-   logs the message and returns a fake id. `SendEmailInput` carries an
-   `idempotencyKey` (mirroring `RefundInput`'s), so a retried send of the
-   same outbox row can never double-send at a real provider's own layer.
+   payments. `ConsoleEmailProvider` is local/test-only; `ResendEmailProvider`
+   sends plain-text transactional email through Resend's REST API.
+   `SendEmailInput.idempotencyKey` is the stable EmailOutbox row id and is
+   forwarded as Resend's Idempotency-Key. Resend retains idempotency keys for
+   24 hours, so this protects the normal retry/lease-reclaim window rather
+   than claiming infinite exactly-once delivery.
 2. `lib/email/notifications.ts::enqueue*` (`enqueueOrderConfirmationEmail`,
    `enqueuePaymentFailedEmail`, `enqueueRefundConfirmationEmail`,
    `enqueueReconciliationAlertEmail`) each take a `Prisma.TransactionClient`
@@ -392,14 +440,11 @@ historical rather than future.
   multi-device reconciliation is not implemented.
 - **Real payment provider** — no Moroccan PSP is integrated; only the
   `fake` sandbox provider. See docs/PAYMENTS.md.
-- **Real email provider** — the durable outbox/dispatcher foundation is in
-  place (idempotent enqueue in the same transaction as the business fact,
-  batched claiming, lease-timeout reclaim, retry with backoff, business-
-  state re-validation at send time), but sending still only goes through
-  the `console` sandbox provider (logs the message, no real delivery) — no
-  real provider (Resend/Postmark/SES/...) is integrated yet. Adding one is
-  a new `EmailProvider` implementation plus a `getEmailProvider()` case; no
-  change to the outbox/dispatcher is expected.
+- **Real email delivery** — the durable outbox/dispatcher foundation and
+  a Resend adapter are implemented. Production activation still requires a
+  Resend account, verified sender domain, `RESEND_API_KEY` and
+  `RESEND_FROM_EMAIL`, followed by a real delivery/bounce smoke test. The
+  console provider remains local/test-only.
 - **Rate limiting** — implemented in the application per IP and per
   account/email on registration, admin login, and customer login
   (`lib/rateLimit.ts`). Production WAF rules and final thresholds still

@@ -15,12 +15,18 @@ describe("checkRateLimit", () => {
   it("allows exactly `limit` calls within a window and rejects the next", async () => {
     const key = `test-${crypto.randomUUID()}`;
     const options = { limit: 3, windowMs: 60_000 };
+    const stableNow = Math.floor(Date.now() / options.windowMs) * options.windowMs + 1_000;
+    const clock = vi.spyOn(Date, "now").mockReturnValue(stableNow);
 
-    expect(await checkRateLimit(key, options)).toBe(true);
-    expect(await checkRateLimit(key, options)).toBe(true);
-    expect(await checkRateLimit(key, options)).toBe(true);
-    expect(await checkRateLimit(key, options)).toBe(false);
-    expect(await checkRateLimit(key, options)).toBe(false);
+    try {
+      expect(await checkRateLimit(key, options)).toBe(true);
+      expect(await checkRateLimit(key, options)).toBe(true);
+      expect(await checkRateLimit(key, options)).toBe(true);
+      expect(await checkRateLimit(key, options)).toBe(false);
+      expect(await checkRateLimit(key, options)).toBe(false);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("resets once a new window starts", async () => {

@@ -3,7 +3,8 @@
 This file is the source of truth for how Claude Code must work on this
 repository across sessions. Read it fully at the start of every session,
 along with `docs/ARCHITECTURE.md`, `docs/SECURITY.md`, `docs/PAYMENTS.md`,
-`TASKS.md`, `tests.json`, and recent git history, before making changes.
+`docs/CHARIPAY.md` when present, `TASKS.md`, `tests.json`, and recent git
+history, before making changes.
 
 ## Company / Business Context
 
@@ -88,12 +89,20 @@ phases, quantities, prices, purchase limits.
   signatures, idempotent, logged, replay-resistant, safe when received
   multiple times.
 - Never mark an order paid solely from client-side input.
-- **No PSP is selected yet.** Implement a clean `PaymentProvider`
-  abstraction plus a FAKE/SANDBOX provider for development. Do not invent a
-  real PSP API. The real adapter is implemented later from the selected
-  provider's official docs, once chosen. Card entry must ultimately go
-  through a PCI-DSS compliant Moroccan payment provider's hosted checkout
-  or secure equivalent.
+- **ChariPay is the selected real PSP candidate and is being integrated in
+  draft PR #13 from ChariPay's official published v1 API documentation.**
+  Keep the clean `PaymentProvider` abstraction and `FakeProvider` for local/
+  CI testing. Do not invent provider fields/endpoints or weaken generic
+  payment guarantees to fit ChariPay.
+- ChariPay uses hosted checkout; OnlyLive must never handle raw card PAN/CVV.
+  Its browser redirect is never authoritative; signed webhooks remain the
+  source of truth. Refunds are asynchronous and must not alter tickets/order/
+  payment state until provider-confirmed success.
+- **Provider integration is not production-approved yet.** Before merging/
+  going live, validate exact signed webhook JSON with real sandbox deliveries,
+  exercise successful/failed payment and refund flows, keep full CI green,
+  triage an independent audit, and complete OnlyLive merchant/KYB onboarding.
+  See `docs/CHARIPAY.md` and `TASKS.md`.
 
 ## Tickets
 
@@ -186,13 +195,20 @@ simultaneously by two scanners, cancelled ticket scan, customer accessing
 another customer's order, customer accessing admin API, refund state
 transitions.
 
+For the real PSP also test: provider-side idempotency, exact raw-body
+signature verification, timestamp replay rejection, stable event-id
+idempotency, out-of-order/duplicate deliveries, asynchronous refund pending/
+success/failure, ambiguous network outcomes, and sandbox-vs-production
+configuration guards.
+
 Playwright for important user flows. Never delete or weaken tests simply
 to make the build pass.
 
 ## Project Memory
 
 Maintain: `CLAUDE.md` (this file), `docs/ARCHITECTURE.md`,
-`docs/SECURITY.md`, `docs/PAYMENTS.md`, `TASKS.md`, `tests.json`.
+`docs/SECURITY.md`, `docs/PAYMENTS.md`, provider-specific docs such as
+`docs/CHARIPAY.md`, `TASKS.md`, `tests.json`.
 
 `TASKS.md` tracks: completed / in progress / next / blocked.
 `tests.json` tracks critical scenarios and current pass/fail state.
@@ -212,7 +228,9 @@ reservation/hold mechanism → implement fake payment provider → implement
 the basic customer flow → add automated tests for inventory concurrency
 and purchase lifecycle.
 
-Do not implement a real payment provider until one is selected.
+A real payment provider may only be implemented after selection and from
+its official documentation. ChariPay currently satisfies the selection step,
+but its adapter remains draft until sandbox validation and independent audit.
 
 At the end of a work session: run all tests, run lint/type checking,
 review the git diff, document remaining risks, update `TASKS.md`, update

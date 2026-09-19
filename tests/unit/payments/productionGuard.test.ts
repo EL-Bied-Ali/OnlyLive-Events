@@ -29,7 +29,7 @@ describe("fake payments are impossible to enable accidentally in production", ()
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("PAYMENT_PROVIDER", "fake");
     vi.stubEnv("ALLOW_FAKE_PAYMENTS_IN_PRODUCTION", "");
-    expect(() => getPaymentProvider()).toThrow(/cannot be used in production/);
+    expect(() => getPaymentProvider()).toThrow(/cannot be operated in production/);
   });
 
   it("getPaymentProvider succeeds in production with the explicit opt-in", () => {

@@ -17,16 +17,24 @@ interface InventorySnapshot {
 }
 
 /**
- * Releases any stale `active` reservations for one ticket category back
- * onto its Inventory row, and returns the refreshed counters.
+ * Releases stale pre-checkout reservations for one ticket category back onto
+ * Inventory and returns the refreshed counters. A reservation with order_id
+ * is deliberately excluded: once checkout starts, a provider payment can be
+ * in flight and local wall-clock expiry alone is not proof that the session is
+ * non-payable. Those rows require provider reconciliation before release.
  *
- * This UPDATE is the lock: Postgres holds the row-level lock it acquires
- * here until the enclosing transaction commits or rolls back, so every
- * subsequent statement in this transaction that touches this same
- * Inventory row is fully serialized against any other transaction doing
- * the same. That is the entire oversell-prevention mechanism — no
- * SERIALIZABLE isolation or retry loop is needed for a single-row
- * read-modify-write.
+ * This UPDATE is the lock: Postgres holds the row-level lock it acquires here
+ * until the enclosing transaction commits or rolls back, so every subsequent
+ * statement in this transaction that touches this same Inventory row is fully
+ * serialized against any other transaction doing the same.
+ *
+ * `expires_at` is a naive `timestamp` column populated with UTC wall-clock
+ * digits (via JS `Date`, never a raw-SQL default) — comparing it against a
+ * bare `now()` here would implicitly cast that `timestamptz` into the
+ * session's `TimeZone` GUC before comparing, silently skewing every hold's
+ * effective lifetime by that offset whenever the server isn't UTC. `AT TIME
+ * ZONE 'UTC'` makes the comparison timezone-independent instead of relying
+ * on every deployment happening to run Postgres with `TimeZone=UTC`.
  */
 async function releaseExpiredAndLock(tx: Tx, ticketCategoryId: string): Promise<InventorySnapshot> {
   const rows = await tx.$queryRaw<InventorySnapshot[]>`
@@ -35,7 +43,8 @@ async function releaseExpiredAndLock(tx: Tx, ticketCategoryId: string): Promise<
       SET status = 'expired'
       WHERE ticket_category_id = ${ticketCategoryId}
         AND status = 'active'
-        AND expires_at < now()
+        AND order_id IS NULL
+        AND expires_at < (now() AT TIME ZONE 'UTC')
       RETURNING quantity
     )
     UPDATE inventory
@@ -98,16 +107,10 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
       throw new ApiError(409, "CATEGORY_NOT_AVAILABLE", "This ticket category is not available");
     }
 
-    // Shared catalogue lock: other purchases can proceed concurrently,
-    // but event/category/phase edits take the matching exclusive lock and
-    // therefore cannot change eligibility or the event purchase limit
-    // between this validation and the inventory mutation.
     await tx.$executeRaw`
       SELECT pg_advisory_xact_lock_shared(hashtext('onlylive_catalogue'), hashtext(${initialCategory.eventId}))
     `;
 
-    // Serialize all hold attempts by this user for this event, across
-    // every category — released automatically at transaction end.
     await tx.$executeRaw`
       SELECT pg_advisory_xact_lock(hashtext(${initialCategory.eventId}), hashtext(${input.userId}))
     `;
@@ -141,21 +144,20 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
       throw new ApiError(409, "PHASE_NOT_AVAILABLE", "This sales phase is not currently open");
     }
 
-    // Excludes reservations that are 'active' in name only — expired
-    // (expires_at in the past) but not yet flipped by the sweep or by
-    // another category's lazy release — so a stale hold can never keep
-    // consuming this user's purchase allowance. This works without
-    // requiring the background sweep to have run first, matching the
-    // same lazy-expiry idiom used for inventory availability itself.
-    // This is a read-only count for the limit check, not a mutation, so
-    // it cannot double-decrement anything.
+    // Converted reservations count permanently. Active pre-checkout holds only
+    // count while their local expiry is live; order-linked checkout holds are
+    // protected from lazy release above and continue to represent committed
+    // checkout inventory until payment reconciliation resolves them.
     const userTotals = await tx.$queryRaw<{ total: bigint }[]>`
       SELECT COALESCE(SUM(r.quantity), 0) AS total
       FROM reservations r
       JOIN ticket_categories tc ON tc.id = r.ticket_category_id
       WHERE r.user_id = ${input.userId}
         AND tc.event_id = ${event.id}
-        AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= now()))
+        AND (
+          r.status = 'converted'
+          OR (r.status = 'active' AND (r.expires_at >= (now() AT TIME ZONE 'UTC') OR r.order_id IS NOT NULL))
+        )
     `;
     const currentUserTotal = Number(userTotals[0]?.total ?? 0);
     if (currentUserTotal + input.quantity > event.maxTicketsPerUser) {
@@ -195,8 +197,6 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
         salesPhaseId: input.salesPhaseId,
         userId: input.userId,
         quantity: input.quantity,
-        // Price always comes from the phase we just read inside this
-        // same locked transaction — never from the caller.
         unitPriceCents: phase.priceCents,
         status: "active",
         expiresAt,
@@ -210,18 +210,9 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
 
 /**
  * Explicit cancellation (abandoned checkout, user backing out) — but only
- * while the hold has NOT yet moved into checkout. Once
- * `reservation.orderId` is set, a Payment may already be in flight (the
- * customer could be sitting on the provider's hosted checkout page right
- * now); releasing the stock here could let it be resold to someone else
- * and then have the original payment succeed anyway, which is exactly
- * the oversell path `paid_but_unfulfillable` exists to catch — better to
- * prevent it than rely on that fallback. Order-level cancellation (with
- * any necessary refund once a payment has started) is a separate,
- * not-yet-built flow — see docs/PAYMENTS.md.
- *
- * No-ops safely if the reservation is already converted/expired/
- * cancelled.
+ * while the hold has NOT yet moved into checkout. Once reservation.orderId is
+ * set, a Payment may already be in flight and stock cannot be released without
+ * provider reconciliation.
  */
 export async function releaseHold(reservationId: string, userId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
@@ -230,7 +221,7 @@ export async function releaseHold(reservationId: string, userId: string): Promis
       throw new ApiError(404, "RESERVATION_NOT_FOUND", "Reservation not found");
     }
     if (reservation.status !== "active") {
-      return; // already converted/expired/cancelled — nothing to release
+      return;
     }
     if (reservation.orderId) {
       throw new ApiError(
@@ -244,9 +235,7 @@ export async function releaseHold(reservationId: string, userId: string): Promis
       where: { id: reservationId, status: "active", orderId: null },
       data: { status: "cancelled" },
     });
-    if (updated.count === 0) {
-      return; // raced with expiry/checkout-start — the other path already handled stock
-    }
+    if (updated.count === 0) return;
 
     await tx.$executeRaw`
       UPDATE inventory
@@ -257,17 +246,19 @@ export async function releaseHold(reservationId: string, userId: string): Promis
 }
 
 /**
- * Proactive background sweep across every category, for UI-freshness only
- * — correctness never depends on this running; createHold's lazy release
- * is the only thing that has to be correct. Safe to call as often as
- * desired (idempotent: a category with no expired holds is a no-op).
+ * Proactive sweep for stale PRE-CHECKOUT holds only. Order-linked checkout
+ * reservations are intentionally excluded because local time alone cannot
+ * prove the hosted PSP session is no longer payable. A provider-aware
+ * reconciliation path must resolve those before inventory is released.
  */
 export async function sweepExpiredHolds(): Promise<{ categoriesAffected: number }> {
   const result = await prisma.$executeRaw`
     WITH expired AS (
       UPDATE reservations
       SET status = 'expired'
-      WHERE status = 'active' AND expires_at < now()
+      WHERE status = 'active'
+        AND order_id IS NULL
+        AND expires_at < (now() AT TIME ZONE 'UTC')
       RETURNING ticket_category_id, quantity
     ),
     agg AS (

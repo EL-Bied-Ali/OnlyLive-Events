@@ -1,5 +1,9 @@
 import { ConsoleEmailProvider } from "@/lib/email/fakeProvider";
+import { ResendEmailProvider } from "@/lib/email/resendProvider";
 import type { EmailProvider } from "@/lib/email/provider";
+import { isResendTestRecipientAllowed } from "@/lib/email/runtime";
+
+export { isResendTestRecipientAllowed } from "@/lib/email/runtime";
 
 /**
  * The sandbox console provider must be impossible to enable accidentally
@@ -19,7 +23,7 @@ export function isConsoleEmailAllowed(): boolean {
 }
 
 export function getEmailProvider(): EmailProvider {
-  const provider = process.env.EMAIL_PROVIDER ?? "console";
+  const provider = process.env.EMAIL_PROVIDER?.trim() || "console";
 
   if (provider === "console" && !isConsoleEmailAllowed()) {
     throw new Error(
@@ -27,10 +31,27 @@ export function getEmailProvider(): EmailProvider {
     );
   }
 
+  if (provider === "resend") {
+    const testRecipient = process.env.RESEND_TEST_RECIPIENT?.trim();
+
+    if (testRecipient && !isResendTestRecipientAllowed()) {
+      throw new Error(
+        "RESEND_TEST_RECIPIENT is only allowed on the standard Vercel Preview target or in an explicit local development/test runtime",
+      );
+    }
+
+    const from = process.env.RESEND_FROM_EMAIL?.trim().toLowerCase();
+    if (from?.endsWith("@resend.dev") && !testRecipient) {
+      throw new Error("A resend.dev test sender requires RESEND_TEST_RECIPIENT");
+    }
+  }
+
   switch (provider) {
     case "console":
       return new ConsoleEmailProvider();
+    case "resend":
+      return new ResendEmailProvider();
     default:
-      throw new Error(`Unknown EMAIL_PROVIDER: ${provider}. Only "console" is implemented so far.`);
+      throw new Error(`Unknown EMAIL_PROVIDER: ${provider}. Supported providers: "console", "resend".`);
   }
 }

@@ -1,16 +1,30 @@
 import "server-only";
 import { prisma } from "@/lib/db";
-import type { OrderStatus } from "@prisma/client";
+import type { OrderStatus, Prisma } from "@prisma/client";
 
 const ATTENTION_STATUSES: OrderStatus[] = ["paid_but_unfulfillable", "reconciliation_required"];
 
 export async function getAdminMetrics() {
+  const now = new Date();
   const [paidPayments, ticketsSold, checkIns, awaitingPayment, attentionOrders] = await Promise.all([
     prisma.payment.aggregate({ where: { status: "paid" }, _sum: { amountCents: true } }),
     prisma.ticket.count(),
     prisma.ticket.count({ where: { status: "used" } }),
     prisma.order.count({ where: { status: "pending_payment" } }),
-    prisma.order.count({ where: { status: { in: ATTENTION_STATUSES } } }),
+    // Unresolved provider-backed financial work must remain visible even after
+    // the initiating admin/customer leaves the page. A processing refund is a
+    // reserved money operation whose final outcome is not known yet; failed
+    // refunds and expired-but-unresolved hosted checkouts also require review.
+    // One order is counted once even if several attention conditions apply.
+    prisma.order.count({
+      where: {
+        OR: [
+          { status: { in: ATTENTION_STATUSES } },
+          { status: "pending_payment", expiresAt: { lt: now } },
+          { payments: { some: { refunds: { some: { status: { in: ["processing", "failed"] } } } } } },
+        ],
+      },
+    }),
   ]);
 
   return {
@@ -72,32 +86,61 @@ export async function getAdminOrders(status?: OrderStatus) {
   });
 }
 
-const EXPORT_ROW_LIMIT = 20_000;
+const EXPORT_BATCH_SIZE = 1_000;
+
+const exportOrderInclude = {
+  user: { select: { name: true, email: true, phone: true } },
+  event: { select: { title: true } },
+  items: { include: { ticketCategory: { select: { name: true } } } },
+  payments: { orderBy: { createdAt: "desc" }, select: { provider: true } },
+} satisfies Prisma.OrderInclude;
+
+export type OrderForExport = Prisma.OrderGetPayload<{ include: typeof exportOrderInclude }>;
 
 /**
- * Same shape as getAdminOrders but without the 100-row display cap, for
- * CSV export. Still bounded — an unbounded query on an append-only table
- * is its own operational risk — so a very large result is silently
- * truncated to the most recent EXPORT_ROW_LIMIT orders rather than ever
- * failing the request; there is no pagination UI for this yet.
+ * Same filter as getAdminOrders but without its 100-row display cap.
+ * Results are yielded in deterministic (createdAt DESC, id DESC) keyset
+ * order so same-millisecond orders cannot be duplicated or skipped at a
+ * batch boundary. Pagination uses the last row's sort values directly
+ * rather than Prisma's row cursor, so a later page does not depend on the
+ * cursor row still existing or still matching the export filter.
  */
-export async function getOrdersForExport(status?: OrderStatus) {
-  return prisma.order.findMany({
-    where: status ? { status } : undefined,
-    take: EXPORT_ROW_LIMIT,
-    orderBy: { createdAt: "desc" },
-    include: {
-      user: { select: { name: true, email: true, phone: true } },
-      event: { select: { title: true } },
-      items: {
-        include: { ticketCategory: { select: { name: true } } },
+export async function* iterateOrdersForExport(
+  status?: OrderStatus,
+  batchSize: number = EXPORT_BATCH_SIZE,
+): AsyncGenerator<OrderForExport[]> {
+  if (!Number.isInteger(batchSize) || batchSize < 1) {
+    throw new Error("Export batch size must be a positive integer");
+  }
+
+  let cursor: { createdAt: Date; id: string } | undefined;
+  for (;;) {
+    const afterCursor: Prisma.OrderWhereInput | undefined = cursor
+      ? {
+          OR: [
+            { createdAt: { lt: cursor.createdAt } },
+            { createdAt: cursor.createdAt, id: { lt: cursor.id } },
+          ],
+        }
+      : undefined;
+
+    const batch = await prisma.order.findMany({
+      where: {
+        ...(status ? { status } : {}),
+        ...(afterCursor ?? {}),
       },
-      payments: {
-        orderBy: { createdAt: "desc" },
-        select: { provider: true },
-      },
-    },
-  });
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: batchSize,
+      include: exportOrderInclude,
+    });
+
+    if (batch.length === 0) return;
+    yield batch;
+    if (batch.length < batchSize) return;
+
+    const last = batch[batch.length - 1]!;
+    cursor = { createdAt: last.createdAt, id: last.id };
+  }
 }
 
 export async function getOrderForAdmin(orderId: string) {
@@ -126,10 +169,14 @@ export async function getOrderForAdmin(orderId: string) {
     const refundedCents = payment.refunds
       .filter((refund) => refund.status === "succeeded")
       .reduce((sum, refund) => sum + refund.amountCents, 0);
+    const committedRefundCents = payment.refunds
+      .filter((refund) => refund.status === "processing" || refund.status === "succeeded")
+      .reduce((sum, refund) => sum + refund.amountCents, 0);
     return {
       ...payment,
       refundedCents,
-      remainingRefundableCents: payment.amountCents - refundedCents,
+      committedRefundCents,
+      remainingRefundableCents: Math.max(0, payment.amountCents - committedRefundCents),
     };
   });
 
