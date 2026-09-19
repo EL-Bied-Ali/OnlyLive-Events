@@ -98,5 +98,25 @@ export function getPaymentProviderByName(provider: string): PaymentProvider {
 
 /** Choose the default provider only when creating a new Payment. */
 export function getPaymentProvider(): PaymentProvider {
-  return getPaymentProviderByName(process.env.PAYMENT_PROVIDER ?? "fake");
+  const raw = process.env.PAYMENT_PROVIDER?.trim();
+  if (!raw) {
+    // The previous `?? "fake"` only catches null/undefined, not a blank
+    // string — so a Vercel environment where PAYMENT_PROVIDER exists but is
+    // empty (e.g. scoped to the wrong Git branch; see TASKS.md's Preview
+    // environment-variable scoping writeup for the real incident this
+    // traces back to) silently fell through to "fake" or, worse, reached
+    // getPaymentProviderByName("") and crashed instrumentation.ts's boot
+    // check with the generic, misleading "Unsupported persisted payment
+    // provider: " (empty) error. On Vercel this is always a configuration
+    // bug, never an intentional default, so it fails fast and explicitly
+    // here instead. Outside Vercel, defaulting to the fake sandbox provider
+    // is deliberate and keeps local development frictionless.
+    if (process.env.VERCEL_ENV?.trim()) {
+      throw new Error(
+        "PAYMENT_PROVIDER is required on Vercel and was missing or blank — check this environment's variable scoping",
+      );
+    }
+    return getPaymentProviderByName("fake");
+  }
+  return getPaymentProviderByName(raw);
 }

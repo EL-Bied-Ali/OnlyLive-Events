@@ -90,6 +90,33 @@ describe("ChariPay configuration guard", () => {
     expect(() => getPaymentProvider()).toThrow(/chari_sk_live_/);
   });
 
+  it("fails fast and explicitly when PAYMENT_PROVIDER is missing or blank on Vercel", () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("PAYMENT_PROVIDER", "");
+    expect(() => getPaymentProvider()).toThrow(/PAYMENT_PROVIDER is required on Vercel/);
+
+    vi.stubEnv("PAYMENT_PROVIDER", "   ");
+    expect(() => getPaymentProvider()).toThrow(/PAYMENT_PROVIDER is required on Vercel/);
+  });
+
+  it("still defaults to the fake sandbox provider outside Vercel when PAYMENT_PROVIDER is unset", () => {
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("PAYMENT_PROVIDER", "");
+    expect(getPaymentProvider().name).toBe("fake");
+  });
+
+  it("leaves valid charipay/fake resolution unchanged", () => {
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("PAYMENT_PROVIDER", "fake");
+    expect(getPaymentProvider().name).toBe("fake");
+
+    configureBase();
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("CHARIPAY_ENV", "sandbox");
+    vi.stubEnv("CHARIPAY_API_KEY", testKey("test"));
+    expect(getPaymentProvider().name).toBe("charipay");
+  });
+
   it("requires a canonical HTTPS public origin", () => {
     vi.stubEnv("ONLYLIVE_PUBLIC_URL", "http://preview.example.com");
     expect(() => getOnlyLivePublicUrl()).toThrow(/HTTPS/);
