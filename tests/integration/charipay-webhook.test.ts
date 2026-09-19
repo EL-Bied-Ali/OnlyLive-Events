@@ -146,16 +146,44 @@ describe("ChariPay webhook route", () => {
     const fixture = await createChariPendingOrder({ quantity: 2, priceCents: 12_500 });
     enableChariPay();
     const eventId = crypto.randomUUID();
-    const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
+    const sensitiveEcho = "sensitive-buyer@example.com";
+    const payload = {
+      ...paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      ProviderEchoedCustomer: sensitiveEcho,
+    };
 
     const first = await chariWebhookPost(signedRequest(payload, "payment.succeeded", eventId));
     expect(first.status).toBe(200);
     await expect(first.json()).resolves.toMatchObject({ ok: true, outcome: "paid" });
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(2);
 
+    const storedEvent = await prisma.paymentEvent.findUniqueOrThrow({
+      where: { provider_externalEventId: { provider: "charipay", externalEventId: eventId } },
+    });
+    expect(storedEvent.rawPayload).toMatchObject({
+      version: "charipay_webhook_fingerprint_v1",
+      fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      topLevelKeys: expect.arrayContaining(["Amount", "ProviderEchoedCustomer", "metadata"]),
+    });
+    const storedJson = JSON.stringify(storedEvent.rawPayload);
+    expect(storedJson).not.toContain(sensitiveEcho);
+    expect(storedJson).not.toContain(fixture.payment.id);
+    expect(storedJson).not.toContain(fixture.order.id);
+
     const duplicate = await chariWebhookPost(signedRequest(payload, "payment.succeeded", eventId));
     expect(duplicate.status).toBe(200);
     await expect(duplicate.json()).resolves.toMatchObject({ ok: true, duplicate: true });
+
+    // Backward compatibility with pre-hardening rows that stored the complete
+    // provider JSON: a historical unprocessed/processed event must still be
+    // recognized by fingerprinting the legacy value on read.
+    await prisma.paymentEvent.update({
+      where: { id: storedEvent.id },
+      data: { rawPayload: payload },
+    });
+    const legacyDuplicate = await chariWebhookPost(signedRequest(payload, "payment.succeeded", eventId));
+    expect(legacyDuplicate.status).toBe(200);
+    await expect(legacyDuplicate.json()).resolves.toMatchObject({ ok: true, duplicate: true });
 
     const collision = await chariWebhookPost(signedRequest(
       { ...payload, metadata: { onlylivePaymentId: fixture.payment.id, onlyliveOrderId: fixture.order.id, changed: true } },
@@ -258,7 +286,11 @@ describe("ChariPay webhook route", () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
     const eventId = crypto.randomUUID();
-    const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
+    const sensitiveProviderValue = "failed-buyer@example.com";
+    const payload = {
+      ...paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      UnexpectedCustomerEcho: sensitiveProviderValue,
+    };
 
     const [first, duplicate] = await Promise.all([
       chariWebhookPost(signedRequest(payload, "payment.failed", eventId)),
@@ -270,6 +302,19 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.auditLog.count({
       where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: eventId },
     })).toBe(1);
+    const evidence = await prisma.auditLog.findFirstOrThrow({
+      where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: eventId },
+    });
+    expect(evidence.metadata).toMatchObject({
+      provider: "charipay",
+      eventType: "payment.failed",
+      payloadEvidence: {
+        version: "charipay_webhook_fingerprint_v1",
+        fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+      },
+    });
+    expect(JSON.stringify(evidence.metadata)).not.toContain(sensitiveProviderValue);
+    expect(JSON.stringify(evidence.metadata)).not.toContain(fixture.payment.id);
   });
 
   it("does not misclassify an unknown signed provider event type as payment.failed", async () => {
@@ -460,8 +505,9 @@ describe("ChariPay webhook route", () => {
     // would defeat the whole point of failing closed instead of guessing.
     enableChariPay();
     const eventId = crypto.randomUUID();
+    const sensitiveProviderValue = "refund-buyer@example.com";
     const response = await chariWebhookPost(signedRequest({
-      totallyUnfamiliarField: "some-provider-native-shape",
+      totallyUnfamiliarField: sensitiveProviderValue,
       nested: { alsoUnfamiliar: 12345 },
     }, "refund.succeeded", eventId));
 
@@ -474,6 +520,19 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.auditLog.count({
       where: { action: "refund.webhook_shape_unverified", metadata: { path: ["externalEventId"], equals: eventId } },
     })).toBe(1);
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: "refund.webhook_shape_unverified", metadata: { path: ["externalEventId"], equals: eventId } },
+    });
+    expect(audit.metadata).toMatchObject({
+      eventType: "refund.succeeded",
+      payloadEvidence: {
+        version: "charipay_webhook_fingerprint_v1",
+        fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        topLevelKeys: ["nested", "totallyUnfamiliarField"],
+      },
+    });
+    expect(JSON.stringify(audit.metadata)).not.toContain(sensitiveProviderValue);
+    expect(JSON.stringify(audit.metadata)).not.toContain("12345");
   });
 
   it("acknowledges an authentic provider refund that has no local Refund row without ever looking it up", async () => {
