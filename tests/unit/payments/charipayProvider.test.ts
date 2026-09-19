@@ -87,11 +87,11 @@ describe("ChariPayProvider", () => {
     });
   });
 
-  it("never exposes provider-controlled API error prose through ProviderRequestError.message", async () => {
+  it("never exposes provider-controlled API diagnostics through ProviderRequestError", async () => {
     const sensitiveMessage = "rejected buyer@example.com token=secret-value";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(response({
-      error: { code: "BAD_REQUEST", message: sensitiveMessage },
-      correlationId: "corr-safe-error-message",
+      error: { code: "BAD REQUEST buyer@example.com", message: sensitiveMessage },
+      correlationId: "corr buyer@example.com secret-value",
     }, 400)));
 
     await expect(new ChariPayProvider().createPayment({
@@ -107,9 +107,9 @@ describe("ChariPayProvider", () => {
       expiresAt: new Date(Date.now() + 60_000),
     })).rejects.toMatchObject({
       name: "ProviderRequestError",
-      message: "ChariPay request failed (BAD_REQUEST)",
-      providerCode: "BAD_REQUEST",
-      correlationId: "corr-safe-error-message",
+      message: "ChariPay request failed (HTTP_400)",
+      providerCode: "HTTP_400",
+      correlationId: undefined,
       outcomeUnknown: false,
     });
 
