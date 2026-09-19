@@ -820,6 +820,43 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   Postgres's session-dependent default conversion — a real migration to
   plan deliberately, not a quick follow-up.
 
+## Completed (Resend + ChariPay preview end-to-end smoke test — 2026-09-19/20)
+
+- First real, human-driven proof of the full paid-order chain on a live
+  Vercel Preview deployment (`feat/charipay-integration`, commit `8fd422b`):
+  real customer signup/login → real reservation/hold → real ChariPay
+  **sandbox** hosted checkout (documented test card, no real money) →
+  signed webhook → order `paid` → ticket issued (`Statut : Valide`) →
+  durable `EmailOutbox` row → `POST /api/internal/dispatch-emails` →
+  Resend → delivered to a real inbox and confirmed received by the user.
+- Dispatcher call 1: `{claimed:1, sent:1, retried:0, permanentlyFailed:0,
+  skipped:0}`. Dispatcher call 2 (immediately after, same backlog):
+  `{claimed:0, sent:0, ...}` — confirmed idempotent, no duplicate send.
+- Also drained a **pre-existing** backlog of 6 queued-but-unsent emails
+  from earlier development/testing before the real purchase, which is what
+  surfaced the finding below.
+- **Real gap found, not just a smoke-test artifact**: `vercel.json` only
+  defines a cron for `/api/internal/sweep-expired-holds`; there is no
+  scheduled trigger for `/api/internal/dispatch-emails` at all. The durable
+  outbox itself is correct, but nothing was actually calling the dispatcher
+  in this environment — the 6 stuck emails are direct proof. Filed as
+  GitHub issue #48 (GPT). Do not consider Resend delivery production-ready
+  until #48 is resolved.
+- **Also found**: ChariPay's post-payment browser return redirect (never
+  authoritative — the signed webhook is what actually confirmed payment
+  here) pointed at a stale/misconfigured URL
+  (`onlylive-events-git-feat-charipay-ebf143-...vercel.app`) that 404'd.
+  Cosmetic only — the real confirmation path was unaffected — but a real
+  customer would land on a 404 immediately after paying. Not yet filed as
+  its own issue; raised with GPT to fold into #48 or its own small PR.
+- Sender was still the shared `onboarding@resend.dev` address with
+  `RESEND_TEST_RECIPIENT` forcing delivery to one real inbox for this test
+  — this proves the delivery *mechanism*, not a verified production sending
+  domain. A verified `RESEND_FROM_EMAIL` domain remains required before
+  real customers can be emailed; see item 2 under "Next" below (only
+  partially resolved by this entry — the pipeline is proven, the domain is
+  not).
+
 ## Next
 
 0. **Resolved, was never a code bug**: an earlier draft of this file
@@ -881,12 +918,16 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    genuine decline within the recognized card-processing path rather
    than an upstream PAN rejection.
    against the real provider.
-2. Activate the Resend transactional-email account/domain and run a real
-   delivery/bounce smoke test. The provider adapter is now implemented from
-   Resend's official API contract, forwards the EmailOutbox id as the provider
-   idempotency key, and distinguishes retryable from permanent provider
-   failures. Production still needs RESEND_API_KEY + a verified
-   RESEND_FROM_EMAIL; no real credentials are committed.
+2. **Delivery pipeline now proven end-to-end on Preview (2026-09-19/20, see
+   "Completed" above); production sending domain still open.** The full
+   EmailOutbox → dispatcher → Resend chain was exercised with a real paid
+   order and confirmed delivered/idempotent. What remains: verify a real
+   `RESEND_FROM_EMAIL` sending domain for production (today's test used the
+   shared `onboarding@resend.dev` address + `RESEND_TEST_RECIPIENT`
+   override, not a production-ready sender), add production
+   `RESEND_API_KEY`, and resolve #48 (no scheduled trigger for
+   `dispatch-emails` — the outbox currently only drains when someone calls
+   it manually).
 3. **Production database recovery — provider decision/documentation done,
    provisioning drill still open.** Neon is the selected production Postgres
    target and `docs/DATABASE_RECOVERY.md` now defines separate production
@@ -919,7 +960,7 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   new credentials. Real production go-live additionally requires OnlyLive
   merchant/KYB approval and live credentials; no production secret should
   be committed or pasted here.
-- Real email delivery is blocked on creating/configuring the Resend account, verifying the sending domain, and adding production credentials.
+- Real email delivery is no longer blocked at the pipeline level — proven end-to-end on Preview 2026-09-19/20 (see "Completed" above). Production delivery is still blocked on verifying a real sending domain (today's test used the shared `onboarding@resend.dev` address) and adding production `RESEND_API_KEY`/`RESEND_FROM_EMAIL`; see #48 for the still-open scheduling gap.
 - Legal document drafting is blocked on legal/accountant review and ChariPay's
   final merchant/go-live requirements.
 
