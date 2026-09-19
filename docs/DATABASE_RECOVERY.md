@@ -23,15 +23,18 @@ Do not reuse the ChariPay sandbox project as production.
 
 ## Recovery objectives
 
-Initial production targets, to be proven by a recovery drill before go-live:
+Initial production targets, to be proven by recovery drills before go-live:
 
-- **RPO target:** no more than 5 minutes of committed business data.
-- **RTO target:** restore verified service within 30 minutes.
+- **Primary recovery (Neon PITR):** RPO <= 5 minutes and RTO <= 30 minutes.
+- **Provider/account-loss fallback (independent logical backup):** RPO <= 24
+  hours and initial RTO <= 4 hours.
 - **Provider restore window:** at least 7 days of Neon history/PITR.
 - **Independent logical backup:** at least once per day, retained for 30 days.
 
-The RPO/RTO numbers are operational targets, not provider guarantees. They
-remain unverified until the first timed restore drill succeeds.
+These are operational objectives, not provider guarantees. The primary and
+independent-backup targets cover different failure classes; the daily logical
+backup does not provide a five-minute RPO if the Neon project/account itself is
+unavailable. All targets remain unverified until timed restore drills succeed.
 
 The independent logical backup is intentional. Neon PITR protects very well
 against bad migrations and application/operator mistakes inside a project, but
@@ -182,8 +185,9 @@ exercise, at minimum:
 Do **not** send real PSP refunds, mutate live PSP state, or send real customer
 email during a restore drill.
 
-Record start/end time. The drill only passes if the measured recovery meets the
-RTO target and all invariants/smoke checks pass.
+Record start/end time. Record which recovery class is being tested. The drill
+only passes if the measured recovery meets that class's RTO target and all
+invariants/smoke checks pass.
 
 ## Post-restore data validation
 
