@@ -59,17 +59,19 @@ describe("getEmailProvider", () => {
     vi.stubEnv("RESEND_FROM_EMAIL", "tickets@onlylive.test");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "");
     vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("VERCEL_TARGET_ENV", "production");
     vi.stubEnv("NODE_ENV", "production");
 
     expect(getEmailProvider().name).toBe("resend");
   });
 
-  it("allows the Resend test-recipient redirect on Vercel Preview", () => {
+  it("allows the Resend test-recipient redirect on the standard Vercel Preview target", () => {
     vi.stubEnv("EMAIL_PROVIDER", "resend");
     vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
     vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
     vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_TARGET_ENV", "preview");
     vi.stubEnv("NODE_ENV", "production");
 
     expect(isResendTestRecipientAllowed()).toBe(true);
@@ -82,10 +84,24 @@ describe("getEmailProvider", () => {
     vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
     vi.stubEnv("VERCEL_ENV", "production");
+    vi.stubEnv("VERCEL_TARGET_ENV", "production");
     vi.stubEnv("NODE_ENV", "production");
 
     expect(isResendTestRecipientAllowed()).toBe(false);
-    expect(() => getEmailProvider()).toThrow(/only allowed on Vercel Preview/);
+    expect(() => getEmailProvider()).toThrow(/standard Vercel Preview target/);
+  });
+
+  it("refuses the Resend test-recipient redirect on a Vercel custom target", () => {
+    vi.stubEnv("EMAIL_PROVIDER", "resend");
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
+    vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_TARGET_ENV", "staging");
+    vi.stubEnv("NODE_ENV", "production");
+
+    expect(isResendTestRecipientAllowed()).toBe(false);
+    expect(() => getEmailProvider()).toThrow(/standard Vercel Preview target/);
   });
 
   it("refuses the Resend test-recipient redirect in non-Vercel production", () => {
@@ -94,6 +110,7 @@ describe("getEmailProvider", () => {
     vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
     vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("VERCEL_TARGET_ENV", "");
     vi.stubEnv("NODE_ENV", "production");
 
     expect(isResendTestRecipientAllowed()).toBe(false);
@@ -106,6 +123,7 @@ describe("getEmailProvider", () => {
     vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
     vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("VERCEL_TARGET_ENV", "");
     vi.stubEnv("NODE_ENV", "");
 
     expect(isResendTestRecipientAllowed()).toBe(false);
@@ -122,6 +140,7 @@ describe("getEmailProvider", () => {
     vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
     vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("VERCEL_TARGET_ENV", "");
     vi.stubEnv("NODE_ENV", "development");
 
     expect(isResendTestRecipientAllowed()).toBe(true);
@@ -134,6 +153,7 @@ describe("getEmailProvider", () => {
     vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
     vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("VERCEL_TARGET_ENV", "");
     vi.stubEnv("NODE_ENV", "test");
 
     expect(isResendTestRecipientAllowed()).toBe(true);
@@ -146,6 +166,7 @@ describe("getEmailProvider", () => {
     vi.stubEnv("RESEND_FROM_EMAIL", "ONBOARDING@RESEND.DEV");
     vi.stubEnv("RESEND_TEST_RECIPIENT", "");
     vi.stubEnv("VERCEL_ENV", "preview");
+    vi.stubEnv("VERCEL_TARGET_ENV", "preview");
     vi.stubEnv("NODE_ENV", "production");
 
     expect(() => getEmailProvider()).toThrow(/requires RESEND_TEST_RECIPIENT/);
