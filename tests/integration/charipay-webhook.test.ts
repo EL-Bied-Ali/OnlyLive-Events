@@ -163,7 +163,7 @@ describe("ChariPay webhook route", () => {
     expect(storedEvent.rawPayload).toMatchObject({
       version: "charipay_webhook_fingerprint_v1",
       fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
-      topLevelKeys: expect.arrayContaining(["Amount", "ProviderEchoedCustomer", "metadata"]),
+      topLevelFieldCount: Object.keys(payload).length,
     });
     const storedJson = JSON.stringify(storedEvent.rawPayload);
     expect(storedJson).not.toContain(sensitiveEcho);
@@ -528,11 +528,34 @@ describe("ChariPay webhook route", () => {
       payloadEvidence: {
         version: "charipay_webhook_fingerprint_v1",
         fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
-        topLevelKeys: ["nested", "totallyUnfamiliarField"],
+        topLevelFieldCount: 2,
       },
     });
     expect(JSON.stringify(audit.metadata)).not.toContain(sensitiveProviderValue);
     expect(JSON.stringify(audit.metadata)).not.toContain("12345");
+  });
+
+  it("does not retain provider-controlled JSON property names in unverified-shape evidence", async () => {
+    enableChariPay();
+    const sensitivePropertyName = "buyer@example.com";
+    const eventId = crypto.randomUUID();
+    const response = await chariWebhookPost(signedRequest({
+      [sensitivePropertyName]: "otherwise harmless value",
+    }, "refund.succeeded", eventId));
+
+    expect(response.status).toBe(202);
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: { action: "refund.webhook_shape_unverified", metadata: { path: ["externalEventId"], equals: eventId } },
+    });
+    const serialized = JSON.stringify(audit.metadata);
+    expect(serialized).not.toContain(sensitivePropertyName);
+    expect(audit.metadata).toMatchObject({
+      payloadEvidence: {
+        version: "charipay_webhook_fingerprint_v1",
+        fingerprint: expect.stringMatching(/^[0-9a-f]{64}$/),
+        topLevelFieldCount: 1,
+      },
+    });
   });
 
   it("acknowledges an authentic provider refund that has no local Refund row without ever looking it up", async () => {
