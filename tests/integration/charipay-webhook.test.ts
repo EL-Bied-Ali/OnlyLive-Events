@@ -122,6 +122,90 @@ describe("ChariPay webhook route", () => {
     await expect(response.json()).resolves.toMatchObject({ ok: true, test: true });
   });
 
+  it("bounds audit amplification when one signed body is relabeled into early fail-closed event types", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    const lookupSpy = enableChariPay();
+    const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
+    const rawBody = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const signature = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(`${timestamp}.${rawBody}`)
+      .digest("hex");
+    const ids = Array.from({ length: 8 }, () => crypto.randomUUID());
+
+    const relabeled = (eventId: string, type: "refund.succeeded" | "payment.failed") =>
+      new NextRequest("https://preview.onlylive.example/api/payments/webhook/charipay", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-chari-signature": signature,
+          "x-chari-timestamp": timestamp,
+          "chari-event-id": eventId,
+          "chari-event-type": type,
+        },
+        body: rawBody,
+      });
+
+    for (let index = 0; index < 6; index += 1) {
+      const type = index % 2 === 0 ? "refund.succeeded" : "payment.failed";
+      const response = await chariWebhookPost(relabeled(ids[index]!, type));
+      expect(response.status).toBe(202);
+      const body = await response.json();
+      expect(body.replayRateLimited).not.toBe(true);
+    }
+
+    for (let index = 6; index < 8; index += 1) {
+      const type = index % 2 === 0 ? "refund.succeeded" : "payment.failed";
+      const response = await chariWebhookPost(relabeled(ids[index]!, type));
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        reconciliationRequired: true,
+        replayRateLimited: true,
+      });
+    }
+
+    // These paths fail closed before Payment resolution / provider ledger I/O.
+    expect(lookupSpy).not.toHaveBeenCalled();
+    expect(await prisma.paymentEvent.count({ where: { paymentId: fixture.payment.id } })).toBe(0);
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+
+    const relevantAudits = await prisma.auditLog.findMany({
+      where: {
+        action: {
+          in: [
+            "refund.webhook_shape_unverified",
+            "charipay.payment_failed_shape_unverified",
+          ],
+        },
+      },
+      select: { action: true, entityId: true, metadata: true },
+    });
+    const ourIds = new Set(ids);
+    const matching = relevantAudits.filter((row) => {
+      if (row.action === "charipay.payment_failed_shape_unverified") {
+        return ourIds.has(row.entityId);
+      }
+      const metadata = row.metadata;
+      return Boolean(
+        metadata
+        && typeof metadata === "object"
+        && !Array.isArray(metadata)
+        && typeof (metadata as Record<string, unknown>).externalEventId === "string"
+        && ourIds.has((metadata as Record<string, unknown>).externalEventId as string),
+      );
+    });
+    expect(matching).toHaveLength(6);
+    const recordedIds = new Set(matching.map((row) =>
+      row.action === "charipay.payment_failed_shape_unverified"
+        ? row.entityId
+        : ((row.metadata as Record<string, unknown>).externalEventId as string),
+    ));
+    expect(recordedIds.has(ids[6]!)).toBe(false);
+    expect(recordedIds.has(ids[7]!)).toBe(false);
+  });
+
   it("processes a historical ChariPay payment after the default provider changes", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
