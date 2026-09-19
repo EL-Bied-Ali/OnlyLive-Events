@@ -50,19 +50,21 @@ test("a customer can only ever update their own phone number, never another cust
   await pageB.getByRole("button", { name: "Créer mon compte" }).click();
   await pageB.waitForURL("/");
 
-  // The request body carries only a phone value, never a target user id —
-  // requireCustomer() derives the id to update solely from B's own session.
-  // Confirm directly against the database that this can only ever change
-  // the caller's own row, never A's.
-  const ownUpdate = await pageB.request.patch("/api/customers/phone", {
-    data: { phone: "0633333333" },
-  });
-  expect(ownUpdate.ok()).toBe(true);
-
   const owner = await prisma.user.findFirstOrThrow({ where: { email: `phone-owner-${suffix}@test.onlylive.ma` } });
+
+  // B actually attempts to smuggle A's id into the update — updatePhoneSchema
+  // (a Zod object schema, which strips unrecognized keys by default) must
+  // drop it, and requireCustomer() must be what actually decides whose row
+  // is targeted, not anything client-supplied. Confirmed directly against
+  // the database: this only ever changes B's own row, never A's.
+  const spoofedUpdate = await pageB.request.patch("/api/customers/phone", {
+    data: { phone: "0633333333", userId: owner.id, id: owner.id },
+  });
+  expect(spoofedUpdate.ok()).toBe(true);
+
   const other = await prisma.user.findFirstOrThrow({ where: { email: `phone-other-${suffix}@test.onlylive.ma` } });
   expect(other.phone).toBe("+212633333333");
-  expect(owner.phone).toBe("+212611111111");
+  await expect(prisma.user.findUniqueOrThrow({ where: { id: owner.id } })).resolves.toMatchObject({ phone: "+212611111111" });
 
   await contextA.close();
   await contextB.close();
