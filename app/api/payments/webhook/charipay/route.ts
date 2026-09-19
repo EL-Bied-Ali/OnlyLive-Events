@@ -376,8 +376,8 @@ export async function POST(request: NextRequest) {
         },
       });
       if (
-        existingEvent?.processedAt !== null
-        && existingEvent !== null
+        existingEvent
+        && existingEvent.processedAt !== null
         && consistentClaim(existingEvent, payment.id, event)
       ) {
         return NextResponse.json({ ok: true, duplicate: true });
