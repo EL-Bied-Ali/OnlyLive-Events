@@ -300,7 +300,7 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     });
     expect(row.status).toBe("pending");
     expect(row.attemptCount).toBe(1);
-    expect(row.lastErrorCode).toContain("simulated transient outage");
+    expect(row.lastErrorCode).toBe("email_dispatch_internal_error");
     expect(row.nextAttemptAt.getTime()).toBeGreaterThan(before);
 
     // Not immediately reclaimed: nextAttemptAt is in the future. Scoped to
@@ -335,6 +335,34 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     expect(row.lastErrorCode).toBe("validation_error");
   });
 
+  it("sanitizes an unsafe provider error before persisting or logging it", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await postWebhook(fixture, "payment.succeeded");
+
+    const sensitiveProviderMessage = `upstream rejected recipient=${fixture.user.email} body={"token":"secret"}`;
+    const originalSend = ConsoleEmailProvider.prototype.send;
+    vi.spyOn(ConsoleEmailProvider.prototype, "send").mockImplementation(function (this: ConsoleEmailProvider, input) {
+      if (input.to === fixture.user.email) {
+        return Promise.reject(new EmailProviderError(sensitiveProviderMessage, false, 422));
+      }
+      return originalSend.call(this, input);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await dispatchPendingEmails();
+
+    const row = await prisma.emailOutbox.findFirstOrThrow({
+      where: { type: "order_confirmation", entityType: "order", entityId: fixture.order.id },
+    });
+    expect(row.status).toBe("failed");
+    expect(row.lastErrorCode).toBe("email_provider_error");
+
+    const loggedText = errorSpy.mock.calls.map((args) => args.join(" ")).join("\n");
+    expect(loggedText).not.toContain(fixture.user.email);
+    expect(loggedText).not.toContain("secret");
+    expect(loggedText).toContain("error=email_provider_error");
+  });
+
   it("a rendering exception for one row is retried on its own and never blocks another row in the same batch", async () => {
     const throwingFixture = await createOrderAwaitingPayment({ quantity: 1 });
     await postWebhook(throwingFixture, "payment.succeeded");
@@ -367,7 +395,7 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     // and not stuck in "processing" for the full lease window.
     expect(throwingRow.status).toBe("pending");
     expect(throwingRow.attemptCount).toBe(1);
-    expect(throwingRow.lastErrorCode).toContain("simulated transient render failure");
+    expect(throwingRow.lastErrorCode).toBe("email_dispatch_internal_error");
   });
 
   it("never logs the raw recipient address or full error object on a send failure", async () => {
@@ -388,7 +416,9 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
 
     const loggedText = errorSpy.mock.calls.map((args) => args.join(" ")).join("\n");
     expect(loggedText).not.toContain(fixture.user.email);
+    expect(loggedText).not.toContain("simulated transient outage");
     expect(loggedText).toContain("recipientHash=");
+    expect(loggedText).toContain("error=email_dispatch_internal_error");
   });
 
   it("permanently fails a row once it exhausts its retry budget, and stops attempting it", async () => {
