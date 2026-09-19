@@ -4,7 +4,7 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { createHold } from "@/lib/inventory";
 import { startCheckout } from "@/lib/orders/checkout";
-import { reconcileExpiredCheckouts } from "@/lib/orders/checkoutReconciliation";
+import { reconcileExpiredCheckouts, recordPaymentReconciliationAttention } from "@/lib/orders/checkoutReconciliation";
 import { ChariPayProvider } from "@/lib/payments/charipayProvider";
 import { FakeProvider, signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
 import { POST as fakeWebhookPost } from "@/app/api/payments/webhook/fake/route";
@@ -141,6 +141,63 @@ describe("expired hosted checkout reconciliation", () => {
     expect(payment.status).toBe("awaiting_payment");
     expect(inventory.reservedQuantity).toBe(1);
     expect(attention).not.toBeNull();
+  });
+
+  it("keeps one attention row, refreshes later diagnostics, and deduplicates concurrent writers", async () => {
+    const fixture = await setupExpiredCheckout();
+    const payment = {
+      paymentId: fixture.payment.id,
+      orderId: fixture.orderId,
+      provider: "charipay",
+      providerPaymentId: fixture.payment.providerPaymentId,
+    };
+    const auditFilter = {
+      action: "payment.checkout_reconciliation_required",
+      entityType: "Payment",
+      entityId: fixture.payment.id,
+    } as const;
+
+    await recordPaymentReconciliationAttention(
+      payment,
+      "provider_transaction_lookup_failed",
+      { status: 503, correlationId: "corr-first" },
+    );
+    await recordPaymentReconciliationAttention(
+      payment,
+      "provider_session_close_unconfirmed",
+      {
+        providerStatus: "SESSION_NOT_ACTIVE",
+        httpStatus: 409,
+        providerCode: "SESSION_NOT_ACTIVE",
+        correlationId: "corr-second",
+      },
+    );
+
+    let rows = await prisma.auditLog.findMany({ where: auditFilter });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.metadata).toMatchObject({
+      firstReason: "provider_transaction_lookup_failed",
+      reason: "provider_session_close_unconfirmed",
+      occurrences: 2,
+      providerStatus: "SESSION_NOT_ACTIVE",
+      httpStatus: 409,
+      providerCode: "SESSION_NOT_ACTIVE",
+      correlationId: "corr-second",
+    });
+    expect((rows[0]?.metadata as Record<string, unknown>).status).toBeUndefined();
+
+    await Promise.all([
+      recordPaymentReconciliationAttention(payment, "provider_session_close_unconfirmed", { correlationId: "corr-third" }),
+      recordPaymentReconciliationAttention(payment, "provider_session_close_unconfirmed", { correlationId: "corr-fourth" }),
+    ]);
+
+    rows = await prisma.auditLog.findMany({ where: auditFilter });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.metadata).toMatchObject({
+      firstReason: "provider_transaction_lookup_failed",
+      reason: "provider_session_close_unconfirmed",
+      occurrences: 4,
+    });
   });
 
   it("persists ChariPay's diagnostic cancel-response fields without letting them authorize release", async () => {

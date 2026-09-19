@@ -1,4 +1,5 @@
 import "server-only";
+import type { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getPaymentProviderByName } from "@/lib/payments";
 import { ProviderRequestError, type ClosePaymentSessionResult, type PaymentStatusLookupResult } from "@/lib/payments/provider";
@@ -117,58 +118,100 @@ async function deferPayment(paymentId: string, retryAfterMs?: number): Promise<v
 }
 
 /**
- * Records (once per payment) that a reconciliation attempt — whether from
- * the expired-checkout batch worker or the customer-triggered on-demand
- * path below — hit an unresolved or failed provider lookup. Shared across
- * both callers so a given payment's stuck state surfaces to admins exactly
- * once regardless of which path noticed it first, instead of each caller
- * keeping its own audit trail (and instead of a poll interval spamming a
- * new row on every attempt).
+ * Keep one reconciliation-attention row per Payment while preserving useful
+ * changes in diagnosis over time. Repeated workers must not spam AuditLog, but
+ * the first observed reason must not freeze the row forever either: a later
+ * provider response can be materially more useful to an operator.
  *
- * Known limitation (flagged by independent audit (GPT) reviewing the
- * ChariPay cancel-response diagnostics — see TASKS.md's acceptance #14
- * writeup): because this is a create-once, no-overwrite row, a later call
- * with genuinely new diagnostic detail (e.g. a first attempt's transient
- * lookup failure, followed by a second attempt's real 409 SESSION_NOT_ACTIVE
- * from the provider) is silently dropped rather than enriching the existing
- * row. Not fixed here — the fresh sandbox exercise this diagnostic PR exists
- * for is expected to hit this function at most once per payment, so it does
- * not block that exercise — but a real recurring case would lose the more
- * informative later diagnostics.
+ * AuditLog has no uniqueness constraint for this action/entity pair, so an
+ * advisory transaction lock serializes the read/create-or-update sequence for
+ * a given Payment. This also makes the documented "one row per payment"
+ * property true under concurrent workers rather than only in serial execution.
+ *
+ * The row stores the first reason plus the latest diagnostic snapshot. We do
+ * not merge arbitrary old provider fields into the latest snapshot because a
+ * stale status/correlation id attached to a newer reason would be misleading.
  */
 export async function recordPaymentReconciliationAttention(
   payment: ReconcilablePayment,
   reason: string,
   metadata: Record<string, string | number | boolean | null | undefined> = {},
 ): Promise<void> {
-  const existing = await prisma.auditLog.findFirst({
-    where: {
-      action: "payment.checkout_reconciliation_required",
-      entityType: "Payment",
-      entityId: payment.paymentId,
-    },
-    select: { id: true },
-  });
-  if (existing) return;
-
   const safeMetadata = Object.fromEntries(
     Object.entries(metadata).filter(([, value]) => value !== undefined),
   ) as Record<string, string | number | boolean | null>;
 
-  await prisma.auditLog.create({
-    data: {
-      actorType: "system",
-      action: "payment.checkout_reconciliation_required",
-      entityType: "Payment",
-      entityId: payment.paymentId,
-      metadata: {
-        orderId: payment.orderId,
-        provider: payment.provider,
-        providerPaymentIdPresent: Boolean(payment.providerPaymentId),
-        reason,
-        ...safeMetadata,
+  await prisma.$transaction(async (tx) => {
+    const lockKey = `payment-reconciliation-attention:${payment.paymentId}`;
+    await tx.$queryRaw<Array<{ locked: boolean }>>`
+      SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS locked
+    `;
+
+    const existing = await tx.auditLog.findFirst({
+      where: {
+        action: "payment.checkout_reconciliation_required",
+        entityType: "Payment",
+        entityId: payment.paymentId,
       },
-    },
+      select: { id: true, metadata: true },
+    });
+
+    const baseMetadata = {
+      orderId: payment.orderId,
+      provider: payment.provider,
+      providerPaymentIdPresent: Boolean(payment.providerPaymentId),
+    };
+
+    if (!existing) {
+      await tx.auditLog.create({
+        data: {
+          actorType: "system",
+          action: "payment.checkout_reconciliation_required",
+          entityType: "Payment",
+          entityId: payment.paymentId,
+          metadata: {
+            ...baseMetadata,
+            firstReason: reason,
+            reason,
+            occurrences: 1,
+            ...safeMetadata,
+          },
+        },
+      });
+      return;
+    }
+
+    const previousMetadata =
+      existing.metadata
+      && typeof existing.metadata === "object"
+      && !Array.isArray(existing.metadata)
+        ? existing.metadata as Prisma.JsonObject
+        : {};
+    const firstReason =
+      typeof previousMetadata.firstReason === "string"
+        ? previousMetadata.firstReason
+        : typeof previousMetadata.reason === "string"
+          ? previousMetadata.reason
+          : reason;
+    const previousOccurrences =
+      typeof previousMetadata.occurrences === "number"
+      && Number.isSafeInteger(previousMetadata.occurrences)
+      && previousMetadata.occurrences >= 1
+        ? previousMetadata.occurrences
+        : 1;
+
+    await tx.auditLog.update({
+      where: { id: existing.id },
+      data: {
+        metadata: {
+          ...baseMetadata,
+          firstReason,
+          reason,
+          occurrences: previousOccurrences + 1,
+          ...safeMetadata,
+        },
+      },
+    });
   });
 }
 
