@@ -47,6 +47,11 @@ const CHARIPAY_WEBHOOK_STATUS_VERIFY_RATE_LIMIT = {
   windowMs: 5 * 60 * 1000,
 } as const;
 
+const CHARIPAY_UNVERIFIED_SHAPE_REPLAY_RATE_LIMIT = {
+  limit: 6,
+  windowMs: 5 * 60 * 1000,
+} as const;
+
 type WebhookResult =
   | { kind: "duplicate" }
   | { kind: "event_collision" }
@@ -344,6 +349,34 @@ export async function POST(request: NextRequest) {
     }
 
     const isRefundEvent = event.type === "refund.succeeded" || event.type === "refund.failed";
+
+    const hitsUnverifiedShapeGate =
+      (isRefundEvent && !CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED && Boolean(event.externalEventId))
+      || (
+        headers["chari-event-type"] === "payment.failed"
+        && event.type === "payment.failed"
+        && !CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED
+        && Boolean(event.externalEventId)
+      );
+    if (hitsUnverifiedShapeGate) {
+      const replayBudget = await consumeRateLimit(
+        buildRateLimitKey(
+          "charipay_shape_replay",
+          webhookFingerprint(event.raw),
+        ),
+        CHARIPAY_UNVERIFIED_SHAPE_REPLAY_RATE_LIMIT,
+      );
+      if (!replayBudget.allowed) {
+        return NextResponse.json(
+          {
+            ok: true,
+            reconciliationRequired: true,
+            replayRateLimited: true,
+          },
+          { status: 202 },
+        );
+      }
+    }
 
     // This must run BEFORE the generic payloadValid gate below: payloadValid
     // itself depends on the unverified guessed refund fields (RefundAmount/
