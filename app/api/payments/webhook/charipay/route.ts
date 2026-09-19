@@ -489,6 +489,11 @@ export async function POST(request: NextRequest) {
           orderExternalId: payment.orderId,
           amountCents: payment.amountCents,
           currency: payment.currency,
+          // ChariPay warns that ~10s webhook handlers trigger redeliveries and
+          // can eventually suspend an endpoint. Keep the synchronous ledger
+          // verification comfortably below that delivery budget; a timeout
+          // fails closed with 503 and is safe for provider retry.
+          requestTimeoutMs: 5_000,
         });
       } catch {
         await recordPaymentWebhookStatusAudit(
