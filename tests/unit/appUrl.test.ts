@@ -16,10 +16,25 @@ describe("getAppBaseUrl", () => {
     expect(() => getAppBaseUrl()).toThrow("must be a valid URL");
   });
 
-  it("allows http on a local loopback host even in production", () => {
+  it("rejects http loopback in production without the explicit E2E opt-in", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXTAUTH_URL", "http://localhost:3100");
-    expect(getAppBaseUrl()).toBe("http://localhost:3100");
+    vi.stubEnv("ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION", "");
+    expect(() => getAppBaseUrl()).toThrow("must use https in production");
+  });
+
+  it("allows http loopback in production only with the explicit E2E opt-in", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXTAUTH_URL", "http://127.0.0.1:3100");
+    vi.stubEnv("ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION", "true");
+    expect(getAppBaseUrl()).toBe("http://127.0.0.1:3100");
+  });
+
+  it("the E2E opt-in never exempts a non-loopback http URL", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXTAUTH_URL", "http://tickets.onlylive.ma");
+    vi.stubEnv("ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION", "true");
+    expect(() => getAppBaseUrl()).toThrow("must use https in production");
   });
 
   it("requires https in production for a non-local host", () => {
