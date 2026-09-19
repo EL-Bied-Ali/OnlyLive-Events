@@ -574,6 +574,29 @@ running this migration — not a concern for the app's current state.
   correlation fields and proves the thrown diagnostics do not retain it.
 
 
+
+## Completed (ChariPay webhook payload minimization — branch fix/charipay-webhook-payload-retention)
+
+- OnlyLive no longer persists full ChariPay webhook bodies in
+  `payment_events.raw_payload` or the unverified-shape audit records.
+  Provider payloads are third-party controlled and may gain customer/provider
+  fields over time; storing the whole signed body created unnecessary
+  long-lived data exposure.
+- New ChariPay event records retain only versioned evidence: a SHA-256
+  fingerprint of canonical JSON plus sorted top-level field names. That is
+  sufficient for duplicate/event-collision consistency checks and shape
+  diagnostics without retaining provider values.
+- Collision/replay logic is backward compatible with historical rows that
+  contain the old full JSON: those legacy values are fingerprinted on read, so
+  no data migration is required and an old event can still be retried safely.
+- Exact provider bodies needed to pin a newly observed webhook shape remain
+  available from ChariPay's own authenticated webhook-events journal rather
+  than being duplicated indefinitely in OnlyLive.
+- Integration coverage proves verified events, payment.failed shape evidence
+  and refund shape evidence omit injected customer-like values while
+  duplicate/collision behavior (including a legacy full-body row) is preserved.
+
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
