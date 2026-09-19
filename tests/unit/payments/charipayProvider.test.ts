@@ -519,8 +519,6 @@ describe("ChariPayProvider", () => {
       await new ChariPayProvider().refund({
         providerPaymentId: "ps-sensitive",
         paymentExternalId: "payment-sensitive",
-        orderExternalId: "order-sensitive",
-        paymentAmountCents: 1_000,
         amountCents: 500,
         currency: "MAD",
         reason: "test",
