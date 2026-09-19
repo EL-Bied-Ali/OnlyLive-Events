@@ -474,6 +474,33 @@ describe("ChariPayProvider", () => {
     }
   });
 
+  it("does not turn provider values into a field hint", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response({
+        error: { code: "MISSING_PARAMETER", message: "Missing required parameter: buyer@example.com" },
+        correlationId: "corr-missing-sensitive-looking-value",
+      }, 400)),
+    );
+    try {
+      await new ChariPayProvider().refund({
+        providerPaymentId: "ps",
+        paymentExternalId: "payment",
+        amountCents: 1000,
+        currency: "MAD",
+        reason: "test",
+        idempotencyKey: "refund-missing-no-hint",
+      });
+      throw new Error("expected provider failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      expect(error).toMatchObject({
+        providerCode: "MISSING_PARAMETER",
+        providerFieldHint: undefined,
+      });
+    }
+  });
+
   it("parses the provider's own machine error code onto providerCode for diagnostics", async () => {
     vi.stubGlobal(
       "fetch",
