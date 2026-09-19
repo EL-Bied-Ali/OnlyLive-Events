@@ -157,6 +157,11 @@ export class ProviderRequestError extends Error {
     public readonly correlationId?: string,
     /** Provider's own short machine error code (e.g. "BAD_REQUEST"), when parseable. Never a secret. */
     public readonly providerCode?: string,
+    /**
+     * Strictly sanitized field-name hint extracted from a provider validation
+     * message (e.g. "walletId"). Never the raw provider message or a value.
+     */
+    public readonly providerFieldHint?: string,
   ) {
     super(message);
     this.name = "ProviderRequestError";
