@@ -43,14 +43,19 @@ export function getEmailProvider(): EmailProvider {
     );
   }
 
-  if (
-    provider === "resend"
-    && process.env.RESEND_TEST_RECIPIENT?.trim()
-    && !isResendTestRecipientAllowed()
-  ) {
-    throw new Error(
-      "RESEND_TEST_RECIPIENT is only allowed on Vercel Preview or in a local non-production runtime",
-    );
+  if (provider === "resend") {
+    const testRecipient = process.env.RESEND_TEST_RECIPIENT?.trim();
+
+    if (testRecipient && !isResendTestRecipientAllowed()) {
+      throw new Error(
+        "RESEND_TEST_RECIPIENT is only allowed on Vercel Preview or in a local non-production runtime",
+      );
+    }
+
+    const from = process.env.RESEND_FROM_EMAIL?.trim().toLowerCase();
+    if (from?.endsWith("@resend.dev") && !testRecipient) {
+      throw new Error("A resend.dev test sender requires RESEND_TEST_RECIPIENT");
+    }
   }
 
   switch (provider) {
