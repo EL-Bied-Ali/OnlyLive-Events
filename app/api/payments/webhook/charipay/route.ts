@@ -182,8 +182,8 @@ export async function POST(request: NextRequest) {
         // evidence action. Serialize by provider event id so two concurrent
         // deliveries cannot both pass a read-then-create race and violate the
         // exactly-once evidence guarantee.
-        await tx.$queryRaw`
-          SELECT pg_advisory_xact_lock(hashtextextended(${event.externalEventId}, 0))
+        await tx.$queryRaw<Array<{ locked: boolean }>>`
+          SELECT pg_advisory_xact_lock(hashtextextended(${event.externalEventId}, 0)) IS NULL AS locked
         `;
         const alreadyRecorded = await tx.auditLog.findFirst({
           where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: event.externalEventId },
