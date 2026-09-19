@@ -289,8 +289,12 @@ async function parseApiResponse(
       : responseCorrelationId(response);
     const providerFieldHint = extractProviderFieldHint(code, message);
     const providerMessageHint = redactProviderMessage(code, message, knownValues);
+    // Never retain provider-controlled prose in Error.message: callers may
+    // log an exception object or its message. Keep only our fixed prefix plus
+    // the machine code; sandbox-only diagnostics live in providerMessageHint,
+    // which is separately redacted and never used as the thrown message.
     throw new ProviderRequestError(
-      `ChariPay ${code}: ${message}`,
+      `ChariPay request failed (${code})`,
       outcomeUnknown,
       response.status,
       parseRetryAfterMs(response.headers.get("retry-after")),
@@ -812,10 +816,8 @@ export class ChariPayProvider implements PaymentProvider {
       };
     }
 
-    const error = body.error as { message?: unknown } | undefined;
-    const message = typeof error?.message === "string" ? error.message : "ChariPay session cancellation failed";
     throw new ProviderRequestError(
-      `ChariPay ${code}: ${message}`,
+      `ChariPay session cancellation failed (${code})`,
       isRetryableOrAmbiguousStatus(response.status),
       response.status,
       parseRetryAfterMs(response.headers.get("retry-after")),
