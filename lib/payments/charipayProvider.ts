@@ -182,11 +182,27 @@ function parseRetryAfterMs(value: string | null): number | undefined {
   return Math.max(0, date - Date.now());
 }
 
+const SAFE_PROVIDER_CODE = /^[A-Za-z0-9_]{1,64}$/;
+const SAFE_CORRELATION_ID = /^[A-Za-z0-9._:-]{1,128}$/;
+
+function safeProviderCode(value: unknown, status: number): string {
+  return typeof value === "string" && SAFE_PROVIDER_CODE.test(value)
+    ? value
+    : `HTTP_${status}`;
+}
+
+function safeCorrelationId(value: unknown): string | undefined {
+  return typeof value === "string" && SAFE_CORRELATION_ID.test(value)
+    ? value
+    : undefined;
+}
+
 function responseCorrelationId(response: Response): string | undefined {
-  return response.headers.get("x-correlation-id")
-    ?? response.headers.get("correlation-id")
-    ?? response.headers.get("x-request-id")
-    ?? undefined;
+  for (const name of ["x-correlation-id", "correlation-id", "x-request-id"]) {
+    const value = safeCorrelationId(response.headers.get(name));
+    if (value) return value;
+  }
+  return undefined;
 }
 
 async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
@@ -281,12 +297,10 @@ async function parseApiResponse(
   const body = await readJsonResponse(response);
   if (!response.ok) {
     const error = body.error as { code?: unknown; message?: unknown } | undefined;
-    const code = typeof error?.code === "string" ? error.code : `HTTP_${response.status}`;
+    const code = safeProviderCode(error?.code, response.status);
     const message = typeof error?.message === "string" ? error.message : "ChariPay request failed";
     const outcomeUnknown = isRetryableOrAmbiguousStatus(response.status) || code === "IDEMPOTENCY_CONFLICT";
-    const correlationId = typeof body.correlationId === "string"
-      ? body.correlationId
-      : responseCorrelationId(response);
+    const correlationId = safeCorrelationId(body.correlationId) ?? responseCorrelationId(response);
     const providerFieldHint = extractProviderFieldHint(code, message);
     const providerMessageHint = redactProviderMessage(code, message, knownValues);
     // Never retain provider-controlled prose in Error.message: callers may
@@ -314,9 +328,9 @@ function normalizeRefundStatus(value: unknown): RefundStatusResult["status"] | n
   return null;
 }
 
-function apiErrorCode(body: Record<string, unknown>): string | undefined {
+function apiErrorCode(body: Record<string, unknown>, status: number): string {
   const error = body.error as { code?: unknown } | undefined;
-  return typeof error?.code === "string" ? error.code : undefined;
+  return safeProviderCode(error?.code, status);
 }
 
 export class ChariPayProvider implements PaymentProvider {
@@ -793,7 +807,7 @@ export class ChariPayProvider implements PaymentProvider {
       if (error instanceof ProviderRequestError) throw error;
       throw new ProviderRequestError("ChariPay session cancellation response could not be read", true, response.status);
     }
-    const code = apiErrorCode(body) ?? `HTTP_${response.status}`;
+    const code = apiErrorCode(body, response.status);
 
     // 410 is the other provider state that proves a checkout can no longer be
     // paid. In contrast, 409 may mean already paid OR already cancelled; never
