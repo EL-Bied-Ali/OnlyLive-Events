@@ -182,7 +182,7 @@ describe("ChariPay webhook route", () => {
       },
       select: { action: true, entityId: true, metadata: true },
     });
-    const ourIds = new Set(ids);
+    const ourIds = new Set<string>(ids);
     const matching = relevantAudits.filter((row) => {
       if (row.action === "charipay.payment_failed_shape_unverified") {
         return ourIds.has(row.entityId);
