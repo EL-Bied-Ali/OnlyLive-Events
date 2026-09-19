@@ -1213,5 +1213,14 @@
     "status": "pass",
     "testFile": "scripts/recovery-smoke.sql",
     "note": "CI runs this with psql and ON_ERROR_STOP immediately after Prisma migrations. It validates SQL/schema drift but does not replace a timed restore drill from an actual backup."
+  },
+  {
+    "id": "resend-charipay-preview-e2e-smoke-2026-09-19",
+    "scenario": "A human-driven real purchase on Vercel Preview (real login, real reservation/hold, real ChariPay sandbox hosted checkout, signed webhook) results in a paid order with a valid ticket, and the durable EmailOutbox/dispatcher/Resend chain delivers exactly one confirmation email to a real inbox, confirmed received; a second dispatcher call proves idempotency (claimed:0)",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": null,
+    "note": "One-time manual verification, not an automated regression test — see TASKS.md's 'Resend + ChariPay preview end-to-end smoke test' entry for the full account, including two real gaps found: #48 (no scheduled trigger for dispatch-emails) and a stale/misconfigured post-payment browser-redirect URL (cosmetic, webhook path unaffected)."
   }
 ]
