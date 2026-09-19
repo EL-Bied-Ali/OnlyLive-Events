@@ -444,6 +444,36 @@ describe("ChariPayProvider", () => {
     }
   });
 
+  it("extracts only a sanitized missing-field hint from a MISSING_PARAMETER message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response({
+        error: { code: "MISSING_PARAMETER", message: "Missing required parameter: walletId" },
+        correlationId: "corr-missing-wallet",
+      }, 400)),
+    );
+    try {
+      await new ChariPayProvider().refund({
+        providerPaymentId: "ps",
+        paymentExternalId: "payment",
+        amountCents: 1000,
+        currency: "MAD",
+        reason: "test",
+        idempotencyKey: "refund-missing-field",
+      });
+      throw new Error("expected provider failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      expect(error).toMatchObject({
+        outcomeUnknown: false,
+        status: 400,
+        providerCode: "MISSING_PARAMETER",
+        providerFieldHint: "walletId",
+        correlationId: "corr-missing-wallet",
+      });
+    }
+  });
+
   it("parses the provider's own machine error code onto providerCode for diagnostics", async () => {
     vi.stubGlobal(
       "fetch",
