@@ -211,9 +211,17 @@ function responseCorrelationId(response: Response): string | undefined {
   return undefined;
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutMs =
+    Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+      ? Math.min(requestTimeoutMs, REQUEST_TIMEOUT_MS)
+      : REQUEST_TIMEOUT_MS;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
@@ -702,6 +710,7 @@ export class ChariPayProvider implements PaymentProvider {
         method: "GET",
         headers: { "X-CHARI-PAY-API-KEY": requiredEnv("CHARIPAY_API_KEY") },
       },
+      input.requestTimeoutMs,
     );
     const body = (await parseApiResponse(response)) as ChariPayTransactionListResponse;
     if (!Array.isArray(body.data) || typeof body.hasMore !== "boolean") {
