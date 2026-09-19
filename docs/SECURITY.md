@@ -76,11 +76,12 @@ docs/PAYMENTS.md), Auth.js/admin session tokens, admin CSRF tokens,
 `NEXTAUTH_SECRET`, `ADMIN_SESSION_SECRET`, `FAKE_PSP_WEBHOOK_SECRET`, raw QR
 validation tokens presented to the scanner, and raw ChariPay API error prose.
 ChariPay diagnostics retain only bounded machine codes/correlation ids plus a
-sandbox-only redacted provider-message hint. Webhook payloads stored in
-`payment_events.raw_payload` for the fake provider contain no secrets by
-construction (just `{eventId, providerPaymentId, type, amountCents,
-currency}`); a real PSP adapter must redact its payload before storage if
-its webhooks ever include anything sensitive.
+sandbox-only redacted provider-message hint. Fake-provider webhook payloads in
+`payment_events.raw_payload` contain no secrets by construction (just
+`{eventId, providerPaymentId, type, amountCents, currency}`). ChariPay event
+rows do **not** retain the provider body: they store only a versioned SHA-256
+canonical-payload fingerprint plus top-level field names, and the same
+value-free evidence is used by unverified-shape audit records.
 
 ## Structured logging / error responses
 
