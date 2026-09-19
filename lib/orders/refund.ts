@@ -345,6 +345,7 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
             correlationId: error.correlationId,
             providerCode: error.providerCode,
             providerFieldHint: error.providerFieldHint,
+            providerMessageHint: error.providerMessageHint,
           }
         : { name: "unknown" },
     );
