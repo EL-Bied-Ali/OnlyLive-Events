@@ -340,10 +340,19 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     await postWebhook(fixture, "payment.succeeded");
 
     const sensitiveProviderMessage = `upstream rejected recipient=${fixture.user.email} body={"token":"secret"}`;
+    const unsafeProviderError = new EmailProviderError(
+      sensitiveProviderMessage,
+      false,
+      422,
+      sensitiveProviderMessage,
+    );
+    expect(unsafeProviderError.message).toBe("email_provider_error");
+    expect(unsafeProviderError.providerCode).toBeUndefined();
+
     const originalSend = ConsoleEmailProvider.prototype.send;
     vi.spyOn(ConsoleEmailProvider.prototype, "send").mockImplementation(function (this: ConsoleEmailProvider, input) {
       if (input.to === fixture.user.email) {
-        return Promise.reject(new EmailProviderError(sensitiveProviderMessage, false, 422));
+        return Promise.reject(unsafeProviderError);
       }
       return originalSend.call(this, input);
     });
