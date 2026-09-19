@@ -220,20 +220,107 @@ describe("ChariPay webhook route", () => {
     expect(rows[0]!.recipientEmail).toBe(fixture.user.email);
   });
 
-  it("enqueues a payment_failed row atomically with the payment.failed transaction", async () => {
+  it("acknowledges a signed payment.failed with 202 and never mutates state, since its shape is unverified", async () => {
+    // payment.failed shares payment.succeeded's guessed Amount/metadata
+    // envelope by extrapolation only (charipayProvider.ts's parseWebhook) —
+    // CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED gates it closed before
+    // any lookup/mutation runs, exactly like the refund gate below. This
+    // used to assert the old (unsafe) processed behavior; it now proves
+    // the opposite on purpose.
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
     const response = await chariWebhookPost(signedRequest(
       paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
       "payment.failed",
     ));
-    expect(response.status).toBe(200);
-    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "failed" });
-    const rows = await prisma.emailOutbox.findMany({
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "awaiting_payment" });
+    await expect(prisma.order.findUniqueOrThrow({ where: { id: fixture.order.id } })).resolves.toMatchObject({ status: "pending_payment" });
+    expect(await prisma.emailOutbox.count({
       where: { type: "payment_failed", entityType: "order", entityId: fixture.order.id },
+    })).toBe(0);
+  });
+
+  it("reaches the payment.failed unverified-shape gate even with a malformed/unexpected body, instead of being rejected by guessed payload validation", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const response = await chariWebhookPost(signedRequest(
+      { thisFieldDoesNotExistOnAnyRealChariPayPayload: true },
+      "payment.failed",
+    ));
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "awaiting_payment" });
+  });
+
+  it("records the payment.failed unverified-shape evidence exactly once for a duplicate/replayed delivery", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const eventId = crypto.randomUUID();
+    const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
+
+    const first = await chariWebhookPost(signedRequest(payload, "payment.failed", eventId));
+    expect(first.status).toBe(202);
+    const replay = await chariWebhookPost(signedRequest(payload, "payment.failed", eventId));
+    expect(replay.status).toBe(202);
+
+    expect(await prisma.auditLog.count({
+      where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: eventId },
+    })).toBe(1);
+  });
+
+  it("still rejects an invalid signature before the payment.failed unverified-shape gate", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const eventId = crypto.randomUUID();
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.failed",
+      eventId,
+      "0".repeat(64),
+    ));
+    expect(response.status).toBe(401);
+    // Scoped by this test's own eventId: this shared, persistent test
+    // database accumulates rows from other tests' own payment.failed events.
+    expect(await prisma.auditLog.count({
+      where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: eventId },
+    })).toBe(0);
+  });
+
+  it("never applies the payment.failed unverified-shape gate to payment.succeeded or refund.* events", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const succeededEventId = crypto.randomUUID();
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+      succeededEventId,
+    ));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, outcome: "paid" });
+    expect(await prisma.auditLog.count({
+      where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: succeededEventId },
+    })).toBe(0);
+
+    const admin = await createAdmin();
+    vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({ providerRefundId: "rf_gate_scope", state: "processing" });
+    const initiated = await initiateRefund({
+      paymentId: fixture.payment.id,
+      amountCents: fixture.payment.amountCents,
+      reason: "Gate scope test",
+      actorId: admin.id,
     });
-    expect(rows).toHaveLength(1);
-    expect(rows[0]!.status).toBe("pending");
+    const refundEventId = crypto.randomUUID();
+    const refundResponse = await chariWebhookPost(signedRequest({
+      RefundId: "rf_gate_scope",
+      RefundAmount: fixture.payment.amountCents / 100,
+      metadata: { onlyliveRefundId: initiated.refundId, onlylivePaymentId: fixture.payment.id },
+    }, "refund.failed", refundEventId));
+    expect(refundResponse.status).toBe(202);
+    expect(await prisma.auditLog.count({
+      where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: refundEventId },
+    })).toBe(0);
   });
 
   it("enqueues a reconciliation alert atomically when payment.succeeded resolves to paid_but_unfulfillable", async () => {
