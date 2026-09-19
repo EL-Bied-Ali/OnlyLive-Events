@@ -26,6 +26,11 @@ export const runtime = "nodejs";
  * charipayProvider.ts's parseWebhook comments). Set this true once a real
  * refund.* delivery is captured and parseWebhook is corrected against it;
  * until then refund events are acknowledged but never auto-finalized.
+ *
+ * TODO(flip-this-flag): CHARIPAY_UNVERIFIED_SHAPE_REPLAY_RATE_LIMIT below
+ * only bounds this path while the flag is false. Once flipped, refund
+ * events fall through to the isRefundEvent finalize branch, which has no
+ * dedicated rate limit of its own — add one alongside flipping this.
  */
 const CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED = false;
 
