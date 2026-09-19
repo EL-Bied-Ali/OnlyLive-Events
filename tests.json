@@ -1204,5 +1204,14 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/integration/customerPhone.test.ts"
+  },
+  {
+    "id": "recovery-smoke-current-schema",
+    "scenario": "Post-restore recovery smoke SQL remains valid against the current fully migrated schema and core recovery invariants are zero on a fresh database",
+    "category": "recovery",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "scripts/recovery-smoke.sql",
+    "note": "CI runs this with psql and ON_ERROR_STOP immediately after Prisma migrations. It validates SQL/schema drift but does not replace a timed restore drill from an actual backup."
   }
 ]

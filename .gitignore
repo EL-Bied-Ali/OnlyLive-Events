@@ -17,6 +17,10 @@
 /test-results/
 /coverage/
 
+# database backups (never commit production data)
+*.dump
+*.backup
+
 # misc
 .DS_Store
 *.pem

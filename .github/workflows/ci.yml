@@ -90,6 +90,9 @@ jobs:
           npx prisma migrate deploy
           DATABASE_URL="$TEST_DATABASE_URL" npx prisma migrate deploy
 
+      - name: Validate recovery smoke SQL against current schema
+        run: psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f scripts/recovery-smoke.sql
+
       - name: Unit + integration tests
         run: npm test
 

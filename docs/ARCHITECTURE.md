@@ -73,8 +73,11 @@ look for a `headless_shell` build that isn't preinstalled here. Elsewhere,
 a normal `npx playwright install` (or an already-correct preinstalled
 browser) makes this unnecessary — leave the env var unset.
 
-Production deployment should target a managed Postgres
-(Neon/Supabase/RDS — **not yet decided**) compatible with Vercel.
+Production managed Postgres target is **Neon**, provisioned as a project
+separate from every Preview/sandbox database. The production project itself is
+not provisioned yet; recovery objectives, PITR/logical-backup layers and the
+mandatory pre-go-live restore drill are defined in
+`docs/DATABASE_RECOVERY.md`.
 
 ## Deployment migrations
 

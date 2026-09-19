@@ -887,8 +887,21 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    idempotency key, and distinguishes retryable from permanent provider
    failures. Production still needs RESEND_API_KEY + a verified
    RESEND_FROM_EMAIL; no real credentials are committed.
-3. Decide the production managed-Postgres provider and document/test the
-   backup/restore strategy required by `CLAUDE.md`.
+3. **Production database recovery — provider decision/documentation done,
+   provisioning drill still open.** Neon is the selected production Postgres
+   target and `docs/DATABASE_RECOVERY.md` now defines separate production
+   provisioning, a >=7-day PITR target, daily independent logical backups,
+   RPO/RTO targets, and a mandatory restore drill. A read-only
+   `scripts/recovery-smoke.sql` validates core inventory/ticket/payment
+   invariants after restore; CI executes it on a freshly migrated empty test
+   database to catch schema/SQL drift, and `.gitignore` blocks common dump
+   artifacts.
+   Still required before go-live: provision the separate production Neon
+   project, choose/verify its region against Vercel, configure paid recovery
+   retention + independent backup storage, and complete a timed restore drill.
+   Do not infer the current Vercel Preview database from the connected Neon
+   project named for the sandbox: read-only inspection on 2026-09-19 found
+   that project contains no application tables.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
    requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
 5. Stage Vercel WAF rate-limit rules in log mode before production, observe
