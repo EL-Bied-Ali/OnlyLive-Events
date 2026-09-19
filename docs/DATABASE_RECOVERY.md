@@ -51,16 +51,19 @@ Before the first production deployment:
    the resulting recurring cost before enabling it.
 4. Protect the production branch against accidental deletion if the selected
    Neon plan supports that control.
-5. Generate a dedicated production database role/credential. Never paste the
-   connection string into Git, issues, PRs, logs or documentation.
-6. Set Vercel Production's `DATABASE_URL` only in the encrypted environment
+5. Generate a dedicated production application role/credential. Never paste
+   a connection string into Git, issues, PRs, logs or documentation.
+6. Set Vercel Production's `DATABASE_URL` only in encrypted environment
    configuration. Preview must continue using a non-production database.
-7. Run `npm run vercel-build` once against production before accepting
+7. Provision a separate **direct/unpooled** backup connection/credential for
+   the trusted backup runner. Do not point `pg_dump` at the serverless
+   runtime pooler merely because the application uses it.
+8. Run `npm run vercel-build` once against production before accepting
    traffic. A migration failure must block deployment.
-8. Configure the independent daily logical backup destination and encryption
+9. Configure the independent daily logical backup destination and encryption
    before public sales open.
-9. Run and record the restore drill described below.
-10. Only after the restore drill and the other go-live gates pass may the
+10. Run and record the restore drill described below.
+11. Only after the restore drill and the other go-live gates pass may the
     database task be considered production-ready.
 
 ## Runtime and migration connection
@@ -109,28 +112,32 @@ database recovery. Payment truth must still be reconciled against the PSP.
 ## Layer 2: independent logical backup
 
 Create a daily custom-format PostgreSQL dump from a trusted operator/backup
-runner:
+runner. Use a **direct/unpooled** Neon connection for this job rather than the
+serverless application's pooled runtime connection.
 
 ```bash
 umask 077
-pg_dump "$PRODUCTION_DATABASE_URL" \
+backup_file="onlylive-$(date -u +%Y%m%dT%H%M%SZ).dump"
+
+pg_dump "$BACKUP_DATABASE_URL" \
   --format=custom \
   --no-owner \
   --no-acl \
-  --file="onlylive-$(date -u +%Y%m%dT%H%M%SZ).dump"
+  --file="$backup_file"
+
+sha256sum "$backup_file" > "$backup_file.sha256"
 ```
 
-Immediately compute and store a SHA-256 checksum beside the encrypted backup:
-
-```bash
-sha256sum onlylive-*.dump > onlylive-backup.sha256
-```
+`BACKUP_DATABASE_URL` is a backup-runner secret, not an application runtime
+variable. It should use the direct Neon endpoint and the narrowest role that
+has enough privileges to dump the complete application database. Validate
+those grants after schema changes.
 
 Requirements:
 
 - encrypt at rest and in transit;
-- destination credentials must be separate from the application database
-  credentials;
+- the backup runner must use a direct/unpooled connection and credentials
+  separate from the application runtime credential;
 - never upload dumps to GitHub artifacts, the repository, application logs or
   a public bucket;
 - keep at least 30 daily restore points initially;
