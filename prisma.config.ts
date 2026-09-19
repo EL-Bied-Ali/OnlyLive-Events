@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
+import { hardenPostgresSslMode } from "./lib/postgresConnection";
 
 export default defineConfig({
   schema: "prisma/schema.prisma",
@@ -13,7 +14,9 @@ export default defineConfig({
     // `prisma generate` doesn't need it, and `migrate`/`db push` will
     // still fail with Prisma's own clear error if it's genuinely absent
     // when one of those commands actually needs a connection.
-    url: process.env.DATABASE_URL,
+    url: process.env.DATABASE_URL
+      ? hardenPostgresSslMode(process.env.DATABASE_URL)
+      : undefined,
   },
   migrations: {
     seed: "tsx prisma/seed.ts",
