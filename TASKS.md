@@ -628,6 +628,41 @@ running this migration — not a concern for the app's current state.
   not consume an extra provider lookup.
 
 
+## Completed (ChariPay webhook ledger-check rate limit — branch fix/charipay-webhook-ledger-check-ratelimit, fix-forward on PR #41)
+
+- PR #41 bound header-claimed `payment.succeeded`/`payment.failed` outcomes to
+  ChariPay's authenticated transaction ledger. GPT's independent second-pass
+  audit of that PR (per the two-layer audit convention) flagged a real P2 it
+  had missed: `Chari-Event-Id`/`Chari-Event-Type` are unsigned delivery
+  headers, so one legitimately-signed body can be replayed with many
+  fabricated ids/types inside the accepted timestamp window. Each fabricated
+  id misses the `existingEvent` dedup (keyed on `externalEventId`) and would
+  otherwise force a fresh authenticated `lookupPaymentStatus` call every
+  single time — no financial mutation is possible
+  (`confirmOrderPayment`/`failOrderPayment` are order-status guarded), but it
+  could quietly burn ChariPay API quota and grow unbounded harmless
+  `payment_events` rows with no audit signal.
+- Fixed by capping ledger-lookup attempts per Payment (not per source IP,
+  since `payment.orderId`/`amountCents`/`currency` come from the signed body
+  itself, so every fabricated replay targeting one payment shares the same
+  key regardless of the unsigned id/type used) via the existing
+  Postgres-backed `lib/rateLimit.ts` (`{ limit: 20, windowMs: 15 min }`,
+  same fixed-window primitive already used by `customers/phone` and
+  `orders/[orderId]/reconcile-payment`). Exceeding it returns `429` with
+  `Retry-After` before the provider is ever called; genuine same-event-id
+  redeliveries are unaffected since they still short-circuit before reaching
+  the limiter. No new audit-log write was added for a trip — the
+  `rate_limit_buckets` table already is the queryable per-payment evidence
+  trail, and duplicating it as a second audit signal would be exactly the
+  redundant abstraction CLAUDE.md warns against.
+- New integration coverage proves: 20 fabricated-event-id replays against one
+  Payment all reach the ledger check, the 21st is rejected with `429` +
+  `Retry-After` and does not itself call the provider, and unlimited
+  redeliveries of the *same* event id never consume the budget at all.
+- Opened as draft PR against `feat/charipay-integration`; awaiting GPT's own
+  audit pass before merge, per the two-layer convention for anything
+  touching the payment path.
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`

@@ -15,6 +15,7 @@ import {
   enqueueReconciliationAlertEmail,
 } from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
+import { buildRateLimitKey, consumeRateLimit, rateLimitHeaders } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
@@ -40,6 +41,21 @@ const CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED = false;
  * auto-finalized, exactly like the refund gate above.
  */
 const CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED = false;
+
+/**
+ * Chari-Event-Id/Chari-Event-Type are unsigned delivery headers (the HMAC
+ * only covers timestamp + rawBody), so a single legitimately-signed body can
+ * be replayed with many fabricated ids/types inside the accepted timestamp
+ * window. Each fabricated id misses the existingEvent dedup (keyed on
+ * externalEventId) and would otherwise force a fresh authenticated
+ * lookupPaymentStatus call every time. No financial state can be mutated
+ * this way (confirmOrderPayment/failOrderPayment are order-status guarded),
+ * but it would silently burn ChariPay API quota. Cap ledger-lookup attempts
+ * per Payment — payment.orderId/amountCents/currency come from the signed
+ * body itself, so every fabricated replay targeting one payment shares the
+ * same key regardless of the unsigned id/type used.
+ */
+const CHARIPAY_WEBHOOK_LEDGER_CHECK_RATE_LIMIT = { limit: 20, windowMs: 15 * 60 * 1000 };
 
 type WebhookResult =
   | { kind: "duplicate" }
@@ -464,6 +480,17 @@ export async function POST(request: NextRequest) {
         && consistentClaim(existingEvent, payment.id, event)
       ) {
         return NextResponse.json({ ok: true, duplicate: true });
+      }
+
+      const ledgerCheckRateLimit = await consumeRateLimit(
+        buildRateLimitKey("charipay-webhook-ledger-check", payment.id),
+        CHARIPAY_WEBHOOK_LEDGER_CHECK_RATE_LIMIT,
+      );
+      if (!ledgerCheckRateLimit.allowed) {
+        return NextResponse.json(
+          { error: "PROVIDER_STATUS_VERIFICATION_RATE_LIMITED" },
+          { status: 429, headers: rateLimitHeaders(ledgerCheckRateLimit) },
+        );
       }
 
       const lookupPaymentStatus = provider.lookupPaymentStatus?.bind(provider);

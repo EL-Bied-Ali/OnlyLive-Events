@@ -164,6 +164,68 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
   });
 
+  it("caps repeated authenticated ledger lookups for one payment when the unsigned event id/type is varied (replay amplification)", async () => {
+    // Chari-Event-Id/Chari-Event-Type are unsigned delivery headers, so one
+    // legitimately-signed body can be replayed with many fabricated
+    // ids/types inside the accepted timestamp window. Each fabricated id
+    // misses the existingEvent dedup (keyed on externalEventId) and would
+    // otherwise force a fresh lookupPaymentStatus call every time. The route
+    // caps this at CHARIPAY_WEBHOOK_LEDGER_CHECK_RATE_LIMIT = { limit: 20 }
+    // per Payment.
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    const lookupSpy = enableChariPay();
+
+    for (let i = 0; i < 20; i += 1) {
+      const response = await chariWebhookPost(signedRequest(
+        paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+        "payment.succeeded",
+        crypto.randomUUID(),
+      ));
+      expect(response.status).toBe(200);
+    }
+    expect(lookupSpy).toHaveBeenCalledTimes(20);
+
+    const twentyFirst = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+      crypto.randomUUID(),
+    ));
+    expect(twentyFirst.status).toBe(429);
+    await expect(twentyFirst.json()).resolves.toMatchObject({ error: "PROVIDER_STATUS_VERIFICATION_RATE_LIMITED" });
+    expect(twentyFirst.headers.get("Retry-After")).toBeTruthy();
+    // The rejected attempt must not itself trigger yet another provider call.
+    expect(lookupSpy).toHaveBeenCalledTimes(20);
+    // Only the very first distinct event id actually fulfilled the order; the
+    // rate limit itself creates no PaymentEvent row for the 21st (rejected)
+    // attempt.
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
+  });
+
+  it("does not consume the per-payment ledger-check budget for an exact already-processed duplicate delivery", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    const lookupSpy = enableChariPay();
+    const eventId = crypto.randomUUID();
+    const request = () => signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+      eventId,
+    );
+
+    const first = await chariWebhookPost(request());
+    expect(first.status).toBe(200);
+    expect(lookupSpy).toHaveBeenCalledTimes(1);
+
+    // A genuine ChariPay redelivery of the SAME event must always be
+    // acknowledged for free, however many times it repeats, since it is
+    // short-circuited by the existingEvent dedup before the rate limiter.
+    for (let i = 0; i < 25; i += 1) {
+      const duplicate = await chariWebhookPost(request());
+      expect(duplicate.status).toBe(200);
+      await expect(duplicate.json()).resolves.toMatchObject({ ok: true, duplicate: true });
+    }
+    expect(lookupSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("never fulfills a header-claimed payment.succeeded when the authenticated ledger says failed", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     const lookupSpy = enableChariPay();
