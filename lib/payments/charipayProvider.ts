@@ -144,6 +144,11 @@ interface ChariPayTransactionListResponse {
 }
 
 interface ChariPayWebhookBody {
+  // OpenAPI receiver contract: Chari-Event-Id is the same UUID as the signed
+  // body's WebhookEventId. Treat that equality as part of the authenticated
+  // envelope rather than trusting the delivery header on its own.
+  WebhookEventId?: unknown;
+
   // Confirmed against a real signed sandbox delivery for payment.succeeded
   // (captured 2026-09-17 via ChariPay's partner webhook-events API,
   // GET /api/v1/partner/webhooks/events/{id}). ChariPay's own generated
@@ -395,7 +400,13 @@ export class ChariPayProvider implements PaymentProvider {
 
   async parseWebhook(input: ParseWebhookInput): Promise<ParsedWebhookEvent> {
     const signatureValid = verifySignature(input.rawBody, input.headers);
-    const eventId = input.headers["chari-event-id"] ?? "";
+    const eventIdHeader = input.headers["chari-event-id"] ?? "";
+    const signedEventId = typeof payload.WebhookEventId === "string" ? payload.WebhookEventId : undefined;
+    const eventId =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(eventIdHeader)
+      && signedEventId === eventIdHeader
+        ? eventIdHeader
+        : "";
     const eventTypeRaw = input.headers["chari-event-type"] ?? "";
     const supported = new Set<PaymentWebhookEventType>([
       "payment.succeeded",
@@ -486,6 +497,11 @@ export class ChariPayProvider implements PaymentProvider {
         ? payload.refundId
         : undefined;
 
+    // eventId above is present only when the delivery header is a UUID and
+    // exactly equals the signed body's WebhookEventId. This protects the
+    // deduplication key from header relabel/replay independently of the
+    // event-type outcome binding performed by the route.
+    //
     // A real captured payment.succeeded delivery confirmed metadata carries
     // BOTH onlylivePaymentId and onlyliveOrderId (createPayment() sends both
     // in the same metadata object — see createPayment() above), so a payment
