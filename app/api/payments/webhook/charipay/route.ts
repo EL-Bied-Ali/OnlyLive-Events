@@ -360,6 +360,103 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    if (!isRefundEvent) {
+      // ChariPay signs timestamp + "." + rawBody; Chari-Event-Type and
+      // Chari-Event-Id are separate headers and are not covered by that HMAC.
+      // An identical already-processed event is safe to acknowledge without a
+      // provider API call. Any new/unprocessed financial event must have its
+      // header-claimed outcome independently confirmed by the authenticated,
+      // already-pinned transaction ledger before it may mutate orders/tickets.
+      const existingEvent = await prisma.paymentEvent.findUnique({
+        where: {
+          provider_externalEventId: {
+            provider: provider.name,
+            externalEventId: event.externalEventId,
+          },
+        },
+      });
+      if (
+        existingEvent?.processedAt !== null
+        && existingEvent !== null
+        && consistentClaim(existingEvent, payment.id, event)
+      ) {
+        return NextResponse.json({ ok: true, duplicate: true });
+      }
+
+      const lookupPaymentStatus = provider.lookupPaymentStatus?.bind(provider);
+      if (!lookupPaymentStatus) {
+        await auditIntegrityMismatch("payment.webhook_status_verification_unavailable", payment.id, {
+          externalEventId: event.externalEventId,
+          eventType: event.type,
+          reason: "provider_lookup_not_supported",
+        });
+        return NextResponse.json(
+          { error: "PROVIDER_STATUS_VERIFICATION_UNAVAILABLE" },
+          { status: 503 },
+        );
+      }
+
+      let providerStatus: Awaited<ReturnType<typeof lookupPaymentStatus>>;
+      try {
+        providerStatus = await lookupPaymentStatus({
+          orderExternalId: payment.orderId,
+          amountCents: payment.amountCents,
+          currency: payment.currency,
+        });
+      } catch {
+        await auditIntegrityMismatch("payment.webhook_status_verification_unavailable", payment.id, {
+          externalEventId: event.externalEventId,
+          eventType: event.type,
+          reason: "provider_lookup_failed",
+        });
+        return NextResponse.json(
+          { error: "PROVIDER_STATUS_VERIFICATION_UNAVAILABLE" },
+          { status: 503 },
+        );
+      }
+
+      const expectedProviderStatus =
+        event.type === "payment.succeeded"
+          ? "succeeded"
+          : event.type === "payment.failed"
+            ? "failed"
+            : null;
+
+      if (expectedProviderStatus && providerStatus.status !== expectedProviderStatus) {
+        await auditIntegrityMismatch("payment.webhook_header_status_mismatch", payment.id, {
+          externalEventId: event.externalEventId,
+          eventType: event.type,
+          expectedProviderStatus,
+          observedProviderStatus: providerStatus.status,
+        });
+
+        // A terminal opposite outcome is a real contradiction, not a
+        // transient lookup failure. Acknowledge it so a relabeled/replayed
+        // signed body cannot jam the provider queue, but never mutate local
+        // financial state from the unbound header. Human/provider-status
+        // reconciliation owns the contradiction from here.
+        const terminalContradiction =
+          (event.type === "payment.succeeded"
+            && (providerStatus.status === "failed" || providerStatus.status === "cancelled"))
+          || (event.type === "payment.failed" && providerStatus.status === "succeeded");
+
+        if (terminalContradiction) {
+          return NextResponse.json(
+            { ok: true, reconciliationRequired: true },
+            { status: 202 },
+          );
+        }
+
+        // pending/not_found/ambiguous can be eventual-consistency or provider
+        // availability states. Fail closed with 5xx so ChariPay retries while
+        // the independent reconciliation worker can also recover the payment.
+        return NextResponse.json(
+          { error: "PROVIDER_STATUS_NOT_CONFIRMED" },
+          { status: 503 },
+        );
+      }
+    }
+
     const refundEvidence: RefundProviderEvidence | undefined = isRefundEvent ? {
       provider: provider.name,
       amountCents: event.amountCents,
