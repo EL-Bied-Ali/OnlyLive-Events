@@ -159,6 +159,7 @@ describe("ChariPay webhook route", () => {
       orderExternalId: fixture.order.id,
       amountCents: fixture.payment.amountCents,
       currency: "MAD",
+      requestTimeoutMs: 5_000,
     });
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
   });
