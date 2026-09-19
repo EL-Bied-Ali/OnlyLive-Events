@@ -480,6 +480,67 @@ describe("email dispatcher — send, retry, and business-state re-validation", (
     expect(calls).toHaveLength(1);
   });
 
+  it("a stale worker cannot overwrite a newer worker's terminal result after lease reclamation", async () => {
+    const fixture = await createOrderAwaitingPayment({ quantity: 1 });
+    await postWebhook(fixture, "payment.succeeded");
+
+    let signalSendStarted!: () => void;
+    let releaseSend!: () => void;
+    const sendStarted = new Promise<void>((resolve) => {
+      signalSendStarted = resolve;
+    });
+    const sendRelease = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+
+    const originalSend = ConsoleEmailProvider.prototype.send;
+    vi.spyOn(ConsoleEmailProvider.prototype, "send").mockImplementation(async function (this: ConsoleEmailProvider, input) {
+      if (input.to !== fixture.user.email) {
+        return originalSend.call(this, input);
+      }
+
+      signalSendStarted();
+      await sendRelease;
+      return { providerMessageId: "stale-worker-message" };
+    });
+
+    const staleDispatch = dispatchPendingEmails();
+    await sendStarted;
+
+    const claimed = await prisma.emailOutbox.findFirstOrThrow({
+      where: { type: "order_confirmation", entityType: "order", entityId: fixture.order.id },
+    });
+    expect(claimed.status).toBe("processing");
+    expect(claimed.processingStartedAt).not.toBeNull();
+
+    // Simulate the lease expiring while the first worker is suspended:
+    // a newer worker reclaims the same row (new processingStartedAt) and
+    // successfully finalizes it before the stale provider call returns.
+    await prisma.emailOutbox.update({
+      where: { id: claimed.id },
+      data: {
+        status: "processing",
+        processingStartedAt: new Date(claimed.processingStartedAt!.getTime() + 1000),
+      },
+    });
+    await prisma.emailOutbox.update({
+      where: { id: claimed.id },
+      data: {
+        status: "sent",
+        processingStartedAt: null,
+        sentAt: new Date(),
+        providerMessageId: "newer-worker-message",
+      },
+    });
+
+    releaseSend();
+    await staleDispatch;
+
+    const finalRow = await prisma.emailOutbox.findUniqueOrThrow({ where: { id: claimed.id } });
+    expect(finalRow.status).toBe("sent");
+    expect(finalRow.providerMessageId).toBe("newer-worker-message");
+  });
+
   it("is a no-op when there is nothing due", async () => {
     // The shared test database is never guaranteed empty (other test files
     // enqueue rows they don't dispatch themselves) — drain whatever backlog
