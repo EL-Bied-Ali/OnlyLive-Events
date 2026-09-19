@@ -1,6 +1,6 @@
 import "server-only";
 
-const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "::1"]);
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
  * Single source of truth for building absolute application URLs (e.g. a
