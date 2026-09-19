@@ -138,7 +138,7 @@ async function auditIntegrityMismatch(
   });
 }
 
-async function auditPaymentWebhookStatusOnce(
+async function recordPaymentWebhookStatusAudit(
   action: string,
   paymentId: string,
   externalEventId: string,
@@ -146,8 +146,8 @@ async function auditPaymentWebhookStatusOnce(
 ): Promise<void> {
   await prisma.$transaction(async (tx) => {
     // Provider retries can repeat the same temporary status mismatch/outage.
-    // Serialize by action + provider event id so one delivery cannot create
-    // unbounded duplicate diagnostics while it is being retried.
+    // Serialize by action + provider event id so retries stay on one audit row
+    // while later, more informative provider state can refresh its diagnostics.
     const lockKey = `${action}:${externalEventId}`;
     await tx.$queryRaw<Array<{ locked: boolean }>>`
       SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS locked
@@ -160,16 +160,62 @@ async function auditPaymentWebhookStatusOnce(
         entityId: paymentId,
         metadata: { path: ["externalEventId"], equals: externalEventId },
       },
+      select: { id: true, metadata: true },
     });
-    if (existing) return;
 
-    await tx.auditLog.create({
+    if (!existing) {
+      await tx.auditLog.create({
+        data: {
+          actorType: "system",
+          action,
+          entityType: "Payment",
+          entityId: paymentId,
+          metadata: { externalEventId, occurrences: 1, ...metadata },
+        },
+      });
+      return;
+    }
+
+    const previousMetadata =
+      existing.metadata
+      && typeof existing.metadata === "object"
+      && !Array.isArray(existing.metadata)
+        ? existing.metadata as Prisma.JsonObject
+        : {};
+    const previousOccurrences =
+      typeof previousMetadata.occurrences === "number"
+      && Number.isSafeInteger(previousMetadata.occurrences)
+      && previousMetadata.occurrences >= 1
+        ? previousMetadata.occurrences
+        : 1;
+
+    const firstReason =
+      typeof previousMetadata.firstReason === "string"
+        ? previousMetadata.firstReason
+        : typeof previousMetadata.reason === "string"
+          ? previousMetadata.reason
+          : typeof metadata.reason === "string"
+            ? metadata.reason
+            : undefined;
+    const firstObservedProviderStatus =
+      typeof previousMetadata.firstObservedProviderStatus === "string"
+        ? previousMetadata.firstObservedProviderStatus
+        : typeof previousMetadata.observedProviderStatus === "string"
+          ? previousMetadata.observedProviderStatus
+          : typeof metadata.observedProviderStatus === "string"
+            ? metadata.observedProviderStatus
+            : undefined;
+
+    await tx.auditLog.update({
+      where: { id: existing.id },
       data: {
-        actorType: "system",
-        action,
-        entityType: "Payment",
-        entityId: paymentId,
-        metadata: { externalEventId, ...metadata },
+        metadata: {
+          externalEventId,
+          occurrences: previousOccurrences + 1,
+          ...(firstReason ? { firstReason } : {}),
+          ...(firstObservedProviderStatus ? { firstObservedProviderStatus } : {}),
+          ...metadata,
+        },
       },
     });
   });
@@ -422,7 +468,7 @@ export async function POST(request: NextRequest) {
 
       const lookupPaymentStatus = provider.lookupPaymentStatus?.bind(provider);
       if (!lookupPaymentStatus) {
-        await auditPaymentWebhookStatusOnce(
+        await recordPaymentWebhookStatusAudit(
           "payment.webhook_status_verification_unavailable",
           payment.id,
           event.externalEventId,
@@ -445,7 +491,7 @@ export async function POST(request: NextRequest) {
           currency: payment.currency,
         });
       } catch {
-        await auditPaymentWebhookStatusOnce(
+        await recordPaymentWebhookStatusAudit(
           "payment.webhook_status_verification_unavailable",
           payment.id,
           event.externalEventId,
@@ -468,7 +514,7 @@ export async function POST(request: NextRequest) {
             : null;
 
       if (expectedProviderStatus && providerStatus.status !== expectedProviderStatus) {
-        await auditPaymentWebhookStatusOnce(
+        await recordPaymentWebhookStatusAudit(
           "payment.webhook_header_status_mismatch",
           payment.id,
           event.externalEventId,
