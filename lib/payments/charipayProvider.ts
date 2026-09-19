@@ -250,7 +250,7 @@ function redactProviderMessage(
   message: string,
   knownValues: Array<string | number | null | undefined> = [],
 ): string | undefined {
-  if (code !== "MISSING_PARAMETER" || !message) return undefined;
+  if (code !== "MISSING_PARAMETER" || !message || process.env.CHARIPAY_ENV !== "sandbox") return undefined;
 
   let redacted = message.replace(/[\u0000-\u001F\u007F]/g, " ");
 
