@@ -249,7 +249,7 @@ describe("ChariPay webhook route", () => {
 
   it("processes payment.succeeded exactly once and detects same-event-id content collision", async () => {
     const fixture = await createChariPendingOrder({ quantity: 2, priceCents: 12_500 });
-    enableChariPay();
+    const lookupSpy = enableChariPay();
     const eventId = crypto.randomUUID();
     const sensitiveEcho = "sensitive-buyer@example.com";
     const payload = {
@@ -278,6 +278,7 @@ describe("ChariPay webhook route", () => {
     const duplicate = await chariWebhookPost(signedRequest(payload, "payment.succeeded", eventId));
     expect(duplicate.status).toBe(200);
     await expect(duplicate.json()).resolves.toMatchObject({ ok: true, duplicate: true });
+    expect(lookupSpy).toHaveBeenCalledTimes(1);
 
     // Backward compatibility with pre-hardening rows that stored the complete
     // provider JSON: a historical unprocessed/processed event must still be
