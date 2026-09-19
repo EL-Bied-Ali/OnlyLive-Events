@@ -490,6 +490,25 @@ running this migration — not a concern for the app's current state.
   flag once that delivery is captured and `parseWebhook()` is pinned
   against it.
 
+
+## Completed (email outbox claim fencing — branch fix/email-outbox-claim-fencing)
+
+- Resend already bounds each provider request to 10 seconds, well below the
+  dispatcher's 5-minute reclaim lease. The remaining stale-worker hazard is
+  now fenced at database finalization time using the claimed row's existing
+  `processingStartedAt` value: every sent/failed/retry/skip transition is a
+  conditional `updateMany` that only succeeds while the row is still
+  `processing` under the exact lease this worker claimed.
+- If a newer worker reclaims or finishes the row after lease expiry, the
+  stale worker's eventual provider result cannot overwrite the newer state
+  or rewind a sent row back to pending/failed. No schema migration or new
+  lock is required.
+- Terminal/rescheduled transitions clear `processingStartedAt`, making lease
+  ownership explicit once processing ends.
+- Regression coverage suspends one worker during `send()`, simulates a newer
+  worker reclaiming and completing the same row, then proves the stale worker
+  cannot replace the newer provider message id when it resumes.
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
