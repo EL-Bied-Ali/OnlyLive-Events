@@ -267,6 +267,8 @@ export interface ProviderRejectionMeta {
   providerStatus?: number;
   /** ChariPay's own short machine error code (e.g. "BAD_REQUEST"). Never the raw provider message — that text is provider-controlled and could echo request details. */
   providerCode?: string;
+  /** Strictly sanitized provider field-name hint, never provider prose or values. */
+  providerFieldHint?: string;
   correlationId?: string;
 }
 
@@ -342,6 +344,7 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
             retryAfterMs: error.retryAfterMs,
             correlationId: error.correlationId,
             providerCode: error.providerCode,
+            providerFieldHint: error.providerFieldHint,
           }
         : { name: "unknown" },
     );
@@ -360,6 +363,7 @@ async function submitPreparedRefund(prepared: PreparedRefund): Promise<InitiateR
         provider: provider.name,
         providerStatus: error instanceof ProviderRequestError ? error.status : undefined,
         providerCode: error instanceof ProviderRequestError ? error.providerCode : undefined,
+        providerFieldHint: error instanceof ProviderRequestError ? error.providerFieldHint : undefined,
         correlationId: error instanceof ProviderRequestError ? error.correlationId : undefined,
       });
       throw new ApiError(502, "PROVIDER_REFUND_FAILED", "The payment provider rejected the refund");

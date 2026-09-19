@@ -188,6 +188,7 @@ export async function reconcileProcessingRefundsFair(
             provider: provider.name,
             providerStatus: providerError?.status ?? null,
             providerCode: providerError?.providerCode ?? null,
+            providerFieldHint: providerError?.providerFieldHint ?? null,
             retryAfterMs: providerError?.retryAfterMs ?? null,
             correlationId: providerError?.correlationId ?? null,
           },

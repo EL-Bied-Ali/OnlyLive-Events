@@ -220,6 +220,31 @@ async function readJsonResponse(response: Response): Promise<Record<string, unkn
   }
 }
 
+function extractProviderFieldHint(code: string, message: string): string | undefined {
+  if (code !== "MISSING_PARAMETER") return undefined;
+
+  // Never persist/log provider-controlled prose. Extract only a bounded
+  // identifier-shaped field name from a small allowlist of validation-message
+  // shapes. The trailing lookahead is deliberate: without it, a value such as
+  // "buyer@example.com" could be truncated to "buyer" and misclassified as a
+  // harmless field name.
+  const patterns = [
+    /missing\s+required\s+(?:parameter|field)\s*[:=]?\s*['"`]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]?(?=$|[\s,.;)\]}])/i,
+    /missing\s+(?:parameter|field)\s*[:=]?\s*['"`]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]?(?=$|[\s,.;)\]}])/i,
+    /required\s+(?:parameter|field)\s*[:=]?\s*['"`]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]?(?=$|[\s,.;)\]}])/i,
+    /(?:parameter|field)\s+['"`]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]?\s+(?:is\s+)?(?:missing|required)\b/i,
+    /['"`]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]?\s+is\s+(?:missing|required)\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    const candidate = message.match(pattern)?.[1];
+    if (candidate && !/^(parameter|field|required|missing|is)$/i.test(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
 async function parseApiResponse(response: Response): Promise<Record<string, unknown>> {
   const body = await readJsonResponse(response);
   if (!response.ok) {
@@ -230,6 +255,7 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
     const correlationId = typeof body.correlationId === "string"
       ? body.correlationId
       : responseCorrelationId(response);
+    const providerFieldHint = extractProviderFieldHint(code, message);
     throw new ProviderRequestError(
       `ChariPay ${code}: ${message}`,
       outcomeUnknown,
@@ -237,6 +263,7 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
       parseRetryAfterMs(response.headers.get("retry-after")),
       correlationId,
       code,
+      providerFieldHint,
     );
   }
   return body;

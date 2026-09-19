@@ -191,7 +191,15 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     const admin = await createAdmin();
     enableChariPay();
     vi.spyOn(ChariPayProvider.prototype, "refund").mockRejectedValue(
-      new ProviderRequestError("ChariPay ORIGINAL_PAYMENT_NOT_FOUND: no matching payment", false, 400, undefined, "corr-def-rejected", "ORIGINAL_PAYMENT_NOT_FOUND"),
+      new ProviderRequestError(
+        "ChariPay MISSING_PARAMETER: Missing required parameter: walletId",
+        false,
+        400,
+        undefined,
+        "corr-def-rejected",
+        "MISSING_PARAMETER",
+        "walletId",
+      ),
     );
     await expect(initiateRefund({ paymentId: fixture.payment.id, amountCents: 5_000, reason: "Definitive rejection", actorId: admin.id }))
       .rejects.toMatchObject({ code: "PROVIDER_REFUND_FAILED", status: 502 });
@@ -203,7 +211,8 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     expect(audit.metadata).toMatchObject({
       provider: "charipay",
       providerStatus: 400,
-      providerCode: "ORIGINAL_PAYMENT_NOT_FOUND",
+      providerCode: "MISSING_PARAMETER",
+      providerFieldHint: "walletId",
       correlationId: "corr-def-rejected",
     });
   });
