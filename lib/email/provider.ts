@@ -26,19 +26,21 @@ const SAFE_EMAIL_PROVIDER_ERROR_CODE = /^[a-z0-9_]{1,100}$/i;
 
 export class EmailProviderError extends Error {
   readonly safeCode: string;
+  readonly providerCode?: string;
 
   constructor(
     code: string,
     public readonly retryable: boolean,
     public readonly status?: number,
-    public readonly providerCode?: string,
+    providerCode?: string,
   ) {
-    // Provider adapters must expose only a small machine code to the
-    // dispatcher. If a future adapter accidentally passes a raw response
-    // body/message here, fail privacy-safe instead of persisting/logging it.
+    // Provider adapters must expose only small machine codes. If a future
+    // adapter accidentally passes a raw response body/message here, fail
+    // privacy-safe instead of retaining text that a later caller could log.
     const safeCode = SAFE_EMAIL_PROVIDER_ERROR_CODE.test(code) ? code : "email_provider_error";
     super(safeCode);
     this.safeCode = safeCode;
+    this.providerCode = providerCode && SAFE_EMAIL_PROVIDER_ERROR_CODE.test(providerCode) ? providerCode : undefined;
     this.name = "EmailProviderError";
   }
 }
