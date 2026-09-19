@@ -28,6 +28,19 @@ export const runtime = "nodejs";
  */
 const CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED = false;
 
+/**
+ * Only payment.succeeded has been captured against a real signed ChariPay
+ * delivery so far — payment.failed shares the same guessed Amount/metadata
+ * envelope shape purely by extrapolation (see charipayProvider.ts's
+ * parseWebhook comments), never independently confirmed. A payment.failed
+ * event marks the order/payment failed and releases inventory, so acting
+ * on an unverified guess is not acceptable. Set this true once a real
+ * payment.failed delivery is captured and parseWebhook is corrected/pinned
+ * against it; until then payment.failed events are acknowledged but never
+ * auto-finalized, exactly like the refund gate above.
+ */
+const CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED = false;
+
 type WebhookResult =
   | { kind: "duplicate" }
   | { kind: "event_collision" }
@@ -141,6 +154,55 @@ export async function POST(request: NextRequest) {
             raw: event.raw as Prisma.InputJsonValue,
           },
         },
+      });
+      return NextResponse.json({ ok: true, reconciliationRequired: true }, { status: 202 });
+    }
+
+    // Same reasoning as the refund gate above, and must run before it for
+    // the same reason: payloadValid for payment.* events depends on the
+    // unverified guessed Amount/metadata shape (charipayProvider.ts's
+    // parseWebhook — only payment.succeeded has been captured from a real
+    // delivery), so checking it first would 400-reject a real
+    // payment.failed whose actual shape differs from the guess instead of
+    // acknowledging it here. This gate keys only on already-confirmed
+    // envelope facts (a recognized event type, a present event id) — no
+    // Payment row needs to be resolved. Dedup against AuditLog by
+    // externalEventId (rather than provider.name, unlike the refund gate)
+    // because this is the only reliable idempotency key available this
+    // early: payment_events requires an already-resolved payment_id, which
+    // this gate deliberately never resolves from an unverified body shape.
+    if (
+      headers["chari-event-type"] === "payment.failed"
+      && event.type === "payment.failed"
+      && !CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED
+      && event.externalEventId
+    ) {
+      await prisma.$transaction(async (tx) => {
+        // AuditLog has no uniqueness constraint suitable for this one special
+        // evidence action. Serialize by provider event id so two concurrent
+        // deliveries cannot both pass a read-then-create race and violate the
+        // exactly-once evidence guarantee.
+        await tx.$queryRaw<Array<{ locked: boolean }>>`
+          SELECT pg_advisory_xact_lock(hashtextextended(${event.externalEventId}, 0)) IS NULL AS locked
+        `;
+        const alreadyRecorded = await tx.auditLog.findFirst({
+          where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: event.externalEventId },
+        });
+        if (!alreadyRecorded) {
+          await tx.auditLog.create({
+            data: {
+              actorType: "system",
+              action: "charipay.payment_failed_shape_unverified",
+              entityType: "PaymentProviderEvent",
+              entityId: event.externalEventId,
+              metadata: {
+                provider: provider.name,
+                eventType: event.type,
+                raw: event.raw as Prisma.InputJsonValue,
+              },
+            },
+          });
+        }
       });
       return NextResponse.json({ ok: true, reconciliationRequired: true }, { status: 202 });
     }

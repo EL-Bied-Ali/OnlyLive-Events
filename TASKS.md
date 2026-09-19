@@ -460,6 +460,36 @@ running this migration — not a concern for the app's current state.
   value and crosses multiple tiny batch boundaries to prove no duplicate or
   dropped rows at the tie boundary.
 
+## Completed (fail closed on unverified ChariPay payment.failed webhooks)
+
+- `payment.failed` previously reused `payment.succeeded`'s Amount/metadata
+  mapping by extrapolation only — never independently confirmed against a
+  real signed delivery — yet could mark the order/payment failed and
+  release inventory on that guess.
+- `app/api/payments/webhook/charipay/route.ts` now gates `payment.failed`
+  closed with `CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED = false`,
+  mirroring the existing `CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED` gate and
+  running before the same generic `payloadValid` check for the identical
+  reason: a real delivery whose shape differs from the guess must be
+  acknowledged for later evidence capture, not rejected as malformed.
+- A real `payment.failed` is acknowledged (`202`) with zero
+  payment/order/inventory mutation and no failure email enqueued; evidence
+  is recorded once per external event id as
+  `charipay.payment_failed_shape_unverified` (deduped by `externalEventId`
+  directly, since this gate deliberately never resolves a Payment row from
+  an unverified body shape).
+- `payment.succeeded` and `refund.*` behavior are unchanged.
+- Regression coverage: unverified acknowledgment with no mutation,
+  malformed/unexpected body still reaches the capture path instead of
+  being rejected by guessed payload validation, duplicate/replayed
+  delivery records evidence exactly once, invalid signature is still
+  rejected before the gate, and the gate never fires for
+  `payment.succeeded`/`refund.*`.
+- Closes the safety gap for acceptance checklist item 7
+  (`docs/CHARIPAY.md`) pending one real signed sandbox capture; flip the
+  flag once that delivery is captured and `parseWebhook()` is pinned
+  against it.
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
