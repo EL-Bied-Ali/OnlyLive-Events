@@ -21,7 +21,7 @@ function enableChariPay() {
   // independently confirms header-claimed payment outcomes through the
   // authenticated transaction ledger. Individual tests override this spy when
   // exercising contradictions/unavailable lookup states.
-  vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+  return vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
     status: "succeeded",
     providerOperationId: "123456",
     providerStatus: "SUCCESS",
@@ -142,8 +142,8 @@ describe("ChariPay webhook route", () => {
 
   it("requires authenticated provider-ledger confirmation before honoring payment.succeeded", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
-    enableChariPay();
-    const lookupSpy = vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+    const lookupSpy = enableChariPay();
+    lookupSpy.mockResolvedValue({
       status: "succeeded",
       providerOperationId: "op-confirmed",
       providerStatus: "SUCCESS",
@@ -165,8 +165,8 @@ describe("ChariPay webhook route", () => {
 
   it("never fulfills a header-claimed payment.succeeded when the authenticated ledger says failed", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
-    enableChariPay();
-    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+    const lookupSpy = enableChariPay();
+    lookupSpy.mockResolvedValue({
       status: "failed",
       providerOperationId: "op-failed",
       providerStatus: "FAILED",
@@ -199,8 +199,8 @@ describe("ChariPay webhook route", () => {
 
   it("returns 503 without mutation when provider-ledger confirmation is temporarily unavailable", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
-    enableChariPay();
-    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockRejectedValue(new Error("simulated lookup outage"));
+    const lookupSpy = enableChariPay();
+    lookupSpy.mockRejectedValue(new Error("simulated lookup outage"));
     const eventId = crypto.randomUUID();
 
     const response = await chariWebhookPost(signedRequest(
@@ -219,8 +219,8 @@ describe("ChariPay webhook route", () => {
 
   it("returns 503 without mutation when the authenticated ledger is not yet conclusive", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
-    enableChariPay();
-    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+    const lookupSpy = enableChariPay();
+    lookupSpy.mockResolvedValue({
       status: "pending",
       providerOperationId: "op-pending",
       providerStatus: "PENDING",
