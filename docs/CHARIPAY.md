@@ -46,6 +46,9 @@ Browser return is display/navigation only, never proof of payment. The customer 
 ## Webhook verification
 
 - Signature: HMAC-SHA256 over `timestamp + "." + rawBody`.
+- `Chari-Event-Id` and `Chari-Event-Type` are separate delivery headers and are not part of that documented HMAC input. OnlyLive therefore never lets a new/unprocessed payment event mutate financial state solely from the header label: after signature + payload-integrity checks resolve the Payment, the authenticated transaction ledger must independently confirm the same Order id, amount, MAD currency, `PAYMENT`/`IN` facts and the header-claimed outcome before fulfillment/failure can run.
+- An identical already-processed event short-circuits as a duplicate without another provider lookup. A terminal opposite ledger outcome is audit-logged and acknowledged `202 reconciliationRequired` with no local financial mutation. Pending/not-found/ambiguous status or a lookup failure returns `503` so ChariPay can retry while the independent reconciler remains the fallback.
+- `payment.failed` remains behind `CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED=false`, but this ledger binding already protects that path once the real shape is pinned and the gate is eventually enabled. Refund webhooks remain fully fail-closed behind their own shape gate; do **not** enable that gate until equivalent authenticated refund-status binding is added.
 - `X-CHARI-TIMESTAMP` is epoch milliseconds; reject more than ±5 min skew.
 - Signature input must be **exactly 64 hexadecimal characters** before `Buffer.from(..., "hex")`; malformed odd-nibble strings are rejected.
 - Compare in constant time.

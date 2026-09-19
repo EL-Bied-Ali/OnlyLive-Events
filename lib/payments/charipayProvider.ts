@@ -144,6 +144,12 @@ interface ChariPayTransactionListResponse {
 }
 
 interface ChariPayWebhookBody {
+  // Observed on the real payment.succeeded sandbox body captured on
+  // 2026-09-17. ChariPay's public integration guidance nevertheless defines
+  // Chari-Event-Id as the delivery-header deduplication key, so this body field
+  // is evidence only and is not used to redefine the provider's dedup key.
+  WebhookEventId?: unknown;
+
   // Confirmed against a real signed sandbox delivery for payment.succeeded
   // (captured 2026-09-17 via ChariPay's partner webhook-events API,
   // GET /api/v1/partner/webhooks/events/{id}). ChariPay's own generated
@@ -205,9 +211,17 @@ function responseCorrelationId(response: Response): string | undefined {
   return undefined;
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timeoutMs =
+    Number.isFinite(requestTimeoutMs) && requestTimeoutMs > 0
+      ? Math.min(requestTimeoutMs, REQUEST_TIMEOUT_MS)
+      : REQUEST_TIMEOUT_MS;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } catch (error) {
@@ -395,6 +409,15 @@ export class ChariPayProvider implements PaymentProvider {
 
   async parseWebhook(input: ParseWebhookInput): Promise<ParsedWebhookEvent> {
     const signatureValid = verifySignature(input.rawBody, input.headers);
+    // ChariPay explicitly documents Chari-Event-Id as the stable
+    // deduplication key across delivery attempts. The signature authenticates
+    // timestamp + rawBody, not this header, so financial outcome integrity is
+    // bound separately in the route through the authenticated transaction
+    // ledger before any payment/order/ticket mutation.
+    //
+    // Do not make this envelope id depend on a body field: the refund webhook
+    // shape is intentionally still unverified, and its fail-closed gate must
+    // remain reachable using only confirmed delivery-envelope facts.
     const eventId = input.headers["chari-event-id"] ?? "";
     const eventTypeRaw = input.headers["chari-event-type"] ?? "";
     const supported = new Set<PaymentWebhookEventType>([
@@ -687,6 +710,7 @@ export class ChariPayProvider implements PaymentProvider {
         method: "GET",
         headers: { "X-CHARI-PAY-API-KEY": requiredEnv("CHARIPAY_API_KEY") },
       },
+      input.requestTimeoutMs,
     );
     const body = (await parseApiResponse(response)) as ChariPayTransactionListResponse;
     if (!Array.isArray(body.data) || typeof body.hasMore !== "boolean") {

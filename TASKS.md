@@ -599,6 +599,35 @@ running this migration — not a concern for the app's current state.
   duplicate/collision behavior (including a legacy full-body row) is preserved.
 
 
+
+## Completed (ChariPay unsigned webhook-header integrity — branch fix/charipay-unsigned-event-header-integrity)
+
+- ChariPay's documented HMAC covers `timestamp + "." + rawBody`; the
+  `Chari-Event-Type` and `Chari-Event-Id` delivery headers are outside that
+  signed string. A valid signed body therefore must not be allowed to mutate
+  money/tickets solely because an unsigned header labels it
+  `payment.succeeded`.
+- For every new/unprocessed payment event that reaches the financial path,
+  OnlyLive now requires ChariPay's authenticated transaction ledger lookup to
+  independently confirm the header-claimed outcome against the same Order id,
+  amount, currency and the already-pinned `PAYMENT` / `IN` invariants before
+  fulfillment/failure is allowed.
+- An identical already-processed event short-circuits as a duplicate without a
+  provider API call. A terminal opposite ledger outcome is acknowledged as a
+  reconciliation-required contradiction with no mutation; pending/not-found/
+  ambiguous or lookup failures return 503 so provider retry and independent
+  reconciliation can recover safely.
+- `payment.failed` remains behind its existing real-payload shape gate, but
+  once that gate is lifted it is also protected by the same authenticated
+  ledger outcome check. Refund webhooks remain fully fail-closed behind their
+  own unverified-shape gate and must gain the equivalent authenticated refund
+  status binding before that gate is ever enabled.
+- Integration coverage proves genuine success requires the authenticated
+  lookup, a header-claimed success cannot issue tickets when the ledger says
+  failed, lookup outages/pending state fail closed, and exact duplicates do
+  not consume an extra provider lookup.
+
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`

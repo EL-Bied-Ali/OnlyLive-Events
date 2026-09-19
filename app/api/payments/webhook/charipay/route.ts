@@ -138,6 +138,89 @@ async function auditIntegrityMismatch(
   });
 }
 
+async function recordPaymentWebhookStatusAudit(
+  action: string,
+  paymentId: string,
+  externalEventId: string,
+  metadata: Prisma.InputJsonObject,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    // Provider retries can repeat the same temporary status mismatch/outage.
+    // Serialize by action + provider event id so retries stay on one audit row
+    // while later, more informative provider state can refresh its diagnostics.
+    const lockKey = `${action}:${externalEventId}`;
+    await tx.$queryRaw<Array<{ locked: boolean }>>`
+      SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS locked
+    `;
+
+    const existing = await tx.auditLog.findFirst({
+      where: {
+        action,
+        entityType: "Payment",
+        entityId: paymentId,
+        metadata: { path: ["externalEventId"], equals: externalEventId },
+      },
+      select: { id: true, metadata: true },
+    });
+
+    if (!existing) {
+      await tx.auditLog.create({
+        data: {
+          actorType: "system",
+          action,
+          entityType: "Payment",
+          entityId: paymentId,
+          metadata: { externalEventId, occurrences: 1, ...metadata },
+        },
+      });
+      return;
+    }
+
+    const previousMetadata =
+      existing.metadata
+      && typeof existing.metadata === "object"
+      && !Array.isArray(existing.metadata)
+        ? existing.metadata as Prisma.JsonObject
+        : {};
+    const previousOccurrences =
+      typeof previousMetadata.occurrences === "number"
+      && Number.isSafeInteger(previousMetadata.occurrences)
+      && previousMetadata.occurrences >= 1
+        ? previousMetadata.occurrences
+        : 1;
+
+    const firstReason =
+      typeof previousMetadata.firstReason === "string"
+        ? previousMetadata.firstReason
+        : typeof previousMetadata.reason === "string"
+          ? previousMetadata.reason
+          : typeof metadata.reason === "string"
+            ? metadata.reason
+            : undefined;
+    const firstObservedProviderStatus =
+      typeof previousMetadata.firstObservedProviderStatus === "string"
+        ? previousMetadata.firstObservedProviderStatus
+        : typeof previousMetadata.observedProviderStatus === "string"
+          ? previousMetadata.observedProviderStatus
+          : typeof metadata.observedProviderStatus === "string"
+            ? metadata.observedProviderStatus
+            : undefined;
+
+    await tx.auditLog.update({
+      where: { id: existing.id },
+      data: {
+        metadata: {
+          externalEventId,
+          occurrences: previousOccurrences + 1,
+          ...(firstReason ? { firstReason } : {}),
+          ...(firstObservedProviderStatus ? { firstObservedProviderStatus } : {}),
+          ...metadata,
+        },
+      },
+    });
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     // This provider-specific endpoint must keep accepting historical ChariPay
@@ -357,6 +440,120 @@ export async function POST(request: NextRequest) {
           externalEventId: event.externalEventId,
         });
         return NextResponse.json({ error: "AMOUNT_MISMATCH" }, { status: 409 });
+      }
+    }
+
+    if (!isRefundEvent) {
+      // ChariPay signs timestamp + "." + rawBody; Chari-Event-Type and
+      // Chari-Event-Id are separate headers and are not covered by that HMAC.
+      // An identical already-processed event is safe to acknowledge without a
+      // provider API call. Any new/unprocessed financial event must have its
+      // header-claimed outcome independently confirmed by the authenticated,
+      // already-pinned transaction ledger before it may mutate orders/tickets.
+      const existingEvent = await prisma.paymentEvent.findUnique({
+        where: {
+          provider_externalEventId: {
+            provider: provider.name,
+            externalEventId: event.externalEventId,
+          },
+        },
+      });
+      if (
+        existingEvent
+        && existingEvent.processedAt !== null
+        && consistentClaim(existingEvent, payment.id, event)
+      ) {
+        return NextResponse.json({ ok: true, duplicate: true });
+      }
+
+      const lookupPaymentStatus = provider.lookupPaymentStatus?.bind(provider);
+      if (!lookupPaymentStatus) {
+        await recordPaymentWebhookStatusAudit(
+          "payment.webhook_status_verification_unavailable",
+          payment.id,
+          event.externalEventId,
+          {
+            eventType: event.type,
+            reason: "provider_lookup_not_supported",
+          },
+        );
+        return NextResponse.json(
+          { error: "PROVIDER_STATUS_VERIFICATION_UNAVAILABLE" },
+          { status: 503 },
+        );
+      }
+
+      let providerStatus: Awaited<ReturnType<typeof lookupPaymentStatus>>;
+      try {
+        providerStatus = await lookupPaymentStatus({
+          orderExternalId: payment.orderId,
+          amountCents: payment.amountCents,
+          currency: payment.currency,
+          // ChariPay warns that ~10s webhook handlers trigger redeliveries and
+          // can eventually suspend an endpoint. Keep the synchronous ledger
+          // verification comfortably below that delivery budget; a timeout
+          // fails closed with 503 and is safe for provider retry.
+          requestTimeoutMs: 5_000,
+        });
+      } catch {
+        await recordPaymentWebhookStatusAudit(
+          "payment.webhook_status_verification_unavailable",
+          payment.id,
+          event.externalEventId,
+          {
+            eventType: event.type,
+            reason: "provider_lookup_failed",
+          },
+        );
+        return NextResponse.json(
+          { error: "PROVIDER_STATUS_VERIFICATION_UNAVAILABLE" },
+          { status: 503 },
+        );
+      }
+
+      const expectedProviderStatus =
+        event.type === "payment.succeeded"
+          ? "succeeded"
+          : event.type === "payment.failed"
+            ? "failed"
+            : null;
+
+      if (expectedProviderStatus && providerStatus.status !== expectedProviderStatus) {
+        await recordPaymentWebhookStatusAudit(
+          "payment.webhook_header_status_mismatch",
+          payment.id,
+          event.externalEventId,
+          {
+            eventType: event.type,
+            expectedProviderStatus,
+            observedProviderStatus: providerStatus.status,
+          },
+        );
+
+        // A terminal opposite outcome is a real contradiction, not a
+        // transient lookup failure. Acknowledge it so a relabeled/replayed
+        // signed body cannot jam the provider queue, but never mutate local
+        // financial state from the unbound header. Human/provider-status
+        // reconciliation owns the contradiction from here.
+        const terminalContradiction =
+          (event.type === "payment.succeeded"
+            && (providerStatus.status === "failed" || providerStatus.status === "cancelled"))
+          || (event.type === "payment.failed" && providerStatus.status === "succeeded");
+
+        if (terminalContradiction) {
+          return NextResponse.json(
+            { ok: true, reconciliationRequired: true },
+            { status: 202 },
+          );
+        }
+
+        // pending/not_found/ambiguous can be eventual-consistency or provider
+        // availability states. Fail closed with 5xx so ChariPay retries while
+        // the independent reconciliation worker can also recover the payment.
+        return NextResponse.json(
+          { error: "PROVIDER_STATUS_NOT_CONFIRMED" },
+          { status: 503 },
+        );
       }
     }
 

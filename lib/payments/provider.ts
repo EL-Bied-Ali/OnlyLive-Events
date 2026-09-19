@@ -102,6 +102,12 @@ export interface PaymentStatusLookupInput {
   orderExternalId: string;
   amountCents: number;
   currency: string;
+  /**
+   * Optional upper bound for this lookup's network wait. Latency-sensitive
+   * callers such as webhook handlers can use a tighter budget than background
+   * reconciliation; providers may ignore it when they cannot enforce one.
+   */
+  requestTimeoutMs?: number;
 }
 
 export interface PaymentStatusLookupResult {
