@@ -204,6 +204,11 @@ the application process:
 - payment/order relationships are present;
 - the Prisma migrations table exists.
 
+CI runs this file immediately after migrations against the freshly migrated,
+empty Vitest database. That continuously validates the SQL syntax, table/enum
+names and migration-table assumptions without depending on test fixtures. This
+CI check is not a restore drill and does not prove backup readability.
+
 These checks complement the normal test suite; they do not replace PSP
 reconciliation or application smoke tests.
 
