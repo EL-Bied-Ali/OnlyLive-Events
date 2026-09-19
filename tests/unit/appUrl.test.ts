@@ -30,6 +30,13 @@ describe("getAppBaseUrl", () => {
     expect(getAppBaseUrl()).toBe("http://127.0.0.1:3100");
   });
 
+  it("recognizes the URL-normalized IPv6 loopback form with the explicit opt-in", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("NEXTAUTH_URL", "http://[::1]:3100");
+    vi.stubEnv("ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION", "true");
+    expect(getAppBaseUrl()).toBe("http://[::1]:3100");
+  });
+
   it("the E2E opt-in never exempts a non-loopback http URL", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("NEXTAUTH_URL", "http://tickets.onlylive.ma");
