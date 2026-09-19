@@ -253,9 +253,9 @@ call exceeding the 5-minute lease could let a second worker reclaim and
 double-send, and a stale worker could then overwrite the second worker's
 result — needs a request timeout shorter than the lease plus a fencing/
 conditional-finalization mechanism before a real provider is wired in.
-`errorCode()`'s stored/logged error message isn't guaranteed free of
-provider-specific sensitive data — needs a typed provider error with a
-safe machine code before a real provider is wired in. `/api/internal/
+`errorCode()`'s stored/logged error message was not guaranteed free of
+provider-specific sensitive data; this is now closed by the privacy-safe
+provider/error-code hardening documented below. `/api/internal/
 dispatch-emails` now accepts `CRON_SECRET`/`Authorization: Bearer` the
 same way `/api/internal/sweep-expired-holds` does (`lib/http/
 internalAuth.ts`, shared by both routes; fixed during the PR #13 merge
