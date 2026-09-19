@@ -434,6 +434,78 @@ export class ChariPayProvider implements PaymentProvider {
 
   async refund(input: RefundInput): Promise<RefundResult> {
     if (input.currency !== "MAD") throw new Error(`ChariPay only supports MAD refunds, got ${input.currency}`);
+
+    const parseOperationId = (value: string): number => {
+      if (!/^\d+$/.test(value)) {
+        throw new ProviderRequestError(
+          "ChariPay returned an invalid operationId before refund submission",
+          false,
+          undefined,
+          undefined,
+          undefined,
+          "INVALID_PROVIDER_OPERATION_ID",
+        );
+      }
+      const parsed = Number(value);
+      if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+        throw new ProviderRequestError(
+          "ChariPay operationId is outside the supported integer range",
+          false,
+          undefined,
+          undefined,
+          undefined,
+          "INVALID_PROVIDER_OPERATION_ID",
+        );
+      }
+      return parsed;
+    };
+
+    let operationId =
+      input.providerOperationId !== undefined
+        ? parseOperationId(input.providerOperationId)
+        : undefined;
+
+    if (
+      operationId === undefined
+      && input.orderExternalId
+      && Number.isInteger(input.paymentAmountCents)
+      && (input.paymentAmountCents ?? 0) > 0
+    ) {
+      let lookup: PaymentStatusLookupResult;
+      try {
+        lookup = await this.lookupPaymentStatus({
+          orderExternalId: input.orderExternalId,
+          amountCents: input.paymentAmountCents!,
+          currency: input.currency,
+        });
+      } catch (error) {
+        const providerError = error instanceof ProviderRequestError ? error : null;
+        // No POST /refunds has happened yet, so the refund outcome is known:
+        // nothing was submitted. Preserve provider diagnostics/backoff but
+        // never classify a pre-submit lookup failure as financially ambiguous.
+        throw new ProviderRequestError(
+          "ChariPay original payment lookup failed before refund submission",
+          false,
+          providerError?.status,
+          providerError?.retryAfterMs,
+          providerError?.correlationId,
+          providerError?.providerCode ?? "ORIGINAL_PAYMENT_LOOKUP_FAILED",
+        );
+      }
+
+      if (lookup.status !== "succeeded" || !lookup.providerOperationId) {
+        throw new ProviderRequestError(
+          "ChariPay original payment could not be verified before refund submission",
+          false,
+          undefined,
+          undefined,
+          undefined,
+          "ORIGINAL_PAYMENT_NOT_VERIFIED",
+        );
+      }
+      operationId = parseOperationId(lookup.providerOperationId);
+    }
+
     const response = await fetchWithTimeout(`${CHARIPAY_API_BASE_URL}/v1/refunds`, {
       method: "POST",
       headers: {
@@ -443,21 +515,16 @@ export class ChariPayProvider implements PaymentProvider {
         "X-Request-Id": input.idempotencyKey,
       },
       body: JSON.stringify({
-        // externalId here is the same value passed as `externalId` when
-        // creating the payment session (input.paymentId there) — ChariPay's
-        // refund docs say to identify the original payment by operationId or
-        // "your externalId", i.e. the client-supplied session field, which
-        // is distinct from ChariPay's own orderId/externalReference concept.
-        // A real sandbox exercise of this refund() call using this same
-        // Payment id produced a definitive HTTP 400; an earlier version of
-        // this fix swapped to the Order id on the theory that the webhook's
-        // observed ExternalId/externalReference (which does echo the Order
-        // id) was the same field — independent audit (GPT) found ChariPay's
-        // own docs distinguish those as separate fields and that swap was
-        // unproven, so it was reverted here pending the real provider error
-        // code (see providerCode on ProviderRequestError, and TASKS.md's
-        // ChariPay acceptance #8 writeup for the full diagnosis history).
-        externalId: input.paymentExternalId,
+        // Prefer ChariPay's canonical ledger operationId once OnlyLive has
+        // independently resolved and verified the original SUCCESS payment.
+        // The public contract allows operationId OR externalId. Real sandbox
+        // evidence on 2026-09-18 showed the documented externalId path returned
+        // HTTP 400/MISSING_PARAMETER despite sending every documented required
+        // field, so operationId is now the evidence-backed path for production
+        // refund submissions. Keep the externalId fallback only for callers
+        // that have not resolved a ledger operation yet (e.g. isolated unit
+        // tests / non-ChariPay-compatible provider plumbing).
+        ...(operationId !== undefined ? { operationId } : { externalId: input.paymentExternalId }),
         refundReference: input.idempotencyKey,
         refundAmount: centsToMad(input.amountCents),
         reason: input.reason,

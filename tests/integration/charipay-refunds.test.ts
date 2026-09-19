@@ -86,6 +86,32 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     vi.unstubAllEnvs();
   });
 
+  it("passes original order and captured-payment facts into the ChariPay refund adapter", async () => {
+    const fixture = await createPaidOrderForChariPay({ quantity: 1, priceCents: 10_000 });
+    const admin = await createAdmin();
+    enableChariPay();
+    const refundSpy = vi.spyOn(ChariPayProvider.prototype, "refund").mockResolvedValue({
+      providerRefundId: "rf_facts",
+      state: "processing",
+    });
+
+    await initiateRefund({
+      paymentId: fixture.payment.id,
+      amountCents: 5_000,
+      reason: "Partial diagnostic refund",
+      actorId: admin.id,
+    });
+
+    expect(refundSpy).toHaveBeenCalledWith(expect.objectContaining({
+      providerPaymentId: fixture.payment.providerPaymentId,
+      paymentExternalId: fixture.payment.id,
+      orderExternalId: fixture.order.id,
+      paymentAmountCents: fixture.payment.amountCents,
+      amountCents: 5_000,
+      currency: fixture.payment.currency,
+    }));
+  });
+
   it("finalizes a processing refund when GET status reports SUCCESS", async () => {
     const fixture = await createPaidOrderForChariPay({ quantity: 1, priceCents: 10_000 });
     const admin = await createAdmin();
@@ -133,8 +159,16 @@ describe("ChariPay asynchronous refund reconciliation", () => {
     expect(summary).toMatchObject({ checked: 1, replayed: 1, pending: 1, errors: 0 });
     expect(statusSpy).toHaveBeenCalledWith(initiated.refundId);
     expect(refundSpy).toHaveBeenCalledTimes(2);
-    expect(refundSpy.mock.calls[0]![0].idempotencyKey).toBe(initiated.refundId);
-    expect(refundSpy.mock.calls[1]![0].idempotencyKey).toBe(initiated.refundId);
+    expect(refundSpy.mock.calls[0]![0]).toMatchObject({
+      idempotencyKey: initiated.refundId,
+      orderExternalId: fixture.order.id,
+      paymentAmountCents: fixture.payment.amountCents,
+    });
+    expect(refundSpy.mock.calls[1]![0]).toMatchObject({
+      idempotencyKey: initiated.refundId,
+      orderExternalId: fixture.order.id,
+      paymentAmountCents: fixture.payment.amountCents,
+    });
     await expect(prisma.refund.findUniqueOrThrow({ where: { id: initiated.refundId } })).resolves.toMatchObject({ status: "processing", providerRefundId: "rf_after_replay" });
   });
 

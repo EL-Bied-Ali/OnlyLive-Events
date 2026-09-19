@@ -74,6 +74,12 @@ export interface ParsedWebhookEvent {
 export interface RefundInput {
   providerPaymentId: string;
   paymentExternalId: string;
+  /** Canonical provider ledger operation id when independently resolved. */
+  providerOperationId?: string;
+  /** Stable OnlyLive Order id used to resolve the original provider ledger entry. */
+  orderExternalId?: string;
+  /** Original captured payment amount, distinct from the refund amount. */
+  paymentAmountCents?: number;
   amountCents: number;
   currency: string;
   reason: string;

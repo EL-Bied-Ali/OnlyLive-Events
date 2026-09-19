@@ -274,6 +274,119 @@ describe("ChariPayProvider", () => {
     });
   });
 
+  it("resolves a verified SUCCESS ledger operation before submitting a refund", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(response({
+        data: [{
+          operationId: 281,
+          type: "PAYMENT",
+          status: "SUCCESS",
+          amount: 10,
+          currency: "MAD",
+          direction: "IN",
+          externalReference: "order-123",
+        }],
+        hasMore: false,
+        nextCursor: null,
+      }))
+      .mockResolvedValueOnce(response({
+        refundId: "rf_operation",
+        refundReference: "refund-operation",
+        status: "PENDING",
+      }, 202));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await new ChariPayProvider().refund({
+      providerPaymentId: "ps_test_123",
+      paymentExternalId: "payment-123",
+      orderExternalId: "order-123",
+      paymentAmountCents: 1_000,
+      amountCents: 500,
+      currency: "MAD",
+      reason: "Partial refund",
+      idempotencyKey: "refund-operation",
+    });
+
+    expect(result).toEqual({ providerRefundId: "rf_operation", state: "processing" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://api-psp.charipay.ma/v1/transactions?type=PAYMENT&search=order-123&limit=50",
+    );
+    expect(fetchMock.mock.calls[1]?.[0]).toBe("https://api-psp.charipay.ma/v1/refunds");
+    const refundBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body));
+    expect(refundBody).toMatchObject({
+      operationId: 281,
+      refundReference: "refund-operation",
+      refundAmount: 5,
+      reason: "Partial refund",
+    });
+    expect(refundBody).not.toHaveProperty("externalId");
+  });
+
+  it("never submits a refund when the original ledger payment is not definitively verified", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(response({
+      data: [{
+        operationId: 300,
+        type: "PAYMENT",
+        status: "PENDING_3DS",
+        amount: 10,
+        currency: "MAD",
+        direction: "IN",
+        externalReference: "order-pending",
+      }],
+      hasMore: false,
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new ChariPayProvider().refund({
+      providerPaymentId: "ps_pending",
+      paymentExternalId: "payment-pending",
+      orderExternalId: "order-pending",
+      paymentAmountCents: 1_000,
+      amountCents: 500,
+      currency: "MAD",
+      reason: "Must fail closed",
+      idempotencyKey: "refund-pending",
+    })).rejects.toMatchObject({
+      name: "ProviderRequestError",
+      outcomeUnknown: false,
+      providerCode: "ORIGINAL_PAYMENT_NOT_VERIFIED",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies a pre-submit ledger lookup failure as no refund submitted", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        error: { code: "RATE_LIMITED", message: "slow down" },
+        correlationId: "corr-ledger-rate",
+      }), {
+        status: 429,
+        headers: { "content-type": "application/json", "retry-after": "3" },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(new ChariPayProvider().refund({
+      providerPaymentId: "ps_rate",
+      paymentExternalId: "payment-rate",
+      orderExternalId: "order-rate",
+      paymentAmountCents: 1_000,
+      amountCents: 500,
+      currency: "MAD",
+      reason: "Lookup rate limited",
+      idempotencyKey: "refund-rate-lookup",
+    })).rejects.toMatchObject({
+      name: "ProviderRequestError",
+      outcomeUnknown: false,
+      status: 429,
+      retryAfterMs: 3_000,
+      correlationId: "corr-ledger-rate",
+      providerCode: "RATE_LIMITED",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it("retrieves refund state by stable reference and maps 404 to not_found", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(response({ refundId: "rf_123", refundReference: "refund-row-123", status: "SUCCESS" }))
