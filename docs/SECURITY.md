@@ -80,8 +80,9 @@ sandbox-only redacted provider-message hint. Fake-provider webhook payloads in
 `payment_events.raw_payload` contain no secrets by construction (just
 `{eventId, providerPaymentId, type, amountCents, currency}`). ChariPay event
 rows do **not** retain the provider body: they store only a versioned SHA-256
-canonical-payload fingerprint plus top-level field names, and the same
-value-free evidence is used by unverified-shape audit records.
+canonical-payload fingerprint plus a top-level field count; provider-controlled
+field names and values are not retained. The same value-free evidence is used
+by unverified-shape audit records.
 
 ## Structured logging / error responses
 
