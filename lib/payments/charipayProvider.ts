@@ -15,6 +15,7 @@ import {
   type RefundResult,
   type RefundStatusResult,
 } from "@/lib/payments/provider";
+import { normalizePhone } from "@/lib/validation/phone";
 
 const CHARIPAY_API_BASE_URL = "https://api-psp.charipay.ma";
 const WEBHOOK_MAX_SKEW_MS = 5 * 60 * 1000;
@@ -30,15 +31,17 @@ function chariCustomerName(name: string | null | undefined): { firstName: string
   return { firstName, lastName };
 }
 
+// Delegates to the same normalizer lib/validation/auth.ts's phoneSchema uses,
+// so "accepted at registration/phone-update time" and "accepted by ChariPay"
+// can never drift apart (a real bug an independent audit caught: the two
+// used to be separately-maintained regexes). Still needed here, not just at
+// write time, for accounts whose phone predates this normalization landing.
 function chariCustomerPhone(phone: string | null | undefined): string {
-  let value = phone?.trim().replace(/[\s().-]/g, "") ?? "";
-  if (value.startsWith("00")) value = `+${value.slice(2)}`;
-  else if (/^0[5-7]\d{8}$/.test(value)) value = `+212${value.slice(1)}`;
-  else if (/^212[5-7]\d{8}$/.test(value)) value = `+${value}`;
-  if (!/^\+[1-9]\d{7,14}$/.test(value)) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) {
     throw new ProviderInputError("PAYMENT_CUSTOMER_DETAILS_REQUIRED", "A valid phone number is required for payment");
   }
-  return value;
+  return normalized;
 }
 
 function requiredEnv(name: string): string {

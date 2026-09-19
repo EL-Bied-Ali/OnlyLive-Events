@@ -384,16 +384,42 @@ running this migration — not a concern for the app's current state.
   (`lib/validation/auth.ts`) shares the exact same validation rule as
   registration's `phoneSchema` (now extracted as its own export) so a
   later add-a-phone submission is never held to a looser or stricter bar.
-- `PATCH /api/customers/phone` (`requireCustomer`-gated) lets the
-  signed-in customer set/change their own phone number; writes a
-  `customer.phone_updated` audit entry, same pattern as registration's
-  `customer.registered`.
+- `PATCH /api/customers/phone` (`requireCustomer`-gated, rate-limited)
+  lets the signed-in customer set/change their own phone number; the
+  update and its `customer.phone_updated` audit entry commit atomically
+  (`lib/customers/phone.ts`).
 - The checkout page (`CheckoutClient.tsx`) never gates on phone
   speculatively — it only shows the inline phone form after the provider
   itself returns `PAYMENT_CUSTOMER_DETAILS_REQUIRED` from
   `POST /api/checkout/[holdId]/start`, so a provider that doesn't need a
   phone (FakeProvider) is never blocked by this. Submitting the form saves
   the phone then immediately retries checkout.
+- **Audit fixes (independent audit, GPT, of the original version of this
+  flow):**
+  1. **P2 — phone gate accepted values ChariPay's adapter would later
+     reject.** `phoneSchema`/`updatePhoneSchema` only checked for
+     phone-like characters plus an 8-15 digit count, a separately
+     maintained rule from `chariCustomerPhone()`'s actual normalization —
+     a value like `"1234567890"` passed the schema but wasn't a
+     recognized Moroccan or country-coded number, so it would only fail
+     at payment time, by which point the correction form was already gone
+     (phone was non-null). Fixed by extracting one shared
+     `normalizePhone()` (`lib/validation/phone.ts`) that both the schema
+     (storing its canonical E.164 output, not the raw input) and the
+     ChariPay adapter now call — the two can no longer drift apart.
+  2. **P2 — phone update and its audit entry were not atomic.** The
+     original endpoint called `prisma.user.update()` then a separate
+     `writeAuditLog()`; an audit-insert failure would 500 after the phone
+     had already changed, with no audit record of it. Fixed: both writes
+     now run inside one `prisma.$transaction` (`updateCustomerPhone` in
+     `lib/customers/phone.ts`).
+  3. **P3 — the claimed HTTP-auth test coverage didn't exist.** Added
+     Playwright coverage for unauthenticated `PATCH /api/customers/phone`
+     (401) and confirmed end-to-end that the endpoint can only ever
+     change the signed-in caller's own row (`tests/e2e/access-control.spec.ts`).
+  4. Also added: no rate limiting existed on the original endpoint at
+     all — added the same per-account allowance pattern used elsewhere
+     (10/15min).
 
 ## Completed (automated deployment migrations)
 
