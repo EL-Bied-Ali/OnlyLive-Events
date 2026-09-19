@@ -97,7 +97,23 @@ describe("getEmailProvider", () => {
     vi.stubEnv("NODE_ENV", "production");
 
     expect(isResendTestRecipientAllowed()).toBe(false);
-    expect(() => getEmailProvider()).toThrow(/local non-production runtime/);
+    expect(() => getEmailProvider()).toThrow(/development\/test runtime/);
+  });
+
+  it("fails closed when non-Vercel runtime markers are missing or unknown", () => {
+    vi.stubEnv("EMAIL_PROVIDER", "resend");
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("NODE_ENV", "");
+
+    expect(isResendTestRecipientAllowed()).toBe(false);
+    expect(() => getEmailProvider()).toThrow(/development\/test runtime/);
+
+    vi.stubEnv("NODE_ENV", "staging");
+    expect(isResendTestRecipientAllowed()).toBe(false);
+    expect(() => getEmailProvider()).toThrow(/development\/test runtime/);
   });
 
   it("allows the Resend test-recipient redirect in local development", () => {
@@ -107,6 +123,18 @@ describe("getEmailProvider", () => {
     vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
     vi.stubEnv("VERCEL_ENV", "");
     vi.stubEnv("NODE_ENV", "development");
+
+    expect(isResendTestRecipientAllowed()).toBe(true);
+    expect(getEmailProvider().name).toBe("resend");
+  });
+
+  it("allows the Resend test-recipient redirect in local tests", () => {
+    vi.stubEnv("EMAIL_PROVIDER", "resend");
+    vi.stubEnv("RESEND_API_KEY", "re_test_onlylive");
+    vi.stubEnv("RESEND_FROM_EMAIL", "onboarding@resend.dev");
+    vi.stubEnv("RESEND_TEST_RECIPIENT", "owner@example.com");
+    vi.stubEnv("VERCEL_ENV", "");
+    vi.stubEnv("NODE_ENV", "test");
 
     expect(isResendTestRecipientAllowed()).toBe(true);
     expect(getEmailProvider().name).toBe("resend");
