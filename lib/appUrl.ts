@@ -30,7 +30,8 @@ export function getAppBaseUrl(): string {
 
   if (process.env.NODE_ENV === "production" && url.protocol !== "https:") {
     const explicitLoopbackE2e =
-      LOCAL_HOSTNAMES.has(url.hostname)
+      url.protocol === "http:"
+      && LOCAL_HOSTNAMES.has(url.hostname)
       && process.env.ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION === "true";
 
     if (!explicitLoopbackE2e) {
