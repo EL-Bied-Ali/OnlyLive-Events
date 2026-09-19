@@ -555,6 +555,25 @@ running this migration — not a concern for the app's current state.
   set it on a real deployment.
 
 
+
+## Completed (ChariPay provider diagnostic privacy — branch fix/charipay-provider-error-log-privacy)
+
+- ChariPay API response prose is no longer copied into
+  `ProviderRequestError.message`. Provider-controlled text can echo request
+  values, so thrown messages now contain only an OnlyLive-owned fixed phrase
+  plus a validated machine code.
+- Checkout initialization no longer logs `ProviderRequestError.message` at
+  all. Its structured diagnostics are limited to outcome/status plus bounded
+  provider code, field hint and correlation id.
+- Provider error codes are accepted only as 1–64 character machine tokens;
+  malformed/untrusted values collapse to `HTTP_<status>`. Correlation ids
+  are likewise accepted only as bounded diagnostic tokens or dropped.
+- The existing sandbox-only `providerMessageHint` remains the sole place where
+  provider prose can survive, and only after the existing redaction pass.
+- Unit coverage injects email/secret-like data into provider message, code and
+  correlation fields and proves the thrown diagnostics do not retain it.
+
+
 ## In progress
 
 - **ChariPay real PSP integration — draft PR #13**, now based on current `main`
