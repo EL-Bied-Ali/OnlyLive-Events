@@ -9,12 +9,26 @@ function requiredEnv(name: "RESEND_API_KEY" | "RESEND_FROM_EMAIL"): string {
   return value;
 }
 
-function resendFromEmail(): string {
-  const value = requiredEnv("RESEND_FROM_EMAIL");
+function plainEmail(value: string, name: string): string {
   if (/[\r\n]/.test(value) || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
-    throw new Error("RESEND_FROM_EMAIL must be a plain email address");
+    throw new Error(`${name} must be a plain email address`);
   }
   return value;
+}
+
+function resendFromEmail(): string {
+  return plainEmail(requiredEnv("RESEND_FROM_EMAIL"), "RESEND_FROM_EMAIL");
+}
+
+function resendTestRecipient(): string | undefined {
+  const value = process.env.RESEND_TEST_RECIPIENT?.trim();
+  if (!value) return undefined;
+
+  if (process.env.VERCEL_ENV === "production") {
+    throw new Error("RESEND_TEST_RECIPIENT is forbidden in Vercel Production");
+  }
+
+  return plainEmail(value, "RESEND_TEST_RECIPIENT");
 }
 
 function safeProviderCode(body: unknown): string | undefined {
@@ -30,11 +44,23 @@ export class ResendEmailProvider implements EmailProvider {
     // instrumentation.ts calls getEmailProvider() at boot, so construction
     // intentionally validates production configuration before any request.
     requiredEnv("RESEND_API_KEY");
-    resendFromEmail();
+    const from = resendFromEmail();
+    const testRecipient = resendTestRecipient();
+
+    if (from.endsWith("@resend.dev") && !testRecipient) {
+      throw new Error("A resend.dev test sender requires RESEND_TEST_RECIPIENT");
+    }
   }
 
   async send(input: SendEmailInput): Promise<SendEmailResult> {
     if (!input.idempotencyKey || input.idempotencyKey.length > 256) {
+      throw new EmailProviderError("resend_invalid_idempotency_key", false, 400, "invalid_idempotency_key");
+    }
+
+    const testRecipient = resendTestRecipient();
+    const recipient = testRecipient ?? input.to;
+    const providerIdempotencyKey = testRecipient ? `test-${input.idempotencyKey}` : input.idempotencyKey;
+    if (providerIdempotencyKey.length > 256) {
       throw new EmailProviderError("resend_invalid_idempotency_key", false, 400, "invalid_idempotency_key");
     }
 
@@ -49,11 +75,11 @@ export class ResendEmailProvider implements EmailProvider {
         headers: {
           Authorization: `Bearer ${requiredEnv("RESEND_API_KEY")}`,
           "Content-Type": "application/json",
-          "Idempotency-Key": input.idempotencyKey,
+          "Idempotency-Key": providerIdempotencyKey,
         },
         body: JSON.stringify({
           from: `OnlyLive <${resendFromEmail()}>`,
-          to: [input.to],
+          to: [recipient],
           subject: input.subject,
           text: input.text,
         }),
