@@ -53,6 +53,58 @@ function canonicalJson(value: unknown): string {
   return `{${Object.keys(object).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(",")}}`;
 }
 
+const CHARIPAY_WEBHOOK_EVIDENCE_VERSION = "charipay_webhook_fingerprint_v1";
+
+function webhookFingerprint(raw: unknown): string {
+  return crypto.createHash("sha256").update(canonicalJson(raw)).digest("hex");
+}
+
+function webhookTopLevelFieldCount(raw: unknown): number {
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? Object.keys(raw as Record<string, unknown>).length
+    : 0;
+}
+
+/**
+ * Persist only non-sensitive evidence needed for replay/collision diagnostics.
+ * Even JSON property names are provider-controlled and can theoretically carry
+ * customer identifiers, so the evidence keeps only a fingerprint and a count.
+ * Exact provider bodies/field names remain available from ChariPay's own
+ * authenticated webhook-events journal when a new shape must be pinned.
+ */
+function webhookEvidence(raw: unknown): Prisma.InputJsonObject {
+  return {
+    version: CHARIPAY_WEBHOOK_EVIDENCE_VERSION,
+    fingerprint: webhookFingerprint(raw),
+    topLevelFieldCount: webhookTopLevelFieldCount(raw),
+  };
+}
+
+function storedWebhookFingerprint(rawPayload: unknown): string {
+  if (rawPayload && typeof rawPayload === "object" && !Array.isArray(rawPayload)) {
+    const object = rawPayload as Record<string, unknown>;
+    const keys = Object.keys(object).sort();
+    if (
+      keys.length === 3
+      && keys[0] === "fingerprint"
+      && keys[1] === "topLevelFieldCount"
+      && keys[2] === "version"
+      && object.version === CHARIPAY_WEBHOOK_EVIDENCE_VERSION
+      && typeof object.fingerprint === "string"
+      && /^[0-9a-f]{64}$/.test(object.fingerprint)
+      && Number.isSafeInteger(object.topLevelFieldCount)
+      && (object.topLevelFieldCount as number) >= 0
+    ) {
+      return object.fingerprint;
+    }
+  }
+
+  // Backward compatibility: rows written before this hardening contain the
+  // full provider JSON. Hash that legacy value on read so an old unprocessed
+  // event can still be retried/recognized without a data migration.
+  return webhookFingerprint(rawPayload);
+}
+
 function consistentClaim(
   existing: { paymentId: string; eventType: string; signatureValid: boolean; rawPayload: unknown },
   paymentId: string,
@@ -61,7 +113,7 @@ function consistentClaim(
   return existing.paymentId === paymentId
     && existing.eventType === event.type
     && existing.signatureValid !== false
-    && canonicalJson(existing.rawPayload) === canonicalJson(event.raw);
+    && storedWebhookFingerprint(existing.rawPayload) === webhookFingerprint(event.raw);
 }
 
 function isSyntheticTestPayload(raw: unknown): boolean {
@@ -151,7 +203,7 @@ export async function POST(request: NextRequest) {
           metadata: {
             externalEventId: event.externalEventId,
             eventType: event.type,
-            raw: event.raw as Prisma.InputJsonValue,
+            payloadEvidence: webhookEvidence(event.raw),
           },
         },
       });
@@ -198,7 +250,7 @@ export async function POST(request: NextRequest) {
               metadata: {
                 provider: provider.name,
                 eventType: event.type,
-                raw: event.raw as Prisma.InputJsonValue,
+                payloadEvidence: webhookEvidence(event.raw),
               },
             },
           });
@@ -327,9 +379,10 @@ export async function POST(request: NextRequest) {
       // codebase uses this same true-UTC-digits convention (see
       // TASKS.md's naive-timestamp-vs-now() writeup) rather than a
       // server-computed value subject to the session's TimeZone GUC.
+      const persistedEvidence = webhookEvidence(event.raw);
       const claimed = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO payment_events (id, payment_id, provider, external_event_id, event_type, raw_payload, signature_valid, received_at)
-        VALUES (${newEventId}, ${paymentId}, ${provider.name}, ${event.externalEventId}, ${event.type}, ${JSON.stringify(event.raw)}::jsonb, true, ${new Date()})
+        VALUES (${newEventId}, ${paymentId}, ${provider.name}, ${event.externalEventId}, ${event.type}, ${JSON.stringify(persistedEvidence)}::jsonb, true, ${new Date()})
         ON CONFLICT (provider, external_event_id) DO NOTHING
         RETURNING id
       `;
