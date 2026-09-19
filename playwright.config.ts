@@ -76,6 +76,11 @@ export default defineConfig({
     env: {
       DATABASE_URL: e2eDatabaseUrl,
       NEXTAUTH_URL: baseURL,
+      // getAppBaseUrl() requires HTTPS in production. This server is an
+      // isolated loopback-only E2E process, so opt into the narrow HTTP
+      // loopback exception explicitly instead of weakening the invariant
+      // for every production-mode localhost process.
+      ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION: "true",
       // `next start` always runs with NODE_ENV=production, and the fake
       // payment provider refuses to boot in production without this explicit
       // opt-in. E2E uses an isolated database and no real customer traffic.
