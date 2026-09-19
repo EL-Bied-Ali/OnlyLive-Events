@@ -162,6 +162,12 @@ export class ProviderRequestError extends Error {
      * message (e.g. "walletId"). Never the raw provider message or a value.
      */
     public readonly providerFieldHint?: string,
+    /**
+     * Redacted provider validation message used only for short-lived sandbox
+     * diagnostics. Known request values and generic PII/secret patterns are
+     * removed before this field is populated.
+     */
+    public readonly providerMessageHint?: string,
   ) {
     super(message);
     this.name = "ProviderRequestError";
