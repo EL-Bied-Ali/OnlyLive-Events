@@ -176,16 +176,16 @@ describe("ChariPay expired checkout reconciliation", () => {
         currency: "MAD",
         requestTimeoutMs: 5_000,
       });
-
-      await vi.advanceTimersByTimeAsync(4_999);
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      await vi.advanceTimersByTimeAsync(1);
-
-      await expect(lookup).rejects.toMatchObject({
+      const rejection = expect(lookup).rejects.toMatchObject({
         name: "ProviderRequestError",
         outcomeUnknown: true,
         message: "ChariPay request timed out",
       });
+
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
     } finally {
       vi.useRealTimers();
     }
