@@ -253,9 +253,9 @@ call exceeding the 5-minute lease could let a second worker reclaim and
 double-send, and a stale worker could then overwrite the second worker's
 result — needs a request timeout shorter than the lease plus a fencing/
 conditional-finalization mechanism before a real provider is wired in.
-`errorCode()`'s stored/logged error message isn't guaranteed free of
-provider-specific sensitive data — needs a typed provider error with a
-safe machine code before a real provider is wired in. `/api/internal/
+`errorCode()`'s stored/logged error message was not guaranteed free of
+provider-specific sensitive data; this is now closed by the privacy-safe
+provider/error-code hardening documented below. `/api/internal/
 dispatch-emails` now accepts `CRON_SECRET`/`Authorization: Bearer` the
 same way `/api/internal/sweep-expired-holds` does (`lib/http/
 internalAuth.ts`, shared by both routes; fixed during the PR #13 merge
@@ -508,6 +508,23 @@ running this migration — not a concern for the app's current state.
 - Regression coverage suspends one worker during `send()`, simulates a newer
   worker reclaiming and completing the same row, then proves the stale worker
   cannot replace the newer provider message id when it resumes.
+
+
+## Completed (privacy-safe email error codes — branch fix/email-outbox-safe-error-codes)
+
+- The outbox dispatcher no longer persists or logs arbitrary `Error.message`
+  text. Render/Prisma/runtime exceptions can contain SQL details, URLs or
+  customer data, so untyped exceptions now collapse to the fixed retryable
+  code `email_dispatch_internal_error`.
+- `EmailProviderError` now enforces a bounded machine-code format. A provider
+  adapter that accidentally passes a raw response body or human error message
+  is sanitized to `email_provider_error` before the value reaches either
+  `lastErrorCode` or application logs.
+- Existing Resend errors already use safe machine codes and keep their
+  retryable/non-retryable semantics unchanged.
+- Regression coverage injects a provider error containing the customer's email
+  and a fake secret and proves neither value is persisted or logged.
+
 
 ## In progress
 

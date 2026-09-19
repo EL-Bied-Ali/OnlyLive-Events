@@ -32,10 +32,15 @@ function hashRecipient(email: string): string {
   return crypto.createHash("sha256").update(email).digest("hex").slice(0, 12);
 }
 
-/** Never log a raw error object (may embed a future real provider's response body) or the email body — only a short, bounded code. */
+/**
+ * Never persist/log arbitrary exception messages: Prisma/render/runtime
+ * errors can include SQL details, URLs, or customer data. Provider adapters
+ * expose a sanitized machine code through EmailProviderError; every other
+ * exception collapses to one fixed internal code while remaining retryable.
+ */
 function errorCode(error: unknown): string {
-  if (error instanceof Error) return error.message.slice(0, 200);
-  return "unknown_error";
+  if (error instanceof EmailProviderError) return error.safeCode;
+  return "email_dispatch_internal_error";
 }
 
 interface RenderedEmail {
