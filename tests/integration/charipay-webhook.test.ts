@@ -21,7 +21,7 @@ function enableChariPay() {
 
 function signedRequest(
   payload: unknown,
-  type: "payment.succeeded" | "payment.failed" | "refund.succeeded" | "refund.failed",
+  type: string,
   eventId = crypto.randomUUID(),
   signatureOverride?: string,
 ) {
@@ -254,20 +254,42 @@ describe("ChariPay webhook route", () => {
     await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({ status: "awaiting_payment" });
   });
 
-  it("records the payment.failed unverified-shape evidence exactly once for a duplicate/replayed delivery", async () => {
+  it("records the payment.failed unverified-shape evidence exactly once for concurrent duplicate deliveries", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
     const eventId = crypto.randomUUID();
     const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
 
-    const first = await chariWebhookPost(signedRequest(payload, "payment.failed", eventId));
+    const [first, duplicate] = await Promise.all([
+      chariWebhookPost(signedRequest(payload, "payment.failed", eventId)),
+      chariWebhookPost(signedRequest(payload, "payment.failed", eventId)),
+    ]);
     expect(first.status).toBe(202);
-    const replay = await chariWebhookPost(signedRequest(payload, "payment.failed", eventId));
-    expect(replay.status).toBe(202);
+    expect(duplicate.status).toBe(202);
 
     expect(await prisma.auditLog.count({
       where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: eventId },
     })).toBe(1);
+  });
+
+  it("does not misclassify an unknown signed provider event type as payment.failed", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const eventId = crypto.randomUUID();
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.unknown_future_event",
+      eventId,
+    ));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: "INVALID_PROVIDER_PAYLOAD" });
+    expect(await prisma.auditLog.count({
+      where: { action: "charipay.payment_failed_shape_unverified", entityType: "PaymentProviderEvent", entityId: eventId },
+    })).toBe(0);
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({
+      status: "awaiting_payment",
+    });
   });
 
   it("still rejects an invalid signature before the payment.failed unverified-shape gate", async () => {
