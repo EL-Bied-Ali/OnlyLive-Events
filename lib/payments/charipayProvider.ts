@@ -245,7 +245,39 @@ function extractProviderFieldHint(code: string, message: string): string | undef
   return undefined;
 }
 
-async function parseApiResponse(response: Response): Promise<Record<string, unknown>> {
+function redactProviderMessage(
+  code: string,
+  message: string,
+  knownValues: Array<string | number | null | undefined> = [],
+): string | undefined {
+  if (code !== "MISSING_PARAMETER" || !message) return undefined;
+
+  let redacted = message.replace(/[\u0000-\u001F\u007F]/g, " ");
+
+  const exactValues = knownValues
+    .map((value) => String(value ?? "").trim())
+    .filter((value) => value.length >= 3)
+    .sort((a, b) => b.length - a.length);
+  for (const value of exactValues) {
+    redacted = redacted.split(value).join("<redacted>");
+  }
+
+  redacted = redacted
+    .replace(/chari_sk_(?:test|live)_[A-Za-z0-9_-]+/gi, "<api-key>")
+    .replace(/\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b/gi, "<uuid>")
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, "<email>")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, "<url>")
+    .replace(/\+?\d[\d\s().-]{7,}\d/g, "<number>");
+
+  redacted = redacted.replace(/\s+/g, " ").trim();
+  if (!redacted) return undefined;
+  return redacted.length <= 240 ? redacted : redacted.slice(0, 237) + "...";
+}
+
+async function parseApiResponse(
+  response: Response,
+  knownValues: Array<string | number | null | undefined> = [],
+): Promise<Record<string, unknown>> {
   const body = await readJsonResponse(response);
   if (!response.ok) {
     const error = body.error as { code?: unknown; message?: unknown } | undefined;
@@ -256,6 +288,7 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
       ? body.correlationId
       : responseCorrelationId(response);
     const providerFieldHint = extractProviderFieldHint(code, message);
+    const providerMessageHint = redactProviderMessage(code, message, knownValues);
     throw new ProviderRequestError(
       `ChariPay ${code}: ${message}`,
       outcomeUnknown,
@@ -264,6 +297,7 @@ async function parseApiResponse(response: Response): Promise<Record<string, unkn
       correlationId,
       code,
       providerFieldHint,
+      providerMessageHint,
     );
   }
   return body;
@@ -562,7 +596,14 @@ export class ChariPayProvider implements PaymentProvider {
       }),
     });
 
-    const body = (await parseApiResponse(response)) as ChariPayRefundResponse;
+    const body = (await parseApiResponse(response, [
+      input.providerPaymentId,
+      input.paymentExternalId,
+      input.orderExternalId,
+      input.idempotencyKey,
+      input.reason,
+      operationId,
+    ])) as ChariPayRefundResponse;
     const providerRefundId = typeof body.refundId === "string"
       ? body.refundId
       : typeof body.refundReference === "string"
