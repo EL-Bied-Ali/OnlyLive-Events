@@ -233,6 +233,74 @@ describe("ChariPay webhook route", () => {
         metadata: { path: ["externalEventId"], equals: eventId },
       },
     })).toBe(1);
+    const audit = await prisma.auditLog.findFirstOrThrow({
+      where: {
+        action: "payment.webhook_status_verification_unavailable",
+        entityType: "Payment",
+        entityId: fixture.payment.id,
+        metadata: { path: ["externalEventId"], equals: eventId },
+      },
+    });
+    expect(audit.metadata).toMatchObject({
+      externalEventId: eventId,
+      occurrences: 2,
+      firstReason: "provider_lookup_failed",
+      reason: "provider_lookup_failed",
+    });
+  });
+
+  it("refreshes one mismatch audit row when a retry gets a more conclusive provider status", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    const lookupSpy = enableChariPay();
+    lookupSpy
+      .mockResolvedValueOnce({
+        status: "pending",
+        providerOperationId: "op-pending",
+        providerStatus: "PENDING",
+      })
+      .mockResolvedValueOnce({
+        status: "failed",
+        providerOperationId: "op-failed",
+        providerStatus: "FAILED",
+      });
+    const eventId = crypto.randomUUID();
+    const requestPayload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
+
+    const first = await chariWebhookPost(signedRequest(
+      requestPayload,
+      "payment.succeeded",
+      eventId,
+    ));
+    expect(first.status).toBe(503);
+
+    const second = await chariWebhookPost(signedRequest(
+      requestPayload,
+      "payment.succeeded",
+      eventId,
+    ));
+    expect(second.status).toBe(202);
+    await expect(second.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
+
+    const audits = await prisma.auditLog.findMany({
+      where: {
+        action: "payment.webhook_header_status_mismatch",
+        entityType: "Payment",
+        entityId: fixture.payment.id,
+        metadata: { path: ["externalEventId"], equals: eventId },
+      },
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]?.metadata).toMatchObject({
+      externalEventId: eventId,
+      occurrences: 2,
+      firstObservedProviderStatus: "pending",
+      observedProviderStatus: "failed",
+      expectedProviderStatus: "succeeded",
+    });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+    expect(await prisma.paymentEvent.count({
+      where: { provider: "charipay", externalEventId: eventId },
+    })).toBe(0);
   });
 
   it("returns 503 without mutation when the authenticated ledger is not yet conclusive", async () => {
