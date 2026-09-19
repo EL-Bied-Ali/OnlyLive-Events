@@ -224,14 +224,22 @@ function extractProviderFieldHint(code: string, message: string): string | undef
   if (code !== "MISSING_PARAMETER") return undefined;
 
   // Never persist/log provider-controlled prose. Extract only a bounded
-  // identifier-shaped field name from common validation-message forms.
+  // identifier-shaped field name from a small allowlist of validation-message
+  // shapes. The trailing lookahead is deliberate: without it, a value such as
+  // "buyer@example.com" could be truncated to "buyer" and misclassified as a
+  // harmless field name.
+  const field = "([A-Za-z][A-Za-z0-9_.-]{0,63})";
+  const end = "(?=$|[\\s,.;)\\]}])";
   const patterns = [
-    /(?:missing|required)(?:\s+(?:parameter|field))?\s*[:=]?\s*['"`]?([A-Za-z][A-Za-z0-9_.-]{0,63})/i,
-    /(?:parameter|field)\s+['"`]?([A-Za-z][A-Za-z0-9_.-]{0,63})['"`]?\s+(?:is\s+)?(?:missing|required)/i,
+    new RegExp(`missing\\s+required\\s+(?:parameter|field)\\s*[:=]?\\s*['"`]?${field}['"`]?${end}`, "i"),
+    new RegExp(`missing\\s+(?:parameter|field)\\s*[:=]?\\s*['"`]?${field}['"`]?${end}`, "i"),
+    new RegExp(`required\\s+(?:parameter|field)\\s*[:=]?\\s*['"`]?${field}['"`]?${end}`, "i"),
+    new RegExp(`(?:parameter|field)\\s+['"`]?${field}['"`]?\\s+(?:is\\s+)?(?:missing|required)\\b`, "i"),
+    new RegExp(`['"`]?${field}['"`]?\\s+is\\s+(?:missing|required)\\b`, "i"),
   ];
+
   for (const pattern of patterns) {
-    const match = message.match(pattern);
-    const candidate = match?.[1];
+    const candidate = message.match(pattern)?.[1];
     if (candidate && !/^(parameter|field|required|missing|is)$/i.test(candidate)) {
       return candidate;
     }
