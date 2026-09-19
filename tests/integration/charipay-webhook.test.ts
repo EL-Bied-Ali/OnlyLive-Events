@@ -17,6 +17,15 @@ function enableChariPay() {
   vi.stubEnv("ONLYLIVE_PUBLIC_URL", "https://preview.onlylive.example/");
   vi.stubEnv("VERCEL_ENV", "preview");
   vi.stubEnv("VERCEL_AUTOMATION_BYPASS_SECRET", "test-automation-bypass-secret");
+  // Payment event headers are not covered by ChariPay's HMAC. The route now
+  // independently confirms header-claimed payment outcomes through the
+  // authenticated transaction ledger. Individual tests override this spy when
+  // exercising contradictions/unavailable lookup states.
+  vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+    status: "succeeded",
+    providerOperationId: "123456",
+    providerStatus: "SUCCESS",
+  });
 }
 
 function signedRequest(
@@ -129,6 +138,102 @@ describe("ChariPay webhook route", () => {
       status: "paid",
     });
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
+  });
+
+  it("requires authenticated provider-ledger confirmation before honoring payment.succeeded", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    const lookupSpy = vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+      status: "succeeded",
+      providerOperationId: "op-confirmed",
+      providerStatus: "SUCCESS",
+    });
+
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+    ));
+
+    expect(response.status).toBe(200);
+    expect(lookupSpy).toHaveBeenCalledWith({
+      orderExternalId: fixture.order.id,
+      amountCents: fixture.payment.amountCents,
+      currency: "MAD",
+    });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
+  });
+
+  it("never fulfills a header-claimed payment.succeeded when the authenticated ledger says failed", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+      status: "failed",
+      providerOperationId: "op-failed",
+      providerStatus: "FAILED",
+    });
+    const eventId = crypto.randomUUID();
+
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+      eventId,
+    ));
+
+    expect(response.status).toBe(202);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, reconciliationRequired: true });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({
+      status: "awaiting_payment",
+    });
+    expect(await prisma.paymentEvent.count({
+      where: { provider: "charipay", externalEventId: eventId },
+    })).toBe(0);
+    expect(await prisma.auditLog.count({
+      where: {
+        action: "payment.webhook_header_status_mismatch",
+        entityType: "Payment",
+        entityId: fixture.payment.id,
+      },
+    })).toBeGreaterThanOrEqual(1);
+  });
+
+  it("returns 503 without mutation when provider-ledger confirmation is temporarily unavailable", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockRejectedValue(new Error("simulated lookup outage"));
+    const eventId = crypto.randomUUID();
+
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+      eventId,
+    ));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ error: "PROVIDER_STATUS_VERIFICATION_UNAVAILABLE" });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+    expect(await prisma.paymentEvent.count({
+      where: { provider: "charipay", externalEventId: eventId },
+    })).toBe(0);
+  });
+
+  it("returns 503 without mutation when the authenticated ledger is not yet conclusive", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+    vi.spyOn(ChariPayProvider.prototype, "lookupPaymentStatus").mockResolvedValue({
+      status: "pending",
+      providerOperationId: "op-pending",
+      providerStatus: "PENDING",
+    });
+
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+    ));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({ error: "PROVIDER_STATUS_NOT_CONFIRMED" });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
   });
 
   it("fails closed on a correctly signed but incomplete payload", async () => {
