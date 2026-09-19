@@ -501,6 +501,43 @@ describe("ChariPayProvider", () => {
     }
   });
 
+  it("redacts known request values and generic PII from a MISSING_PARAMETER diagnostic message", async () => {
+    const leakedUuid = "123e4567-e89b-12d3-a456-426614174000";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response({
+        error: {
+          code: "MISSING_PARAMETER",
+          message: `Missing required merchant field. refund=refund-sensitive reason=test email=buyer@example.com url=https://example.com/x uuid=${leakedUuid}`,
+        },
+        correlationId: "corr-redacted-message",
+      }, 400)),
+    );
+
+    try {
+      await new ChariPayProvider().refund({
+        providerPaymentId: "ps-sensitive",
+        paymentExternalId: "payment-sensitive",
+        orderExternalId: "order-sensitive",
+        paymentAmountCents: 1_000,
+        amountCents: 500,
+        currency: "MAD",
+        reason: "test",
+        idempotencyKey: "refund-sensitive",
+      });
+      throw new Error("expected provider failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      const providerError = error as ProviderRequestError;
+      expect(providerError.providerMessageHint).toBe(
+        "Missing required merchant field. refund=<redacted> reason=<redacted> email=<email> url=<url> uuid=<uuid>",
+      );
+      expect(providerError.providerMessageHint).not.toContain("refund-sensitive");
+      expect(providerError.providerMessageHint).not.toContain("buyer@example.com");
+      expect(providerError.providerMessageHint).not.toContain(leakedUuid);
+    }
+  });
+
   it("parses the provider's own machine error code onto providerCode for diagnostics", async () => {
     vi.stubGlobal(
       "fetch",
