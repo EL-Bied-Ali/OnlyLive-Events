@@ -1,0 +1,123 @@
+name: Dispatch pending emails
+
+# Vercel Hobby's cron jobs only run once/day, far too infrequent for
+# customer-facing order-confirmation/failure emails (see
+# app/api/internal/dispatch-emails/route.ts's own doc comment and
+# TASKS.md/docs/ARCHITECTURE.md's "eager email dispatch" entry). This
+# workflow is the recurring-scheduler half of that: an authenticated
+# external caller for /api/internal/dispatch-emails, which is otherwise
+# only invoked opportunistically by the app's own eager after() trigger.
+#
+# GitHub Actions only evaluates `schedule` from whatever is committed to
+# the repository's default branch, regardless of which branch the actual
+# application code lives on -- this file intentionally targets whichever
+# deployment ONLYLIVE_DISPATCH_BASE_URL points at (currently the
+# feat/charipay-integration Preview branch alias, since production has not
+# launched yet) rather than assuming that URL matches this workflow's own
+# branch.
+#
+# Operational caveats (per two rounds of GPT's cold audit -- an unsupported
+# 2-minute schedule, a too-short client timeout twice over, and response
+# validation that failed open on a malformed/missing body, all corrected
+# here):
+# - GitHub's documented minimum schedule interval is 5 minutes; this is a
+#   5-minute *target*, not a guarantee -- scheduled runs are explicitly
+#   best-effort and can be delayed or silently dropped under GitHub-wide
+#   load. Never rely on this alone for a hard delivery-time guarantee; the
+#   eager after() trigger (#52) remains the primary near-real-time path.
+# - GitHub automatically disables a scheduled workflow after 60 days with
+#   no repository activity at all (not just no runs of this workflow) --
+#   whoever owns this repo long-term needs to know that and re-enable it
+#   under Actions if it ever goes quiet for that long.
+# - A GitHub-hosted public repo gets free Actions minutes; this job is a
+#   single lightweight curl call every ~5 minutes, well within that.
+#
+# Secrets used (repository secrets, not committed):
+#   ONLYLIVE_DISPATCH_BASE_URL    e.g. https://onlylive-events-git-feat-charipay-ebf143-el-bied-alis-projects.vercel.app
+#   ONLYLIVE_DISPATCH_SECRET      the current INTERNAL_API_SECRET value (X-Internal-Secret auth path;
+#                                 deliberately NOT CRON_SECRET, which is also a production ChariPay guard --
+#                                 see lib/payments/index.ts -- and shouldn't be duplicated into a third-party service)
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+# This job only ever calls an external HTTPS endpoint; it never needs to
+# read or write anything in this repository via GITHUB_TOKEN.
+permissions: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/internal/dispatch-emails and fail on a real problem
+        run: |
+          set -euo pipefail
+
+          # lib/email/dispatcher.ts claims up to BATCH_SIZE (production
+          # default 20) rows and sends them SEQUENTIALLY, one row's
+          # provider call never running concurrently with another's. Each
+          # Resend call has its own 10s client-side timeout
+          # (lib/email/resendProvider.ts's REQUEST_TIMEOUT_MS), so a batch
+          # where every row legitimately hits that timeout can take up to
+          # ~200s, plus rendering/DB overhead -- comfortably under, but not
+          # far under, Vercel's current ~300s Hobby/Fluid Compute function
+          # duration ceiling (this route sets no maxDuration of its own, so
+          # it inherits that ceiling). 270s gives real slow-but-succeeding
+          # batches room to finish while staying under the platform limit,
+          # rather than an arbitrary short timeout cutting off legitimate
+          # work partway through with no visibility into what happened.
+          response=$(curl --fail-with-body --silent --show-error \
+            --max-time 270 \
+            -X POST \
+            -H "x-internal-secret: ${ONLYLIVE_DISPATCH_SECRET}" \
+            "${ONLYLIVE_DISPATCH_BASE_URL}/api/internal/dispatch-emails")
+          echo "$response"
+
+          # HTTP 200 alone does not mean every claimed email actually sent,
+          # or even that the body is what this workflow expects --
+          # dispatchPendingEmails()'s real summary shape is
+          # {claimed,sent,retried,permanentlyFailed,skipped}, all
+          # non-negative integers. Validate that shape explicitly and fail
+          # loudly if it doesn't hold, rather than defaulting a
+          # missing/malformed field to 0 with `// 0` and silently reporting
+          # success on a response this workflow doesn't actually understand.
+          if ! echo "$response" | jq -e '
+            [.claimed, .sent, .retried, .permanentlyFailed, .skipped]
+            | all(type == "number" and . >= 0 and (. == floor))
+          ' > /dev/null; then
+            echo "::error::dispatch-emails response failed schema validation (missing/non-integer/negative field): $response"
+            exit 1
+          fi
+
+          claimed=$(echo "$response" | jq -r '.claimed')
+          retried=$(echo "$response" | jq -r '.retried')
+          permanently_failed=$(echo "$response" | jq -r '.permanentlyFailed')
+
+          # Must match lib/email/dispatcher.ts's BATCH_SIZE production
+          # default. A fully saturated batch means this run may not have
+          # cleared the entire backlog -- distinct from (and a leading
+          # indicator of) an outright failure: it says delivery may be
+          # falling behind this schedule's cadence, not that anything sent
+          # this run actually failed.
+          full_batch_size=20
+          if [ "$claimed" -eq "$full_batch_size" ]; then
+            echo "::warning::claimed a full batch of ${full_batch_size} -- more pending emails may remain; delivery may be falling behind this 5-minute schedule"
+          fi
+
+          # permanentlyFailed is a real, human-actionable problem and must
+          # fail this run (visible red X, satisfies #48's backlog/failure-
+          # visibility requirement); a nonzero retried count is ordinary
+          # transient behavior (provider hiccup, backoff in progress) and
+          # is only logged, not treated as a failure.
+          if [ "$retried" -gt 0 ]; then
+            echo "::warning::${retried} email(s) scheduled for retry this run"
+          fi
+          if [ "$permanently_failed" -gt 0 ]; then
+            echo "::error::${permanently_failed} email(s) permanently failed -- see dispatch-emails logs"
+            exit 1
+          fi
+        env:
+          ONLYLIVE_DISPATCH_BASE_URL: ${{ secrets.ONLYLIVE_DISPATCH_BASE_URL }}
+          ONLYLIVE_DISPATCH_SECRET: ${{ secrets.ONLYLIVE_DISPATCH_SECRET }}
