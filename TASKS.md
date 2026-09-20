@@ -369,6 +369,88 @@ running this migration — not a concern for the app's current state.
   action from the order detail page — only detection/notification is
   automatic now (see docs/PAYMENTS.md's Open decisions).
 
+## Completed (email dispatch scheduling — issue #48, PRs #52/#53/#54)
+
+Real ChariPay sandbox purchases and Resend delivery already worked before
+this; the outstanding gap was that nothing reliably called
+`dispatchPendingEmails()` at all outside of manual testing (Vercel Hobby's
+native cron only runs once/day — too infrequent for order-confirmation
+email).
+
+- **PR #52 — eager dispatch trigger.** `lib/email/eagerDispatch.ts` wraps
+  `after()` (from `next/server`) around `dispatchPendingEmails()`, called
+  from the 5 places that enqueue a customer-facing email: both webhook
+  handlers, the expired-holds sweep, admin manual fulfillment, and the
+  customer's own payment-reconciliation poll route (gated —
+  `if (result.reconciled)` only — so routine ~5s poll traffic never
+  triggers a dispatch scan). `after()` throws synchronously outside a real
+  Next.js request scope; the wrapper swallows that and logs only a fixed
+  safe code, never the raw exception (a privacy regression GPT's audit
+  caught and had fixed before merge). This is the near-real-time delivery
+  path; the scheduler below is the backstop for whatever it misses.
+- **PR #53 → #54 — GitHub Actions scheduler, `main`'s
+  `.github/workflows/dispatch-emails-cron.yml`.** Runs every 5 minutes
+  (GitHub's documented minimum interval; best-effort, not guaranteed),
+  calling `/api/internal/dispatch-emails` and failing the run (red X) on
+  any `permanentlyFailed` row or a response that doesn't validate as
+  `{claimed,sent,retried,permanentlyFailed,skipped}` all non-negative
+  integers.
+  - **PR #53's real-world failure, found only by an actual
+    `workflow_dispatch` run, not by review:** Vercel's own Deployment
+    Protection (SSO wall) 302-redirects any unauthenticated caller to
+    `vercel.com/sso-api` *before* the request ever reaches the app's own
+    `X-Internal-Secret` check — a platform-level auth layer, completely
+    separate from and in front of the app's. An earlier claim of having
+    "verified" the endpoint was invalid: that test ran through an
+    authenticated browser session carrying a Vercel SSO cookie, which a
+    bare `curl` (what GitHub Actions actually sends) does not have.
+  - **PR #54's fix:** GitHub Actions OIDC (`actions/github-script`'s
+    `core.getIDToken()`, `permissions: id-token: write`) sent as
+    `x-vercel-trusted-oidc-idp-token`, verified by Vercel's "Trusted
+    Sources" feature (Project Settings → Deployment Protection → Trusted
+    Sources → GitHub Actions, scoped to this repo, branch `main`,
+    environment Preview) — chosen over a second static
+    "Protection Bypass for Automation" secret since it needs no long-lived
+    credential. Pinned to the exact `actions/github-script` commit SHA
+    GPT's audit specifically vetted (`60a0d83…`, v7.0.1) rather than
+    whatever the mutable `v7` tag currently points at (confirmed
+    `dist/index.js`/`src/main.ts` genuinely differ from v7.1.0 — "pinned
+    to an immutable SHA" and "pinned to the SHA someone actually audited"
+    are not the same guarantee).
+  - **Real end-to-end verification, not just green CI:** a
+    `workflow_dispatch` run against `main` post-merge returned genuine
+    dispatcher JSON (`{"claimed":0,"sent":0,"retried":0,
+    "permanentlyFailed":0,"skipped":0}`), confirmed by reading the actual
+    run log, not just its pass/fail status. A no-OIDC-token baseline run
+    (the pre-merge workflow) still hit the SSO wall's `"Redirecting..."`,
+    confirming Trusted Sources doesn't open the door for non-OIDC
+    requests either.
+  - **A self-inflicted false alarm during testing, worth recording:**
+    dispatching the OIDC-enabled workflow against the PR's own feature
+    branch (to avoid touching `main` pre-merge) also hit the SSO wall —
+    not a Vercel bug, but because Trusted Sources exactly matches every
+    configured claim including the branch, and the rule is (correctly)
+    scoped to `main` only, since GitHub only ever evaluates `schedule`
+    triggers from the default branch anyway.
+  - Also caught in GPT's audit before merge: a temporary debug step added
+    during troubleshooting called the real `dispatch-emails` endpoint a
+    second time per run (the production step ran again right after),
+    double-invoking a stateful, side-effecting endpoint — removed before
+    merge (verified the merged file is byte-identical to the previously
+    audited commit).
+  - Note on process, not substance: GPT cannot submit a formal GitHub
+    "Approved" review on this repo — its connected GitHub identity is the
+    same account as the PR author, and GitHub blocks self-approval/
+    self-request-changes. Its audits are recorded as `COMMENTED` reviews
+    with explicit pass/fail findings instead; treat those, not the GitHub
+    review-decision field, as the real audit record here.
+- **Still open before #48 can close again:** observe one genuine
+  *scheduled* (not manual `workflow_dispatch`) run actually firing on the
+  5-minute cadence, then repeat the full unattended
+  `EmailOutbox → dispatcher → Resend` smoke test (a real purchase, without
+  ever manually calling `/api/internal/dispatch-emails`) to prove the
+  scheduler — not a manual call — is what delivered the email.
+
 ## In progress
 
 - None.
