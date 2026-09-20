@@ -122,6 +122,90 @@ describe("ChariPay webhook route", () => {
     await expect(response.json()).resolves.toMatchObject({ ok: true, test: true });
   });
 
+  it("bounds audit amplification when one signed body is relabeled into early fail-closed event types", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    const lookupSpy = enableChariPay();
+    const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
+    const rawBody = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const signature = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(`${timestamp}.${rawBody}`)
+      .digest("hex");
+    const ids = Array.from({ length: 8 }, () => crypto.randomUUID());
+
+    const relabeled = (eventId: string, type: "refund.succeeded" | "payment.failed") =>
+      new NextRequest("https://preview.onlylive.example/api/payments/webhook/charipay", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-chari-signature": signature,
+          "x-chari-timestamp": timestamp,
+          "chari-event-id": eventId,
+          "chari-event-type": type,
+        },
+        body: rawBody,
+      });
+
+    for (let index = 0; index < 6; index += 1) {
+      const type = index % 2 === 0 ? "refund.succeeded" : "payment.failed";
+      const response = await chariWebhookPost(relabeled(ids[index]!, type));
+      expect(response.status).toBe(202);
+      const body = await response.json();
+      expect(body.replayRateLimited).not.toBe(true);
+    }
+
+    for (let index = 6; index < 8; index += 1) {
+      const type = index % 2 === 0 ? "refund.succeeded" : "payment.failed";
+      const response = await chariWebhookPost(relabeled(ids[index]!, type));
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        reconciliationRequired: true,
+        replayRateLimited: true,
+      });
+    }
+
+    // These paths fail closed before Payment resolution / provider ledger I/O.
+    expect(lookupSpy).not.toHaveBeenCalled();
+    expect(await prisma.paymentEvent.count({ where: { paymentId: fixture.payment.id } })).toBe(0);
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+
+    const relevantAudits = await prisma.auditLog.findMany({
+      where: {
+        action: {
+          in: [
+            "refund.webhook_shape_unverified",
+            "charipay.payment_failed_shape_unverified",
+          ],
+        },
+      },
+      select: { action: true, entityId: true, metadata: true },
+    });
+    const ourIds = new Set<string>(ids);
+    const matching = relevantAudits.filter((row) => {
+      if (row.action === "charipay.payment_failed_shape_unverified") {
+        return ourIds.has(row.entityId);
+      }
+      const metadata = row.metadata;
+      return Boolean(
+        metadata
+        && typeof metadata === "object"
+        && !Array.isArray(metadata)
+        && typeof (metadata as Record<string, unknown>).externalEventId === "string"
+        && ourIds.has((metadata as Record<string, unknown>).externalEventId as string),
+      );
+    });
+    expect(matching).toHaveLength(6);
+    const recordedIds = new Set(matching.map((row) =>
+      row.action === "charipay.payment_failed_shape_unverified"
+        ? row.entityId
+        : ((row.metadata as Record<string, unknown>).externalEventId as string),
+    ));
+    expect(recordedIds.has(ids[6]!)).toBe(false);
+    expect(recordedIds.has(ids[7]!)).toBe(false);
+  });
+
   it("processes a historical ChariPay payment after the default provider changes", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     enableChariPay();
@@ -321,6 +405,143 @@ describe("ChariPay webhook route", () => {
     expect(response.status).toBe(503);
     await expect(response.json()).resolves.toMatchObject({ error: "PROVIDER_STATUS_NOT_CONFIRMED" });
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(0);
+  });
+
+  it("bounds authenticated ledger lookups when one signed body is replayed under many unsigned event ids", async () => {
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    const lookupSpy = enableChariPay();
+    const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
+    const rawBody = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const signature = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(`${timestamp}.${rawBody}`)
+      .digest("hex");
+    const eventIds = Array.from({ length: 8 }, () => crypto.randomUUID());
+
+    const replay = (eventId: string, body = rawBody, signedAt = timestamp, bodySignature = signature) =>
+      new NextRequest("https://preview.onlylive.example/api/payments/webhook/charipay", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-chari-signature": bodySignature,
+          "x-chari-timestamp": signedAt,
+          "chari-event-id": eventId,
+          "chari-event-type": "payment.succeeded",
+        },
+        body,
+      });
+
+    for (const eventId of eventIds.slice(0, 6)) {
+      const response = await chariWebhookPost(replay(eventId));
+      expect(response.status).toBe(200);
+    }
+
+    for (const eventId of eventIds.slice(6)) {
+      const response = await chariWebhookPost(replay(eventId));
+      expect(response.status).toBe(202);
+      await expect(response.json()).resolves.toMatchObject({
+        ok: true,
+        reconciliationRequired: true,
+        verificationRateLimited: true,
+      });
+    }
+
+    expect(lookupSpy).toHaveBeenCalledTimes(6);
+    expect(await prisma.paymentEvent.count({ where: { paymentId: fixture.payment.id } })).toBe(6);
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
+
+    const rateLimitAudits = await prisma.auditLog.findMany({
+      where: {
+        action: "payment.webhook_status_verification_rate_limited",
+        entityType: "Payment",
+        entityId: fixture.payment.id,
+      },
+    });
+    expect(rateLimitAudits).toHaveLength(1);
+    expect(rateLimitAudits[0]?.metadata).toMatchObject({
+      occurrences: 2,
+      firstEventType: "payment.succeeded",
+      latestEventType: "payment.succeeded",
+      limit: 6,
+      windowMs: 300_000,
+    });
+
+    // An exact processed duplicate remains a cheap idempotent acknowledgement
+    // even after this signed body's verification budget has been exhausted.
+    const duplicate = await chariWebhookPost(replay(eventIds[0]!));
+    expect(duplicate.status).toBe(200);
+    await expect(duplicate.json()).resolves.toMatchObject({ ok: true, duplicate: true });
+    expect(lookupSpy).toHaveBeenCalledTimes(6);
+
+    // The budget is scoped to Payment + signed-body fingerprint, so a genuinely
+    // different signed provider body for the same Payment is not starved by a
+    // replay storm against the earlier body.
+    const laterPayload = { ...payload, GatewayTrackId: `gt_${crypto.randomUUID()}` };
+    const laterRawBody = JSON.stringify(laterPayload);
+    const laterTimestamp = String(Date.now());
+    const laterSignature = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(`${laterTimestamp}.${laterRawBody}`)
+      .digest("hex");
+    const later = await chariWebhookPost(replay(
+      crypto.randomUUID(),
+      laterRawBody,
+      laterTimestamp,
+      laterSignature,
+    ));
+    expect(later.status).toBe(200);
+    expect(lookupSpy).toHaveBeenCalledTimes(7);
+  });
+
+  it("bounds authenticated ledger lookups at exactly the limit under real concurrent replay, not just sequential replay", async () => {
+    // The sequential test above proves the cap over one-at-a-time calls, but
+    // consumeRateLimit's safety claim is that its Postgres UPSERT is atomic
+    // under concurrent writers. Firing every replay through Promise.all is
+    // the only way to actually exercise that race rather than assume it.
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    const lookupSpy = enableChariPay();
+    const payload = paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents);
+    const rawBody = JSON.stringify(payload);
+    const timestamp = String(Date.now());
+    const signature = crypto
+      .createHmac("sha256", WEBHOOK_SECRET)
+      .update(`${timestamp}.${rawBody}`)
+      .digest("hex");
+    const eventIds = Array.from({ length: 14 }, () => crypto.randomUUID());
+
+    const replay = (eventId: string) =>
+      new NextRequest("https://preview.onlylive.example/api/payments/webhook/charipay", {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          "x-chari-signature": signature,
+          "x-chari-timestamp": timestamp,
+          "chari-event-id": eventId,
+          "chari-event-type": "payment.succeeded",
+        },
+        body: rawBody,
+      });
+
+    const responses = await Promise.all(eventIds.map((eventId) => chariWebhookPost(replay(eventId))));
+    const bodies = await Promise.all(responses.map((response) => response.json()));
+
+    const allowed = bodies.filter((body) => !body.verificationRateLimited);
+    const limited = bodies.filter((body) => body.verificationRateLimited === true);
+    // The race can let more than 6 requests pass consumeRateLimit's check
+    // before any of them finish creating a payment_events row, but the
+    // limiter itself must never have allowed more than 6 *lookups*, and the
+    // fulfillment transaction's own ON CONFLICT dedup still guarantees the
+    // order is only ever fulfilled once regardless of how many of those
+    // allowed calls raced each other afterward.
+    expect(allowed.length).toBeLessThanOrEqual(6);
+    expect(limited.length).toBeGreaterThanOrEqual(8);
+    expect(allowed.length + limited.length).toBe(14);
+    expect(lookupSpy.mock.calls.length).toBeLessThanOrEqual(6);
+    expect(lookupSpy.mock.calls.length).toBe(allowed.length);
+
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
+    expect(await prisma.paymentEvent.count({ where: { paymentId: fixture.payment.id } })).toBe(allowed.length);
   });
 
   it("fails closed on a correctly signed but incomplete payload", async () => {

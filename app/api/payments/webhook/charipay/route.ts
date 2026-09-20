@@ -15,6 +15,7 @@ import {
   enqueueReconciliationAlertEmail,
 } from "@/lib/email/notifications";
 import { apiErrorResponse } from "@/lib/http/errors";
+import { buildRateLimitKey, consumeRateLimit } from "@/lib/rateLimit";
 
 export const runtime = "nodejs";
 
@@ -25,6 +26,11 @@ export const runtime = "nodejs";
  * charipayProvider.ts's parseWebhook comments). Set this true once a real
  * refund.* delivery is captured and parseWebhook is corrected against it;
  * until then refund events are acknowledged but never auto-finalized.
+ *
+ * TODO(flip-this-flag): CHARIPAY_UNVERIFIED_SHAPE_REPLAY_RATE_LIMIT below
+ * only bounds this path while the flag is false. Once flipped, refund
+ * events fall through to the isRefundEvent finalize branch, which has no
+ * dedicated rate limit of its own — add one alongside flipping this.
  */
 const CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED = false;
 
@@ -40,6 +46,16 @@ const CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED = false;
  * auto-finalized, exactly like the refund gate above.
  */
 const CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED = false;
+
+const CHARIPAY_WEBHOOK_STATUS_VERIFY_RATE_LIMIT = {
+  limit: 6,
+  windowMs: 5 * 60 * 1000,
+} as const;
+
+const CHARIPAY_UNVERIFIED_SHAPE_REPLAY_RATE_LIMIT = {
+  limit: 6,
+  windowMs: 5 * 60 * 1000,
+} as const;
 
 type WebhookResult =
   | { kind: "duplicate" }
@@ -221,6 +237,86 @@ async function recordPaymentWebhookStatusAudit(
   });
 }
 
+async function recordPaymentWebhookVerificationRateLimited(
+  paymentId: string,
+  eventType: string,
+): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const action = "payment.webhook_status_verification_rate_limited";
+    const lockKey = `${action}:${paymentId}`;
+    await tx.$queryRaw<Array<{ locked: boolean }>>`
+      SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0)) IS NULL AS locked
+    `;
+
+    const existing = await tx.auditLog.findFirst({
+      where: {
+        action,
+        entityType: "Payment",
+        entityId: paymentId,
+      },
+      select: { id: true, metadata: true },
+    });
+
+    const observedAt = new Date().toISOString();
+    if (!existing) {
+      await tx.auditLog.create({
+        data: {
+          actorType: "system",
+          action,
+          entityType: "Payment",
+          entityId: paymentId,
+          metadata: {
+            occurrences: 1,
+            firstEventType: eventType,
+            latestEventType: eventType,
+            limit: CHARIPAY_WEBHOOK_STATUS_VERIFY_RATE_LIMIT.limit,
+            windowMs: CHARIPAY_WEBHOOK_STATUS_VERIFY_RATE_LIMIT.windowMs,
+            firstObservedAt: observedAt,
+            lastObservedAt: observedAt,
+          },
+        },
+      });
+      return;
+    }
+
+    const previousMetadata =
+      existing.metadata
+      && typeof existing.metadata === "object"
+      && !Array.isArray(existing.metadata)
+        ? existing.metadata as Prisma.JsonObject
+        : {};
+    const previousOccurrences =
+      typeof previousMetadata.occurrences === "number"
+      && Number.isSafeInteger(previousMetadata.occurrences)
+      && previousMetadata.occurrences >= 1
+        ? previousMetadata.occurrences
+        : 1;
+    const firstEventType =
+      typeof previousMetadata.firstEventType === "string"
+        ? previousMetadata.firstEventType
+        : eventType;
+    const firstObservedAt =
+      typeof previousMetadata.firstObservedAt === "string"
+        ? previousMetadata.firstObservedAt
+        : observedAt;
+
+    await tx.auditLog.update({
+      where: { id: existing.id },
+      data: {
+        metadata: {
+          occurrences: previousOccurrences + 1,
+          firstEventType,
+          latestEventType: eventType,
+          limit: CHARIPAY_WEBHOOK_STATUS_VERIFY_RATE_LIMIT.limit,
+          windowMs: CHARIPAY_WEBHOOK_STATUS_VERIFY_RATE_LIMIT.windowMs,
+          firstObservedAt,
+          lastObservedAt: observedAt,
+        },
+      },
+    });
+  });
+}
+
 export async function POST(request: NextRequest) {
   try {
     // This provider-specific endpoint must keep accepting historical ChariPay
@@ -258,6 +354,34 @@ export async function POST(request: NextRequest) {
     }
 
     const isRefundEvent = event.type === "refund.succeeded" || event.type === "refund.failed";
+
+    const hitsUnverifiedShapeGate =
+      (isRefundEvent && !CHARIPAY_REFUND_WEBHOOK_SHAPE_VERIFIED && Boolean(event.externalEventId))
+      || (
+        headers["chari-event-type"] === "payment.failed"
+        && event.type === "payment.failed"
+        && !CHARIPAY_PAYMENT_FAILED_WEBHOOK_SHAPE_VERIFIED
+        && Boolean(event.externalEventId)
+      );
+    if (hitsUnverifiedShapeGate) {
+      const replayBudget = await consumeRateLimit(
+        buildRateLimitKey(
+          "charipay_shape_replay",
+          webhookFingerprint(event.raw),
+        ),
+        CHARIPAY_UNVERIFIED_SHAPE_REPLAY_RATE_LIMIT,
+      );
+      if (!replayBudget.allowed) {
+        return NextResponse.json(
+          {
+            ok: true,
+            reconciliationRequired: true,
+            replayRateLimited: true,
+          },
+          { status: 202 },
+        );
+      }
+    }
 
     // This must run BEFORE the generic payloadValid gate below: payloadValid
     // itself depends on the unverified guessed refund fields (RefundAmount/
@@ -480,6 +604,25 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           { error: "PROVIDER_STATUS_VERIFICATION_UNAVAILABLE" },
           { status: 503 },
+        );
+      }
+
+      const verificationBudget = await consumeRateLimit(
+        buildRateLimitKey(
+          "charipay_webhook_verify",
+          `${payment.id}:${webhookFingerprint(event.raw)}`,
+        ),
+        CHARIPAY_WEBHOOK_STATUS_VERIFY_RATE_LIMIT,
+      );
+      if (!verificationBudget.allowed) {
+        await recordPaymentWebhookVerificationRateLimited(payment.id, event.type);
+        return NextResponse.json(
+          {
+            ok: true,
+            reconciliationRequired: true,
+            verificationRateLimited: true,
+          },
+          { status: 202 },
         );
       }
 
