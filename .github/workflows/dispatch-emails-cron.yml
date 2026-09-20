@@ -31,6 +31,23 @@ name: Dispatch pending emails
 #   under Actions if it ever goes quiet for that long.
 # - A GitHub-hosted public repo gets free Actions minutes; this job is a
 #   single lightweight curl call every ~5 minutes, well within that.
+# - GPT's live query of this repo's Actions API (event=schedule) found
+#   total_count: 0 across 2.5+ hours / ~31 missed windows after this
+#   workflow first landed on main -- workflow state active, not a
+#   fork/archived/disabled, correct file on the default branch, GitHub
+#   Status reporting Actions fully operational. Matches the exact
+#   signature of known 2026 GitHub Community reports of a schedule-
+#   registration bug (manual dispatch works, valid cron, zero schedule
+#   events ever emitted). Offsetting the cron off the round :00/:05/:10
+#   boundaries below is a real code change (not just a comment) intended
+#   to make GitHub re-evaluate the schedule -- GitHub's docs document this
+#   specific mechanism as reactivating a *deactivated* scheduled workflow,
+#   and this one reports as active rather than deactivated, so this is a
+#   reasonable attempt, not a documented guarantee, for the fault we're
+#   actually seeing. If this still shows zero schedule-triggered runs
+#   after several expected windows, the evidence then strongly points to
+#   GitHub's scheduler rather than the application/Vercel path --
+#   escalate to GitHub Support rather than continuing to debug here.
 #
 # Secrets used (repository secrets, not committed):
 #   ONLYLIVE_DISPATCH_BASE_URL    e.g. https://onlylive-events-git-feat-charipay-ebf143-el-bied-alis-projects.vercel.app
@@ -51,7 +68,16 @@ name: Dispatch pending emails
 # scoping this exact org/repo/branch to the Preview environment.
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    # Deliberately offset off the round :00/:05/:10... boundaries (still a
+    # 5-minute cadence) -- both to avoid GitHub's documented "start of
+    # every hour" high-load window, and because changing the cron
+    # expression itself is intended to make GitHub re-evaluate the
+    # schedule, after it emitted zero schedule-triggered runs for 2.5+
+    # hours (see the file header comment above). Not a documented
+    # guarantee for this specific fault -- GitHub only documents this
+    # mechanism as reactivating a deactivated scheduled workflow, and
+    # this one reports as active.
+    - cron: "2-59/5 * * * *"
   workflow_dispatch: {}
 
 jobs:
