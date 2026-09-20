@@ -891,6 +891,82 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   AuditLog action that helper never reads or writes, immune to being
   clobbered by construction rather than by convention.
 
+## Completed (eager email dispatch trigger — half of #48, does not close it)
+
+- **This is only the happy-path-latency half of #48; the issue stays open.**
+  Every transactional email currently still depends on someone/something
+  calling `dispatch-emails`. The 2026-09-19/20 smoke test proved the pipeline
+  works end-to-end, but also proved nothing was actually scheduled to call it
+  — this entry does not fix that gap, it just closes most of the practical
+  latency users would experience before it's fixed.
+- Confirmed via `dispatch-emails/route.ts`'s own existing comment and current
+  Vercel docs: this project is on Vercel Hobby, where cron jobs run once/day
+  and Vercel does not retry a failed cron invocation. Also confirmed (and
+  corrected an outdated assumption from the initial proposal): Vercel now
+  allows up to 100 cron jobs per project on every plan as of January 2026 —
+  only the once-daily frequency cap is Hobby-specific.
+- Added `lib/email/eagerDispatch.ts`'s `scheduleEagerEmailDispatch()`: wraps
+  `after(() => dispatchPendingEmails())` so a customer's confirmation email
+  goes out within seconds of a successful purchase instead of waiting for
+  the next periodic run. `after()` executes only after the response is
+  already sent, so it can never add latency to a webhook or risk ChariPay's
+  documented ~10s redelivery threshold, and a thrown/rejected dispatch is
+  always swallowed and logged, never allowed to affect the caller's own
+  response.
+- Wired at every call site that can create a new `EmailOutbox` row, not just
+  the ChariPay success webhook (full inventory, per audit request — GPT's
+  cold audit caught one omission, the customer-triggered reconcile-payment
+  route, before merge):
+  `app/api/payments/webhook/charipay/route.ts`,
+  `app/api/payments/webhook/fake/route.ts` (dev/test provider),
+  `app/api/internal/sweep-expired-holds/route.ts` (covers both
+  `reconcileExpiredCheckouts()` and `reconcileProcessingRefundsFair()`),
+  `app/(admin)/admin/orders/[orderId]/actions.ts`'s admin-initiated refund
+  Server Action, and `app/api/orders/[orderId]/reconcile-payment/route.ts`
+  (the customer's own on-demand "check my payment" polling endpoint, which
+  can finalize a recovered payment via the same
+  `finalizeRecoveredPayment()` the batch worker uses).
+- **Explicitly does not replace the periodic dispatcher.** `after()` throws
+  synchronously when called outside a real Next.js request/Server Action
+  scope (confirmed empirically — every existing webhook/route test invokes
+  the exported handler directly, with no real server, so this is the actual
+  behavior the whole test suite already exercises), and a crash between an
+  outbox row's creation and `after()` actually running is exactly the
+  recovery case a periodic scheduler exists for. The periodic
+  `dispatch-emails` endpoint is unchanged and must still be wired to a
+  real recurring trigger to close #48 — that decision (Vercel Pro cron vs.
+  an authenticated external scheduler such as GitHub Actions) needs the
+  user's approval, since either costs money or adds `CRON_SECRET` to a
+  third-party service.
+- The `reconcile-payment` route is gated on `result.reconciled`, not
+  unconditional — this endpoint is polled roughly every 5s while a checkout
+  is pending, and `reconciled: false` (nothing changed, no outbox row
+  created) is the overwhelmingly common result; scheduling a global dispatch
+  scan on every such poll would turn ordinary polling into repeated
+  unnecessary background work. Caught by GPT's cold audit before merge.
+- Test coverage: unit tests for `scheduleEagerEmailDispatch()` covering the
+  registration/rejection/outside-request-scope paths via a mocked
+  `next/server`, plus a privacy-sentinel test proving a dispatch-level
+  failure containing a fake secret/customer string never reaches
+  `console.error` — only the fixed safe code does (this exact regression
+  was caught by audit before merge: the first version logged the raw
+  exception message); an explicit charipay-webhook integration test proving
+  the webhook still returns success and confirms the order even though the
+  eager trigger cannot register in a test context; a dedicated route test
+  proving the `reconcile-payment` gate (no-op poll never schedules, an
+  actually-recovered payment does); and a concurrency test proving
+  `dispatchPendingEmails()`'s existing `FOR UPDATE SKIP LOCKED` claim
+  (unmodified by this change) still guarantees no double-send/dropped row
+  when two dispatch calls now genuinely race — an eager trigger overlapping
+  the periodic sweep, or two eager triggers from two near-simultaneous
+  webhook deliveries. That test's first version drained the entire shared
+  backlog before seeding its own rows to make itself deterministic, which
+  audit correctly flagged as unsafe (it would send/mutate unrelated rows
+  belonging to other, possibly concurrently running, test files); fixed by
+  pinning only the test's own two rows to the earliest possible
+  `nextAttemptAt` and scoping every assertion to their specific idempotency
+  keys instead of the dispatch summaries' global totals.
+
 ## Next
 
 0. **Resolved, was never a code bug**: an earlier draft of this file

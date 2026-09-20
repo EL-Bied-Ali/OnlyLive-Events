@@ -1222,5 +1222,21 @@
     "status": "pass",
     "testFile": null,
     "note": "One-time manual verification, not an automated regression test — see TASKS.md's 'Resend + ChariPay preview end-to-end smoke test' entry for the full account, including two real gaps found: #48 (no scheduled trigger for dispatch-emails) and a stale/misconfigured post-payment browser-redirect URL (cosmetic, webhook path unaffected)."
+  },
+  {
+    "id": "eager-email-dispatch-webhook-response-unaffected",
+    "scenario": "The ChariPay webhook still returns success and confirms the order/ticket even though scheduleEagerEmailDispatch()'s after() call cannot register outside a real Next.js request scope (the exact situation this whole test suite runs in)",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-webhook.test.ts"
+  },
+  {
+    "id": "eager-email-dispatch-concurrent-race-safety",
+    "scenario": "Two concurrent dispatchPendingEmails() calls racing for the same backlog (an eager trigger overlapping the periodic sweep, or two eager triggers from near-simultaneous webhook deliveries) never double-send or drop a row, via the existing FOR UPDATE SKIP LOCKED claim",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/emailDispatchConcurrency.test.ts"
   }
 ]

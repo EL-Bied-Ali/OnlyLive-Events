@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireCustomer } from "@/lib/auth/customer";
 import { reconcileOrderPaymentOnDemand } from "@/lib/orders/paymentReconciliation";
 import { buildRateLimitKey, consumeRateLimit, rateLimitHeaders } from "@/lib/rateLimit";
+import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -66,6 +67,12 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
     }
 
     const result = await reconcileOrderPaymentOnDemand(orderId);
+    // Gated: this endpoint is polled roughly every 5s while a checkout is
+    // pending, and `reconciled: false` (nothing actually changed, no
+    // outbox row created) is the overwhelmingly common result. Scheduling
+    // a global dispatch scan on every such poll would turn ordinary
+    // customer polling into repeated unnecessary background work.
+    if (result.reconciled) scheduleEagerEmailDispatch();
     return NextResponse.json(result);
   } catch (error) {
     return apiErrorResponse(error);

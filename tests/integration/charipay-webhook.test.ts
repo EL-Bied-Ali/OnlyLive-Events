@@ -248,6 +248,28 @@ describe("ChariPay webhook route", () => {
     expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
   });
 
+  it("still returns success and confirms the order even though the eager email dispatch trigger cannot register outside a real request scope", async () => {
+    // Every test in this suite calls the route's exported POST directly
+    // rather than through a real Next.js server, so scheduleEagerEmailDispatch()'s
+    // after() call always throws "outside a request scope" here -- this is
+    // the concrete proof that failure is swallowed and never affects the
+    // webhook's own response, not just an assumption from reading the code.
+    const fixture = await createChariPendingOrder({ priceCents: 10_000 });
+    enableChariPay();
+
+    const response = await chariWebhookPost(signedRequest(
+      paymentPayload(fixture.payment.id, fixture.order.id, fixture.payment.amountCents),
+      "payment.succeeded",
+    ));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, outcome: "paid" });
+    expect(await prisma.ticket.count({ where: { eventId: fixture.event.id } })).toBe(1);
+    await expect(prisma.payment.findUniqueOrThrow({ where: { id: fixture.payment.id } })).resolves.toMatchObject({
+      status: "paid",
+    });
+  });
+
   it("never fulfills a header-claimed payment.succeeded when the authenticated ledger says failed", async () => {
     const fixture = await createChariPendingOrder({ priceCents: 10_000 });
     const lookupSpy = enableChariPay();
