@@ -67,7 +67,12 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
     }
 
     const result = await reconcileOrderPaymentOnDemand(orderId);
-    scheduleEagerEmailDispatch();
+    // Gated: this endpoint is polled roughly every 5s while a checkout is
+    // pending, and `reconciled: false` (nothing actually changed, no
+    // outbox row created) is the overwhelmingly common result. Scheduling
+    // a global dispatch scan on every such poll would turn ordinary
+    // customer polling into repeated unnecessary background work.
+    if (result.reconciled) scheduleEagerEmailDispatch();
     return NextResponse.json(result);
   } catch (error) {
     return apiErrorResponse(error);

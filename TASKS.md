@@ -938,16 +938,34 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   an authenticated external scheduler such as GitHub Actions) needs the
   user's approval, since either costs money or adds `CRON_SECRET` to a
   third-party service.
+- The `reconcile-payment` route is gated on `result.reconciled`, not
+  unconditional — this endpoint is polled roughly every 5s while a checkout
+  is pending, and `reconciled: false` (nothing changed, no outbox row
+  created) is the overwhelmingly common result; scheduling a global dispatch
+  scan on every such poll would turn ordinary polling into repeated
+  unnecessary background work. Caught by GPT's cold audit before merge.
 - Test coverage: unit tests for `scheduleEagerEmailDispatch()` covering the
   registration/rejection/outside-request-scope paths via a mocked
-  `next/server`; an explicit charipay-webhook integration test proving the
-  webhook still returns success and confirms the order even though the
-  eager trigger cannot register in a test context; and a new concurrency
-  test proving `dispatchPendingEmails()`'s existing `FOR UPDATE SKIP LOCKED`
-  claim (unmodified by this change) still guarantees no double-send/dropped
-  row when two dispatch calls now genuinely race — an eager trigger
-  overlapping the periodic sweep, or two eager triggers from two
-  near-simultaneous webhook deliveries.
+  `next/server`, plus a privacy-sentinel test proving a dispatch-level
+  failure containing a fake secret/customer string never reaches
+  `console.error` — only the fixed safe code does (this exact regression
+  was caught by audit before merge: the first version logged the raw
+  exception message); an explicit charipay-webhook integration test proving
+  the webhook still returns success and confirms the order even though the
+  eager trigger cannot register in a test context; a dedicated route test
+  proving the `reconcile-payment` gate (no-op poll never schedules, an
+  actually-recovered payment does); and a concurrency test proving
+  `dispatchPendingEmails()`'s existing `FOR UPDATE SKIP LOCKED` claim
+  (unmodified by this change) still guarantees no double-send/dropped row
+  when two dispatch calls now genuinely race — an eager trigger overlapping
+  the periodic sweep, or two eager triggers from two near-simultaneous
+  webhook deliveries. That test's first version drained the entire shared
+  backlog before seeding its own rows to make itself deterministic, which
+  audit correctly flagged as unsafe (it would send/mutate unrelated rows
+  belonging to other, possibly concurrently running, test files); fixed by
+  pinning only the test's own two rows to the earliest possible
+  `nextAttemptAt` and scoping every assertion to their specific idempotency
+  keys instead of the dispatch summaries' global totals.
 
 ## Next
 
