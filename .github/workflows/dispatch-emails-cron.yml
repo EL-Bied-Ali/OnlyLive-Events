@@ -16,9 +16,10 @@ name: Dispatch pending emails
 # launched yet) rather than assuming that URL matches this workflow's own
 # branch.
 #
-# Operational caveats (per GPT's cold audit of the first version of this
-# file, which used an unsupported 2-minute schedule and a too-short client
-# timeout -- both corrected here):
+# Operational caveats (per two rounds of GPT's cold audit -- an unsupported
+# 2-minute schedule, a too-short client timeout twice over, and response
+# validation that failed open on a malformed/missing body, all corrected
+# here):
 # - GitHub's documented minimum schedule interval is 5 minutes; this is a
 #   5-minute *target*, not a guarantee -- scheduled runs are explicitly
 #   best-effort and can be delayed or silently dropped under GitHub-wide
@@ -53,22 +54,63 @@ jobs:
       - name: Call /api/internal/dispatch-emails and fail on a real problem
         run: |
           set -euo pipefail
+
+          # lib/email/dispatcher.ts claims up to BATCH_SIZE (production
+          # default 20) rows and sends them SEQUENTIALLY, one row's
+          # provider call never running concurrently with another's. Each
+          # Resend call has its own 10s client-side timeout
+          # (lib/email/resendProvider.ts's REQUEST_TIMEOUT_MS), so a batch
+          # where every row legitimately hits that timeout can take up to
+          # ~200s, plus rendering/DB overhead -- comfortably under, but not
+          # far under, Vercel's current ~300s Hobby/Fluid Compute function
+          # duration ceiling (this route sets no maxDuration of its own, so
+          # it inherits that ceiling). 270s gives real slow-but-succeeding
+          # batches room to finish while staying under the platform limit,
+          # rather than an arbitrary short timeout cutting off legitimate
+          # work partway through with no visibility into what happened.
           response=$(curl --fail-with-body --silent --show-error \
-            --max-time 60 \
+            --max-time 270 \
             -X POST \
             -H "x-internal-secret: ${ONLYLIVE_DISPATCH_SECRET}" \
             "${ONLYLIVE_DISPATCH_BASE_URL}/api/internal/dispatch-emails")
           echo "$response"
 
-          # HTTP 200 alone does not mean every claimed email actually sent --
-          # dispatchPendingEmails() reports partial outcomes in the body
-          # itself. permanentlyFailed is a real, human-actionable problem and
-          # must fail this run (visible red X, satisfies #48's backlog/
-          # failure-visibility requirement); a nonzero retried count is
-          # ordinary transient behavior (provider hiccup, backoff in
-          # progress) and is only logged, not treated as a failure.
-          permanently_failed=$(echo "$response" | jq -r '.permanentlyFailed // 0')
-          retried=$(echo "$response" | jq -r '.retried // 0')
+          # HTTP 200 alone does not mean every claimed email actually sent,
+          # or even that the body is what this workflow expects --
+          # dispatchPendingEmails()'s real summary shape is
+          # {claimed,sent,retried,permanentlyFailed,skipped}, all
+          # non-negative integers. Validate that shape explicitly and fail
+          # loudly if it doesn't hold, rather than defaulting a
+          # missing/malformed field to 0 with `// 0` and silently reporting
+          # success on a response this workflow doesn't actually understand.
+          if ! echo "$response" | jq -e '
+            [.claimed, .sent, .retried, .permanentlyFailed, .skipped]
+            | all(type == "number" and . >= 0 and (. % 1 == 0))
+          ' > /dev/null; then
+            echo "::error::dispatch-emails response failed schema validation (missing/non-integer/negative field): $response"
+            exit 1
+          fi
+
+          claimed=$(echo "$response" | jq -r '.claimed')
+          retried=$(echo "$response" | jq -r '.retried')
+          permanently_failed=$(echo "$response" | jq -r '.permanentlyFailed')
+
+          # Must match lib/email/dispatcher.ts's BATCH_SIZE production
+          # default. A fully saturated batch means this run may not have
+          # cleared the entire backlog -- distinct from (and a leading
+          # indicator of) an outright failure: it says delivery may be
+          # falling behind this schedule's cadence, not that anything sent
+          # this run actually failed.
+          full_batch_size=20
+          if [ "$claimed" -eq "$full_batch_size" ]; then
+            echo "::warning::claimed a full batch of ${full_batch_size} -- more pending emails may remain; delivery may be falling behind this 5-minute schedule"
+          fi
+
+          # permanentlyFailed is a real, human-actionable problem and must
+          # fail this run (visible red X, satisfies #48's backlog/failure-
+          # visibility requirement); a nonzero retried count is ordinary
+          # transient behavior (provider hiccup, backoff in progress) and
+          # is only logged, not treated as a failure.
           if [ "$retried" -gt 0 ]; then
             echo "::warning::${retried} email(s) scheduled for retry this run"
           fi
