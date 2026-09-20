@@ -79,21 +79,6 @@ jobs:
             core.setSecret(token);
             core.setOutput("token", token);
 
-      - name: TEMP DEBUG - dump raw status/headers from Vercel (remove before merge)
-        run: |
-          set -euo pipefail
-          curl -sS -D - -o /tmp/body.txt -w "\nHTTP_STATUS:%{http_code}\n" \
-            -X POST \
-            -H "x-vercel-trusted-oidc-idp-token: ${VERCEL_OIDC_TOKEN}" \
-            -H "x-internal-secret: ${ONLYLIVE_DISPATCH_SECRET}" \
-            "${ONLYLIVE_DISPATCH_BASE_URL}/api/internal/dispatch-emails"
-          echo "---- BODY ----"
-          cat /tmp/body.txt
-        env:
-          ONLYLIVE_DISPATCH_BASE_URL: ${{ secrets.ONLYLIVE_DISPATCH_BASE_URL }}
-          ONLYLIVE_DISPATCH_SECRET: ${{ secrets.ONLYLIVE_DISPATCH_SECRET }}
-          VERCEL_OIDC_TOKEN: ${{ steps.vercel-oidc.outputs.token }}
-
       - name: Call /api/internal/dispatch-emails and fail on a real problem
         run: |
           set -euo pipefail
