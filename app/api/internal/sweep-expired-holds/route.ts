@@ -5,6 +5,7 @@ import { isInternalRequestAuthorized } from "@/lib/http/internalAuth";
 import { pruneRateLimitBuckets } from "@/lib/rateLimit";
 import { reconcileExpiredCheckouts } from "@/lib/orders/checkoutReconciliation";
 import { reconcileProcessingRefundsFair } from "@/lib/orders/refundReconciliation";
+import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 
 export const runtime = "nodejs";
 
@@ -24,6 +25,9 @@ async function runHousekeeping(request: NextRequest) {
     const checkouts = await reconcileExpiredCheckouts(5);
     const refunds = await reconcileProcessingRefundsFair(10);
 
+    // Runs after this response is sent (see eagerDispatch.ts), so a slow
+    // email batch still never delays this route's own time-sensitive work.
+    scheduleEagerEmailDispatch();
     return NextResponse.json({
       ...holds,
       rateLimitBucketsDeleted: rateLimits.deleted,

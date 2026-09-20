@@ -8,6 +8,7 @@ import {
   enqueuePaymentFailedEmail,
   enqueueReconciliationAlertEmail,
 } from "@/lib/email/notifications";
+import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -260,6 +261,7 @@ export async function POST(request: NextRequest) {
       case "event_collision":
         return NextResponse.json({ error: "EVENT_COLLISION" }, { status: 409 });
       case "processed":
+        scheduleEagerEmailDispatch();
         return NextResponse.json({ ok: true, outcome: result.outcome });
     }
   } catch (error) {

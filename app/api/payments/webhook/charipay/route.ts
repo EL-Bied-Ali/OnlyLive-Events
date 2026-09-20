@@ -14,6 +14,7 @@ import {
   enqueuePaymentFailedEmail,
   enqueueReconciliationAlertEmail,
 } from "@/lib/email/notifications";
+import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 import { apiErrorResponse } from "@/lib/http/errors";
 import { buildRateLimitKey, consumeRateLimit } from "@/lib/rateLimit";
 
@@ -802,6 +803,7 @@ export async function POST(request: NextRequest) {
       await prisma.paymentEvent.update({ where: { id: result.paymentEventId }, data: { processedAt: new Date() } });
     }
 
+    scheduleEagerEmailDispatch();
     return NextResponse.json({ ok: true, outcome: result.outcome });
   } catch (error) {
     return apiErrorResponse(error);

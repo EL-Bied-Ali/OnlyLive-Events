@@ -326,6 +326,18 @@ limitations below).
      jitter, up to 8 attempts, before marking the row permanently `failed`.
    - Never logs a raw recipient address (a truncated SHA-256 hash only) or
      a full error object (a bounded message only).
+4. `lib/email/eagerDispatch.ts::scheduleEagerEmailDispatch` is called at
+   every request-scoped call site that can create a new `EmailOutbox` row
+   (both payment webhooks, `sweep-expired-holds`, the admin refund Server
+   Action) right after that work succeeds. It wraps
+   `after(() => dispatchPendingEmails())` so most confirmation emails go out
+   within seconds instead of waiting for #3's periodic run — but `after()`
+   only fires after the caller's own response is already sent, and throws
+   synchronously (swallowed here) outside a real request/Server Action
+   scope, so this is strictly a latency optimization on top of #3, never a
+   replacement for it. A crash between an outbox row's creation and
+   `after()` running is exactly the case #3's periodic trigger exists to
+   recover.
 
 ## Rate limiting
 
