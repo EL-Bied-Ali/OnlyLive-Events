@@ -85,7 +85,7 @@ jobs:
           # success on a response this workflow doesn't actually understand.
           if ! echo "$response" | jq -e '
             [.claimed, .sent, .retried, .permanentlyFailed, .skipped]
-            | all(type == "number" and . >= 0 and (. % 1 == 0))
+            | all(type == "number" and . >= 0 and (. == floor))
           ' > /dev/null; then
             echo "::error::dispatch-emails response failed schema validation (missing/non-integer/negative field): $response"
             exit 1
