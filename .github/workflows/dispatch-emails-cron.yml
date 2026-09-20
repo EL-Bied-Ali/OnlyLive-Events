@@ -37,20 +37,48 @@ name: Dispatch pending emails
 #   ONLYLIVE_DISPATCH_SECRET      the current INTERNAL_API_SECRET value (X-Internal-Secret auth path;
 #                                 deliberately NOT CRON_SECRET, which is also a production ChariPay guard --
 #                                 see lib/payments/index.ts -- and shouldn't be duplicated into a third-party service)
-
+#
+# Vercel's own Deployment Protection (SSO wall) sits in front of the app and
+# redirects any unauthenticated caller to vercel.com/sso-api BEFORE the
+# request ever reaches the X-Internal-Secret check above -- confirmed by the
+# first real scheduled/manual run of this workflow, which got back the SSO
+# wall's "Redirecting..." HTML instead of dispatchPendingEmails()'s JSON.
+# Fixed via Vercel's "Trusted Sources" feature rather than a second static
+# "Protection Bypass for Automation" secret: a short-lived GitHub Actions
+# OIDC token, verified by Vercel per-request, needs no long-lived credential
+# of its own. Requires, on the Vercel side (Project Settings -> Deployment
+# Protection -> Trusted Sources -> External Services -> GitHub Actions),
+# scoping this exact org/repo/branch to the Preview environment.
 on:
   schedule:
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
-# This job only ever calls an external HTTPS endpoint; it never needs to
-# read or write anything in this repository via GITHUB_TOKEN.
-permissions: {}
-
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    # id-token: write is the one permission this job actually needs (to mint
+    # the short-lived OIDC token Vercel's Trusted Sources verifies); every
+    # other GITHUB_TOKEN permission is explicitly denied since this job
+    # never reads or writes anything else in this repository.
+    permissions:
+      id-token: write
     steps:
+      - name: Get a short-lived GitHub Actions OIDC token for Vercel Trusted Sources
+        id: vercel-oidc
+        # Pinned to the exact commit SHA GPT's cold audit specifically vetted
+        # (v7.0.1), not a newer tag/SHA nobody in this process has reviewed --
+        # v7.1.0's dist/index.js and src/main.ts genuinely differ from
+        # v7.0.1's, so "pin to any immutable SHA" and "pin to the SHA someone
+        # actually audited" are not the same guarantee. This action mints an
+        # OIDC token with id-token: write, so that distinction matters here.
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const token = await core.getIDToken();
+            core.setSecret(token);
+            core.setOutput("token", token);
+
       - name: Call /api/internal/dispatch-emails and fail on a real problem
         run: |
           set -euo pipefail
@@ -68,9 +96,17 @@ jobs:
           # batches room to finish while staying under the platform limit,
           # rather than an arbitrary short timeout cutting off legitimate
           # work partway through with no visibility into what happened.
+          # x-vercel-trusted-oidc-idp-token clears Vercel's own Deployment
+          # Protection wall (a platform-level check, before this request
+          # reaches our app at all); x-internal-secret is the app's own,
+          # completely separate auth check. Neither substitutes for the
+          # other -- see the file header comment above. Deliberately no
+          # --location/-L: following the SSO wall's redirect would only
+          # trade a clear, detectable 302 for an opaque HTML page.
           response=$(curl --fail-with-body --silent --show-error \
             --max-time 270 \
             -X POST \
+            -H "x-vercel-trusted-oidc-idp-token: ${VERCEL_OIDC_TOKEN}" \
             -H "x-internal-secret: ${ONLYLIVE_DISPATCH_SECRET}" \
             "${ONLYLIVE_DISPATCH_BASE_URL}/api/internal/dispatch-emails")
           echo "$response"
@@ -121,3 +157,4 @@ jobs:
         env:
           ONLYLIVE_DISPATCH_BASE_URL: ${{ secrets.ONLYLIVE_DISPATCH_BASE_URL }}
           ONLYLIVE_DISPATCH_SECRET: ${{ secrets.ONLYLIVE_DISPATCH_SECRET }}
+          VERCEL_OIDC_TOKEN: ${{ steps.vercel-oidc.outputs.token }}
