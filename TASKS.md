@@ -857,6 +857,40 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   partially resolved by this entry — the pipeline is proven, the domain is
   not).
 
+## Completed (legacy reconciliation-attention duplicate cleanup — PR #50, closes #44)
+
+- Before `recordPaymentReconciliationAttention()` gained its advisory
+  transaction lock (#42), concurrent writers could each pass a
+  read-then-create race and leave more than one
+  `payment.checkout_reconciliation_required` `AuditLog` row for the same
+  Payment. The lock prevents new duplicates going forward but never touched
+  historical ones — this was tracked as low-priority (#44) since it carries
+  no forward correctness or money/ticket risk.
+- `scripts/mergeReconciliationAttentionDuplicates.ts` finds any such
+  pre-existing duplicate groups and merges each into one canonical row:
+  earliest row's id kept, `firstReason` from the earliest row, `occurrences`
+  summed, and the "current" `reason`/extra fields promoted from a
+  best-effort proxy (highest `occurrences`, since `AuditLog` has no
+  `updatedAt` and `createdAt` cannot prove which row was touched most
+  recently). Defaults to a dry run; `--apply` actually merges/deletes.
+- **Not yet run against any live database.** Deliberately built and tested
+  only against the local test database — nobody in this agent-assisted
+  session pulled the Preview/production `DATABASE_URL` to check how many
+  real duplicates exist or to apply the fix. Whoever has direct DB access
+  should run the dry run first to see if any real duplicates even exist
+  before deciding whether `--apply` is worth running at all.
+- Two rounds of independent cold audit (GPT) on this PR caught real
+  correctness bugs before merge, both now fixed and regression-tested:
+  (1) the apply path originally read rows before its transaction and never
+  took the same advisory lock the forward-going helper uses, so a
+  concurrent live observation could have been silently overwritten by
+  stale precomputed metadata; (2) the first archival design embedded
+  original-row snapshots inside the canonical row's own metadata, which
+  `recordPaymentReconciliationAttention()` replaces wholesale on its very
+  next ordinary observation — the archive is now a separate, distinct
+  AuditLog action that helper never reads or writes, immune to being
+  clobbered by construction rather than by convention.
+
 ## Next
 
 0. **Resolved, was never a code bug**: an earlier draft of this file
