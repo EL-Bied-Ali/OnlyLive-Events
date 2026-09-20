@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { requireCustomer } from "@/lib/auth/customer";
 import { reconcileOrderPaymentOnDemand } from "@/lib/orders/paymentReconciliation";
 import { buildRateLimitKey, consumeRateLimit, rateLimitHeaders } from "@/lib/rateLimit";
+import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -66,6 +67,7 @@ export async function POST(request: NextRequest, context: { params: Promise<{ or
     }
 
     const result = await reconcileOrderPaymentOnDemand(orderId);
+    scheduleEagerEmailDispatch();
     return NextResponse.json(result);
   } catch (error) {
     return apiErrorResponse(error);

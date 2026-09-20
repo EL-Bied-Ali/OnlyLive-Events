@@ -914,13 +914,18 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   always swallowed and logged, never allowed to affect the caller's own
   response.
 - Wired at every call site that can create a new `EmailOutbox` row, not just
-  the ChariPay success webhook (full inventory, per audit request):
+  the ChariPay success webhook (full inventory, per audit request — GPT's
+  cold audit caught one omission, the customer-triggered reconcile-payment
+  route, before merge):
   `app/api/payments/webhook/charipay/route.ts`,
   `app/api/payments/webhook/fake/route.ts` (dev/test provider),
   `app/api/internal/sweep-expired-holds/route.ts` (covers both
-  `reconcileExpiredCheckouts()` and `reconcileProcessingRefundsFair()`), and
+  `reconcileExpiredCheckouts()` and `reconcileProcessingRefundsFair()`),
   `app/(admin)/admin/orders/[orderId]/actions.ts`'s admin-initiated refund
-  Server Action.
+  Server Action, and `app/api/orders/[orderId]/reconcile-payment/route.ts`
+  (the customer's own on-demand "check my payment" polling endpoint, which
+  can finalize a recovered payment via the same
+  `finalizeRecoveredPayment()` the batch worker uses).
 - **Explicitly does not replace the periodic dispatcher.** `after()` throws
   synchronously when called outside a real Next.js request/Server Action
   scope (confirmed empirically — every existing webhook/route test invokes

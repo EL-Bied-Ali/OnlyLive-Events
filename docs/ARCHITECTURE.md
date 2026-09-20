@@ -328,7 +328,8 @@ limitations below).
      a full error object (a bounded message only).
 4. `lib/email/eagerDispatch.ts::scheduleEagerEmailDispatch` is called at
    every request-scoped call site that can create a new `EmailOutbox` row
-   (both payment webhooks, `sweep-expired-holds`, the admin refund Server
+   (both payment webhooks, `sweep-expired-holds`, the customer's on-demand
+   `reconcile-payment` route, the admin refund Server
    Action) right after that work succeeds. It wraps
    `after(() => dispatchPendingEmails())` so most confirmation emails go out
    within seconds instead of waiting for #3's periodic run — but `after()`

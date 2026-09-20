@@ -33,10 +33,14 @@ export function scheduleEagerEmailDispatch(): void {
     // can wait for it to settle before considering deferred work done,
     // instead of racing ahead and potentially cutting it off early.
     after(() =>
-      dispatchPendingEmails().catch((error) => {
-        console.error(
-          `[email:eager-dispatch] failed error=${error instanceof Error ? error.message : "unknown"}`,
-        );
+      dispatchPendingEmails().catch(() => {
+        // A total dispatcher-level failure (e.g. a DB connection issue), not
+        // an ordinary per-row send failure -- dispatchPendingEmails() already
+        // catches and records those internally with its own safe error
+        // codes. Never log the raw exception here: per the same privacy
+        // rule dispatcher.ts's errorCode() documents, an arbitrary
+        // exception message can carry SQL details, URLs, or customer data.
+        console.error("[email:eager-dispatch] failed error=eager_dispatch_internal_error");
       }),
     );
   } catch {
