@@ -66,11 +66,13 @@ jobs:
     steps:
       - name: Get a short-lived GitHub Actions OIDC token for Vercel Trusted Sources
         id: vercel-oidc
-        # Pinned to a full commit SHA, not the mutable v7 tag: this action
-        # mints an OIDC token, so integrity of the action's own code matters
-        # more than usual here. A tag can be repointed; a SHA can't. Corresponds
-        # to the v7.1.0 release as of this pin.
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        # Pinned to the exact commit SHA GPT's cold audit specifically vetted
+        # (v7.0.1), not a newer tag/SHA nobody in this process has reviewed --
+        # v7.1.0's dist/index.js and src/main.ts genuinely differ from
+        # v7.0.1's, so "pin to any immutable SHA" and "pin to the SHA someone
+        # actually audited" are not the same guarantee. This action mints an
+        # OIDC token with id-token: write, so that distinction matters here.
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
         with:
           script: |
             const token = await core.getIDToken();
