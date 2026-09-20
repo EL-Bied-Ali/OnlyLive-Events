@@ -16,6 +16,21 @@ name: Dispatch pending emails
 # launched yet) rather than assuming that URL matches this workflow's own
 # branch.
 #
+# Operational caveats (per GPT's cold audit of the first version of this
+# file, which used an unsupported 2-minute schedule and a too-short client
+# timeout -- both corrected here):
+# - GitHub's documented minimum schedule interval is 5 minutes; this is a
+#   5-minute *target*, not a guarantee -- scheduled runs are explicitly
+#   best-effort and can be delayed or silently dropped under GitHub-wide
+#   load. Never rely on this alone for a hard delivery-time guarantee; the
+#   eager after() trigger (#52) remains the primary near-real-time path.
+# - GitHub automatically disables a scheduled workflow after 60 days with
+#   no repository activity at all (not just no runs of this workflow) --
+#   whoever owns this repo long-term needs to know that and re-enable it
+#   under Actions if it ever goes quiet for that long.
+# - A GitHub-hosted public repo gets free Actions minutes; this job is a
+#   single lightweight curl call every ~5 minutes, well within that.
+#
 # Secrets used (repository secrets, not committed):
 #   ONLYLIVE_DISPATCH_BASE_URL    e.g. https://onlylive-events-git-feat-charipay-ebf143-el-bied-alis-projects.vercel.app
 #   ONLYLIVE_DISPATCH_SECRET      the current INTERNAL_API_SECRET value (X-Internal-Secret auth path;
@@ -24,22 +39,43 @@ name: Dispatch pending emails
 
 on:
   schedule:
-    - cron: "*/2 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch: {}
+
+# This job only ever calls an external HTTPS endpoint; it never needs to
+# read or write anything in this repository via GITHUB_TOKEN.
+permissions: {}
 
 jobs:
   dispatch:
     runs-on: ubuntu-latest
     steps:
-      - name: Call /api/internal/dispatch-emails
+      - name: Call /api/internal/dispatch-emails and fail on a real problem
         run: |
           set -euo pipefail
           response=$(curl --fail-with-body --silent --show-error \
-            --max-time 20 \
+            --max-time 60 \
             -X POST \
             -H "x-internal-secret: ${ONLYLIVE_DISPATCH_SECRET}" \
             "${ONLYLIVE_DISPATCH_BASE_URL}/api/internal/dispatch-emails")
           echo "$response"
+
+          # HTTP 200 alone does not mean every claimed email actually sent --
+          # dispatchPendingEmails() reports partial outcomes in the body
+          # itself. permanentlyFailed is a real, human-actionable problem and
+          # must fail this run (visible red X, satisfies #48's backlog/
+          # failure-visibility requirement); a nonzero retried count is
+          # ordinary transient behavior (provider hiccup, backoff in
+          # progress) and is only logged, not treated as a failure.
+          permanently_failed=$(echo "$response" | jq -r '.permanentlyFailed // 0')
+          retried=$(echo "$response" | jq -r '.retried // 0')
+          if [ "$retried" -gt 0 ]; then
+            echo "::warning::${retried} email(s) scheduled for retry this run"
+          fi
+          if [ "$permanently_failed" -gt 0 ]; then
+            echo "::error::${permanently_failed} email(s) permanently failed -- see dispatch-emails logs"
+            exit 1
+          fi
         env:
           ONLYLIVE_DISPATCH_BASE_URL: ${{ secrets.ONLYLIVE_DISPATCH_BASE_URL }}
           ONLYLIVE_DISPATCH_SECRET: ${{ secrets.ONLYLIVE_DISPATCH_SECRET }}
