@@ -12,23 +12,29 @@ import { prisma } from "@/lib/db";
  * forward but never touches historical ones — see GitHub issue #44.
  *
  * findAndMergeDuplicates() finds any such pre-existing duplicate groups and
- * merges each group into one canonical row.
- *
- * Two correctness constraints drive the design (found in cold audit of the
- * first version of this script):
+ * merges each group into one canonical row. Three correctness constraints
+ * drive the design (found across two rounds of cold audit):
  *
  * 1. `AuditLog` has no `updatedAt`, and recordPaymentReconciliationAttention()
  *    updates an existing row's metadata WITHOUT changing its `createdAt`. So
  *    `createdAt` cannot reliably identify which row in a duplicate group holds
  *    the most current diagnostics — an earliest-created row can have been
- *    updated many times since. Rather than guess and risk silently discarding
- *    a real observation, every original row's id/createdAt/metadata is
- *    archived verbatim into the canonical row's `mergedDuplicates` field
- *    before any row is deleted. The top-level `reason`/extra fields are only
- *    a best-effort convenience view (highest `occurrences`, tiebroken by
- *    latest `createdAt`); the archive is the actual source of truth and nothing
- *    is ever destroyed.
- * 2. The merge-and-delete for one Payment must not race a concurrent
+ *    updated many times since. The top-level `reason`/extra fields promoted
+ *    onto the canonical row are therefore only a best-effort convenience view
+ *    (highest `occurrences`, tiebroken by latest `createdAt`, itself
+ *    tiebroken by `id`) — never asserted as provably "latest".
+ * 2. Because that promotion can guess wrong, every original row is archived
+ *    verbatim (id/createdAt/metadata) into a SEPARATE, immutable AuditLog row
+ *    (RECONCILIATION_ATTENTION_ARCHIVE_ACTION) rather than embedded inside the
+ *    canonical row's own metadata. Embedding it in the canonical row was
+ *    tried first and rejected on audit: recordPaymentReconciliationAttention()
+ *    replaces that row's metadata wholesale on its very next ordinary
+ *    observation and only explicitly carries forward `firstReason`/
+ *    `occurrences` — any embedded archive field would silently vanish the
+ *    first time that helper touches the row again. A distinct action/row
+ *    that helper never reads or writes is immune to that by construction,
+ *    not by convention.
+ * 3. The merge-and-delete for one Payment must not race a concurrent
  *    recordPaymentReconciliationAttention() call for the same Payment (which
  *    would otherwise let this script's update silently overwrite a fresh
  *    observation). Applying a group therefore takes the exact same
@@ -45,6 +51,7 @@ import { prisma } from "@/lib/db";
  */
 
 export const RECONCILIATION_ATTENTION_ACTION = "payment.checkout_reconciliation_required";
+export const RECONCILIATION_ATTENTION_ARCHIVE_ACTION = "payment.checkout_reconciliation_required_duplicates_archived";
 const ENTITY_TYPE = "Payment";
 
 interface AuditRow {
@@ -59,6 +66,7 @@ export interface DuplicateGroupReport {
   canonicalId: string;
   staleIds: string[];
   mergedMetadata: Record<string, Prisma.JsonValue>;
+  archivedRows: Array<{ id: string; createdAt: string; metadata: Prisma.JsonValue }>;
 }
 
 function asMetadataObject(value: Prisma.JsonValue): Record<string, Prisma.JsonValue> {
@@ -86,7 +94,7 @@ export function mergeGroup(paymentId: string, rows: AuditRow[]): DuplicateGroupR
   // Best-effort "most representative of current state" row: the one that has
   // been written to the most times is the best available proxy for recency
   // given AuditLog has no updatedAt — but this only picks which fields are
-  // promoted to the top level. The full archive below is what actually
+  // promoted to the top level. The separate archive row is what actually
   // guarantees no data is lost regardless of whether this guess is right.
   const mostActive = [...sorted].sort((a, b) => {
     const byOccurrences = occurrencesOf(asMetadataObject(a.metadata)) - occurrencesOf(asMetadataObject(b.metadata));
@@ -110,11 +118,6 @@ export function mergeGroup(paymentId: string, rows: AuditRow[]): DuplicateGroupR
     ...representativeMetadata,
     ...(firstReason !== undefined ? { firstReason } : {}),
     occurrences: occurrencesSum,
-    mergedDuplicates: sorted.map((row) => ({
-      id: row.id,
-      createdAt: row.createdAt.toISOString(),
-      metadata: row.metadata,
-    })),
   };
 
   return {
@@ -122,6 +125,11 @@ export function mergeGroup(paymentId: string, rows: AuditRow[]): DuplicateGroupR
     canonicalId: canonical.id,
     mergedMetadata,
     staleIds: sorted.slice(1).map((row) => row.id),
+    archivedRows: sorted.map((row) => ({
+      id: row.id,
+      createdAt: row.createdAt.toISOString(),
+      metadata: row.metadata,
+    })),
   };
 }
 
@@ -174,6 +182,22 @@ async function applyGroup(client: PrismaClient, paymentId: string): Promise<Dupl
     if (rows.length < 2) return null;
 
     const report = mergeGroup(paymentId, rows);
+
+    // Written before the update/delete, and as an action distinct from
+    // RECONCILIATION_ATTENTION_ACTION, so recordPaymentReconciliationAttention()
+    // never reads or overwrites it on any subsequent ordinary observation.
+    await tx.auditLog.create({
+      data: {
+        actorType: "system",
+        action: RECONCILIATION_ATTENTION_ARCHIVE_ACTION,
+        entityType: ENTITY_TYPE,
+        entityId: paymentId,
+        metadata: {
+          mergedIntoId: report.canonicalId,
+          originalRows: report.archivedRows,
+        } as Prisma.InputJsonObject,
+      },
+    });
     await tx.auditLog.update({
       where: { id: report.canonicalId },
       data: { metadata: report.mergedMetadata as Prisma.InputJsonObject },
@@ -217,7 +241,9 @@ async function main(): Promise<void> {
     console.log(`  merged metadata: ${JSON.stringify(report.mergedMetadata)}`);
   }
 
-  console.log(apply ? "\nApplied." : "\nDry run only -- no rows changed. Re-run with --apply to merge and delete.");
+  console.log(apply
+    ? `\nApplied. Original rows for each merged Payment are preserved under action "${RECONCILIATION_ATTENTION_ARCHIVE_ACTION}".`
+    : "\nDry run only -- no rows changed. Re-run with --apply to merge and delete.");
 }
 
 const isMainModule = process.argv[1] !== undefined
