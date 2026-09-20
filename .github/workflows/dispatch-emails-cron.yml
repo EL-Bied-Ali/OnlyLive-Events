@@ -1,0 +1,45 @@
+name: Dispatch pending emails
+
+# Vercel Hobby's cron jobs only run once/day, far too infrequent for
+# customer-facing order-confirmation/failure emails (see
+# app/api/internal/dispatch-emails/route.ts's own doc comment and
+# TASKS.md/docs/ARCHITECTURE.md's "eager email dispatch" entry). This
+# workflow is the recurring-scheduler half of that: an authenticated
+# external caller for /api/internal/dispatch-emails, which is otherwise
+# only invoked opportunistically by the app's own eager after() trigger.
+#
+# GitHub Actions only evaluates `schedule` from whatever is committed to
+# the repository's default branch, regardless of which branch the actual
+# application code lives on -- this file intentionally targets whichever
+# deployment ONLYLIVE_DISPATCH_BASE_URL points at (currently the
+# feat/charipay-integration Preview branch alias, since production has not
+# launched yet) rather than assuming that URL matches this workflow's own
+# branch.
+#
+# Secrets used (repository secrets, not committed):
+#   ONLYLIVE_DISPATCH_BASE_URL    e.g. https://onlylive-events-git-feat-charipay-ebf143-el-bied-alis-projects.vercel.app
+#   ONLYLIVE_DISPATCH_SECRET      the current INTERNAL_API_SECRET value (X-Internal-Secret auth path;
+#                                 deliberately NOT CRON_SECRET, which is also a production ChariPay guard --
+#                                 see lib/payments/index.ts -- and shouldn't be duplicated into a third-party service)
+
+on:
+  schedule:
+    - cron: "*/2 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call /api/internal/dispatch-emails
+        run: |
+          set -euo pipefail
+          response=$(curl --fail-with-body --silent --show-error \
+            --max-time 20 \
+            -X POST \
+            -H "x-internal-secret: ${ONLYLIVE_DISPATCH_SECRET}" \
+            "${ONLYLIVE_DISPATCH_BASE_URL}/api/internal/dispatch-emails")
+          echo "$response"
+        env:
+          ONLYLIVE_DISPATCH_BASE_URL: ${{ secrets.ONLYLIVE_DISPATCH_BASE_URL }}
+          ONLYLIVE_DISPATCH_SECRET: ${{ secrets.ONLYLIVE_DISPATCH_SECRET }}
