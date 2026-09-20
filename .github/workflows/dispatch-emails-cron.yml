@@ -39,12 +39,15 @@ name: Dispatch pending emails
 #   signature of known 2026 GitHub Community reports of a schedule-
 #   registration bug (manual dispatch works, valid cron, zero schedule
 #   events ever emitted). Offsetting the cron off the round :00/:05/:10
-#   boundaries below is a real code change (not just a comment) that
-#   GitHub's own docs say is significant enough to force it to
-#   re-register/reactivate the scheduled trigger. If this still shows
-#   zero schedule-triggered runs after several expected windows, stop
-#   debugging the app/Vercel side -- this is a GitHub-side scheduler
-#   fault, not a bug here, and the next step is GitHub Support.
+#   boundaries below is a real code change (not just a comment) intended
+#   to make GitHub re-evaluate the schedule -- GitHub's docs document this
+#   specific mechanism as reactivating a *deactivated* scheduled workflow,
+#   and this one reports as active rather than deactivated, so this is a
+#   reasonable attempt, not a documented guarantee, for the fault we're
+#   actually seeing. If this still shows zero schedule-triggered runs
+#   after several expected windows, the evidence then strongly points to
+#   GitHub's scheduler rather than the application/Vercel path --
+#   escalate to GitHub Support rather than continuing to debug here.
 #
 # Secrets used (repository secrets, not committed):
 #   ONLYLIVE_DISPATCH_BASE_URL    e.g. https://onlylive-events-git-feat-charipay-ebf143-el-bied-alis-projects.vercel.app
@@ -68,9 +71,12 @@ on:
     # Deliberately offset off the round :00/:05/:10... boundaries (still a
     # 5-minute cadence) -- both to avoid GitHub's documented "start of
     # every hour" high-load window, and because changing the cron
-    # expression itself is what's expected to force GitHub to re-register
-    # this schedule after it emitted zero schedule-triggered runs for
-    # 2.5+ hours (see the file header comment above).
+    # expression itself is intended to make GitHub re-evaluate the
+    # schedule, after it emitted zero schedule-triggered runs for 2.5+
+    # hours (see the file header comment above). Not a documented
+    # guarantee for this specific fault -- GitHub only documents this
+    # mechanism as reactivating a deactivated scheduled workflow, and
+    # this one reports as active.
     - cron: "2-59/5 * * * *"
   workflow_dispatch: {}
 
