@@ -159,15 +159,30 @@ the live production database.
 
 `scripts/restore-drill.sh` implements this exactly, refuses to run without an
 explicit `RESTORE_DRILL_CONFIRM=yes`, and verifies the dump's checksum before
-touching anything. Run end-to-end against a real (throwaway, local) Postgres
-cluster on 2026-09-22, which is also where the `pg_dump` bug above was found
-— the same bug affects `psql`'s positional connection-string form here too:
-without the script's `-d` fix, `ON_ERROR_STOP`/`-f` are silently ignored and
-the invariant check never actually runs, with no visible error.
+touching anything — a missing `.sha256` file **fails closed** (refuses to
+restore) unless the operator deliberately overrides it with
+`RESTORE_DRILL_ALLOW_UNVERIFIED=yes`. Run end-to-end against a real
+(throwaway, local) Postgres cluster on 2026-09-22, which is also where the
+`pg_dump` bug above was found — the same bug affects `psql`'s positional
+connection-string form here too: without the script's `-d` fix,
+`ON_ERROR_STOP`/`-f` are silently ignored and the invariant check never
+actually runs, with no visible error.
+
+`pg_restore --clean` only drops objects present in the dump archive itself —
+it does **not** guarantee a pristine target, so a target reused across runs
+can retain leftover objects that silently contaminate the drill's result
+(flagged in GPT's audit of PR #69, citing PostgreSQL's own `pg_restore`
+documentation). The script therefore also refuses to run unless
+`RESTORE_DRILL_TARGET_IS_FRESH=yes` is set, which is this project's way of
+making the operator explicitly confirm, every run, that the target database
+was freshly created or independently reset beforehand — never solved by
+adding `pg_restore --create`, since that changes required privileges and
+database-naming semantics.
 
 ```bash
 RESTORE_DRILL_DATABASE_URL="postgresql://..." \
 RESTORE_DRILL_CONFIRM=yes \
+RESTORE_DRILL_TARGET_IS_FRESH=yes \
   scripts/restore-drill.sh onlylive-YYYYMMDDTHHMMSSZ.dump
 ```
 
@@ -249,6 +264,29 @@ check actually work; it is explicitly **not** the real production restore
 drill this gate requires — that still needs the actual production Neon
 project, its real PITR/backup behavior, and the application smoke tests
 listed above, none of which a throwaway local cluster can stand in for.
+
+**Update, 2026-09-22 (independent audit fixes):** an independent cold audit of
+the PR adding these scripts (GPT, reviewing before merge) found and confirmed
+three real gaps, all fixed and re-verified end-to-end against the same
+throwaway local cluster before merging:
+
+- both scripts were committed with git mode `100644` (non-executable), which
+  would fail with `Permission denied` when the docs' own examples invoke them
+  directly on a normal Linux runner — fixed to `100755`;
+- `restore-drill.sh`'s checksum check only warned and proceeded when
+  `<dump>.sha256` was missing, contradicting this document's own "verifies the
+  dump's checksum before restoring" claim — changed to fail closed by default,
+  re-verified locally that a missing checksum now refuses with exit 1, with
+  `RESTORE_DRILL_ALLOW_UNVERIFIED=yes` as the sole, explicit override;
+- `pg_restore --clean` does not guarantee a pristine target (it only drops
+  objects present in the dump archive itself, per PostgreSQL's own
+  documentation) — the script now also refuses to run unless
+  `RESTORE_DRILL_TARGET_IS_FRESH=yes`, re-verified locally that this refuses
+  by default and that a genuinely fresh target proceeds.
+
+`umask 077` was also reordered to run before `mkdir -p "$output_dir"` in
+`backup-database.sh`, so a newly created backup directory cannot inherit a
+looser ambient umask.
 
 Do not mark this gate complete until production provisioning and the first
 timed restore drill against the real production database are recorded.

@@ -17,10 +17,11 @@ if [ -z "${BACKUP_DATABASE_URL:-}" ]; then
   exit 1
 fi
 
+umask 077
+
 output_dir="${BACKUP_OUTPUT_DIR:-.}"
 mkdir -p "$output_dir"
 
-umask 077
 backup_file="$output_dir/onlylive-$(date -u +%Y%m%dT%H%M%SZ).dump"
 
 # -d (not a positional connection-string argument): confirmed on

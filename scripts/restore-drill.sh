@@ -10,9 +10,20 @@
 # themselves — belt and suspenders, matching this project's established
 # pattern for a dangerous default (e.g. ALLOW_FAKE_PAYMENTS_IN_PRODUCTION).
 #
+# pg_restore --clean only drops objects present in the dump archive itself;
+# it does NOT make the target pristine. A reused target can still contain
+# leftover objects from a prior run that silently contaminate this drill.
+# RESTORE_DRILL_TARGET_IS_FRESH=yes is this script's way of making you
+# confirm, each run, that the target was freshly created/emptied first.
+#
+# A missing .sha256 checksum file refuses the restore by default (fail
+# closed); RESTORE_DRILL_ALLOW_UNVERIFIED=yes is the explicit, deliberate
+# override for the rare case you accept restoring without verification.
+#
 # Usage:
 #   RESTORE_DRILL_DATABASE_URL="postgresql://..." \
 #   RESTORE_DRILL_CONFIRM=yes \
+#   RESTORE_DRILL_TARGET_IS_FRESH=yes \
 #     scripts/restore-drill.sh path/to/onlylive-YYYYMMDDTHHMMSSZ.dump
 set -euo pipefail
 
@@ -30,8 +41,12 @@ if [ -f "$dump_file.sha256" ]; then
     echo "Checksum mismatch — refusing to restore a dump that may be corrupted or tampered with" >&2
     exit 1
   fi
+elif [ "${RESTORE_DRILL_ALLOW_UNVERIFIED:-}" = "yes" ]; then
+  echo "Warning: no .sha256 checksum file found for $dump_file — proceeding unverified because RESTORE_DRILL_ALLOW_UNVERIFIED=yes" >&2
 else
-  echo "Warning: no .sha256 checksum file found for $dump_file — cannot verify integrity" >&2
+  echo "No .sha256 checksum file found for $dump_file — refusing to restore an unverified dump" >&2
+  echo "Set RESTORE_DRILL_ALLOW_UNVERIFIED=yes only if you deliberately accept restoring without checksum verification" >&2
+  exit 1
 fi
 
 if [ -z "${RESTORE_DRILL_DATABASE_URL:-}" ]; then
@@ -42,6 +57,16 @@ if [ "${RESTORE_DRILL_CONFIRM:-}" != "yes" ]; then
   echo "This will WIPE and overwrite every object in the target database (--clean --if-exists)." >&2
   echo "Set RESTORE_DRILL_CONFIRM=yes only once you have confirmed RESTORE_DRILL_DATABASE_URL" >&2
   echo "points at a disposable, isolated target — never production, never a shared dev database." >&2
+  exit 1
+fi
+
+if [ "${RESTORE_DRILL_TARGET_IS_FRESH:-}" != "yes" ]; then
+  echo "RESTORE_DRILL_TARGET_IS_FRESH is not set to 'yes' — refusing to run." >&2
+  echo "pg_restore --clean only drops objects present in the dump archive itself; it does" >&2
+  echo "NOT guarantee a pristine target. Objects already left over in a reused database from" >&2
+  echo "a prior run are not removed and can silently contaminate this drill's result." >&2
+  echo "Provision a freshly created/empty database for RESTORE_DRILL_DATABASE_URL (or otherwise" >&2
+  echo "independently reset it) before each drill, then set RESTORE_DRILL_TARGET_IS_FRESH=yes." >&2
   exit 1
 fi
 
