@@ -329,6 +329,8 @@ describe("ChariPayProvider", () => {
       externalId: "payment-123",
       refundReference: "refund-row-123",
       refundAmount: 123.45,
+      reason: "OTHER",
+      note: "Customer request",
     });
   });
 
@@ -376,7 +378,11 @@ describe("ChariPayProvider", () => {
       operationId: 281,
       refundReference: "refund-operation",
       refundAmount: 5,
-      reason: "Partial refund",
+      // ChariPay's `reason` is a closed enum (real sandbox 400/
+      // MISSING_PARAMETER, 2026-09-22), never the admin's free text --
+      // that goes in `note` instead. See the code comment in refund().
+      reason: "OTHER",
+      note: "Partial refund",
     });
     expect(refundBody).not.toHaveProperty("externalId");
   });
