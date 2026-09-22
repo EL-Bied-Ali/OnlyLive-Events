@@ -16,11 +16,21 @@ export default function TermsPage() {
       title="Conditions générales de vente"
       updatedNote="Brouillon — non publié."
     >
-      <Section heading="1. Objet">
+      <Section heading="1. Objet et vendeur">
         <p>
-          Les présentes conditions générales de vente (CGV) régissent la vente de billets
-          d&apos;événements live par OnlyLive directement à ses clients via ce site. OnlyLive est
-          le vendeur des billets et le destinataire du paiement.
+          Les présentes conditions générales de vente (CGV) ont vocation à régir la vente de
+          billets d&apos;événements live via OnlyLive.
+        </p>
+        <p>
+          L&apos;entité prévue pour exploiter OnlyLive est ONLYLIVE ENTERTAINMENT, SARL AU au
+          capital de 100 000 MAD, siège social 59 Avenue Ibn Sina, Appartement n°11, Agdal, Rabat,
+          RC Rabat n° 201789, ICE 004012555000024.
+        </p>
+        <p>
+          <ToFill>
+            confirmer avant publication que cette société est bien le vendeur contractuel des
+            billets et le titulaire du compte marchand ChariPay de production
+          </ToFill>
         </p>
       </Section>
 
@@ -31,8 +41,8 @@ export default function TermsPage() {
           prix et la disponibilité affichés au moment du paiement sont ceux qui s&apos;appliquent.
           Une réservation temporaire bloque les billets pendant le paiement. Elle n&apos;est
           libérée qu&apos;après expiration, échec ou annulation définitivement établis,
-          conformément aux mécanismes de réconciliation avec notre prestataire de paiement —
-          elle n&apos;est donc pas nécessairement libérée immédiatement au premier signe
+          conformément aux mécanismes de réconciliation avec notre prestataire de paiement — elle
+          n&apos;est donc pas nécessairement libérée immédiatement au premier signe
           d&apos;inactivité, le temps de confirmer avec certitude qu&apos;aucun paiement n&apos;est
           en cours de traitement.
         </p>
@@ -44,6 +54,11 @@ export default function TermsPage() {
           prestataire de paiement (ChariPay). Le paiement par carte s&apos;effectue sur une page
           sécurisée fournie par ChariPay ; OnlyLive ne reçoit jamais votre numéro de carte ni votre
           CVV.
+        </p>
+        <p>
+          Avant le passage en production, le parcours de commande devra permettre au client
+          d&apos;accéder facilement aux présentes CGV et de les accepter expressément avant la
+          confirmation de la commande.
         </p>
       </Section>
 
@@ -82,9 +97,15 @@ export default function TermsPage() {
 
       <Section heading="8. Droit de rétractation">
         <p>
+          La loi marocaine n° 31-08 prévoit à son article 42 un régime particulier pour les
+          prestations de loisirs fournies à une date ou selon une périodicité déterminée : les
+          articles 36 et 37 relatifs au droit de rétractation ne leur sont pas applicables.
+        </p>
+        <p>
           <ToFill>
-            confirmer avec l&apos;avocat si/dans quelle mesure un droit de rétractation
-            s&apos;applique à la vente de billets d&apos;événements à date fixe en droit marocain
+            faire valider par l&apos;avocat que chaque catégorie de billet vendue par OnlyLive
+            relève bien de cette qualification avant de transformer ce rappel juridique en clause
+            définitive opposable au client
           </ToFill>
         </p>
       </Section>
@@ -103,7 +124,7 @@ export default function TermsPage() {
         <p>
           <ToFill>
             droit applicable et modalités de résolution des litiges — à déterminer avec
-            l&apos;avocat d&apos;OnlyLive
+            l&apos;avocat sans écarter les règles impératives de protection du consommateur
           </ToFill>
         </p>
       </Section>
