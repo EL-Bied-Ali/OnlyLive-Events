@@ -1106,7 +1106,7 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    see the "eager email dispatch trigger" entry above). Resend now reports
    `mail.medinabelgique.com` verified after Cloudflare DNS setup; the
    intended temporary sender is
-   `OnlyLive <tickets@mail.medinabelgique.com>`. This domain is for
+   `tickets@mail.medinabelgique.com` (the adapter adds the `OnlyLive` display name itself). This domain is for
    pre-production/testing and can be replaced later with the final OnlyLive
    domain without a code change. What remains for production runtime is to
    configure/verify `EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL`, and a
@@ -1229,7 +1229,7 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   Real production go-live additionally requires OnlyLive merchant/KYB
   approval and live credentials; no production secret should be committed
   or pasted here.
-- Real email delivery is no longer blocked at the pipeline or domain-verification level — proven end-to-end on Preview 2026-09-19/20, and `mail.medinabelgique.com` was verified by Resend on 2026-09-22. Production delivery still needs the Vercel Production variables (`EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL=OnlyLive <tickets@mail.medinabelgique.com>`, and a production-scoped `RESEND_API_KEY`) plus a redeploy/smoke send. Do not set `RESEND_TEST_RECIPIENT` in Production. The scheduler gap is already closed by the working GitHub Actions backstop; eager dispatch remains primary.
+- Real email delivery is no longer blocked at the pipeline or domain-verification level — proven end-to-end on Preview 2026-09-19/20, and `mail.medinabelgique.com` was verified by Resend on 2026-09-22. Production delivery still needs the Vercel Production variables (`EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL=tickets@mail.medinabelgique.com`, and a production-scoped `RESEND_API_KEY`) plus a redeploy/smoke send. Do not set `RESEND_TEST_RECIPIENT` in Production. The scheduler gap is already closed by the working GitHub Actions backstop; eager dispatch remains primary.
 - Legal document drafting is blocked on legal/accountant review and ChariPay's
   final merchant/go-live requirements.
 
