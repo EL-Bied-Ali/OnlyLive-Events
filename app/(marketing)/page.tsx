@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
+import { legalDocumentsApproved } from "@/lib/legal/approval";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,33 @@ export default async function HomePage() {
           </li>
         ))}
       </ul>
+
+      {legalDocumentsApproved() && (
+        <footer style={{ marginTop: 64, paddingTop: 24, borderTop: "1px solid #333" }}>
+          <ul style={{ listStyle: "none", padding: 0, display: "flex", gap: 16, flexWrap: "wrap" }}>
+            <li>
+              <Link href="/legal/mentions-legales" style={{ fontSize: 13, opacity: 0.7 }}>
+                Mentions légales
+              </Link>
+            </li>
+            <li>
+              <Link href="/legal/conditions-generales" style={{ fontSize: 13, opacity: 0.7 }}>
+                CGV
+              </Link>
+            </li>
+            <li>
+              <Link href="/legal/politique-de-confidentialite" style={{ fontSize: 13, opacity: 0.7 }}>
+                Confidentialité
+              </Link>
+            </li>
+            <li>
+              <Link href="/legal/politique-de-remboursement" style={{ fontSize: 13, opacity: 0.7 }}>
+                Remboursement
+              </Link>
+            </li>
+          </ul>
+        </footer>
+      )}
     </main>
   );
 }
