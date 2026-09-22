@@ -125,11 +125,13 @@ interface ChariPayRefundResponse {
   refundId?: unknown;
   refundReference?: unknown;
   status?: unknown;
-  // Confirmed on a real signed sandbox delivery, 2026-09-22: a 2xx POST
-  // /v1/refunds response can carry a synchronously-known business failure
-  // (e.g. insufficient wallet balance) via these two fields, distinct from
-  // an HTTP-level (non-2xx) rejection. Previously discarded entirely --
-  // the thrown error gave no indication of why, only that status was
+  // Confirmed on a real sandbox POST /v1/refunds API response, 2026-09-22
+  // (a direct synchronous response to our own request, not a signed
+  // webhook delivery -- see docs/CHARIPAY.md's distinction between the
+  // two): a 2xx response can carry a synchronously-known business failure
+  // (in this case, a missing API-key scope) via these two fields, distinct
+  // from an HTTP-level (non-2xx) rejection. Previously discarded entirely
+  // -- the thrown error gave no indication of why, only that status was
   // "FAILED". See refund()'s status === "failed" branch.
   failureCode?: unknown;
   failureMessage?: unknown;
@@ -697,12 +699,13 @@ export class ChariPayProvider implements PaymentProvider {
         : input.idempotencyKey;
     const status = normalizeRefundStatus(body.status);
     if (status === "failed") {
-      // Confirmed on a real signed sandbox delivery, 2026-09-22: a 2xx
-      // POST /v1/refunds response can carry a synchronously-known business
-      // failure via these two fields (e.g. insufficient wallet balance),
-      // separate from an HTTP-level rejection. Previously discarded
-      // entirely -- the thrown error gave no indication of why beyond
-      // "status was FAILED". Surface them the same safe way the
+      // Confirmed on a real sandbox POST /v1/refunds API response,
+      // 2026-09-22 (a direct synchronous response, not a signed webhook
+      // delivery): a 2xx response can carry a synchronously-known business
+      // failure via these two fields (in this case, a missing API-key
+      // scope), separate from an HTTP-level rejection. Previously
+      // discarded entirely -- the thrown error gave no indication of why
+      // beyond "status was FAILED". Surface them the same safe way the
       // !response.ok path already does: a bounded machine code plus a
       // sandbox-only redacted message, never raw provider prose.
       const failureCode = typeof body.failureCode === "string"

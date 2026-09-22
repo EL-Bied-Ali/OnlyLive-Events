@@ -630,6 +630,82 @@ describe("ChariPayProvider", () => {
     }
   });
 
+  it("surfaces failureCode/failureMessage from a 2xx refund response reporting status FAILED", async () => {
+    // Real sandbox evidence, 2026-09-22: POST /v1/refunds can return HTTP 202
+    // (request accepted) while the body itself reports a synchronous
+    // business failure via these two fields -- a missing API-key scope in
+    // this case. Previously discarded entirely; the thrown error gave no
+    // indication of why beyond "status was FAILED".
+    vi.stubEnv("CHARIPAY_ENV", "sandbox");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response({
+        refundId: null,
+        refundReference: "refund-scope-denied",
+        status: "FAILED",
+        failureCode: "BAAS_CHARI_ERROR",
+        failureMessage: "[REFUND_MERCHANT_CARD_PAYMENT] Chari API error (HTTP 403): 403 Forbidden on POST request for \"https://api-psp.charipay.ma/v1/refunds\": \"Access denied. Missing required scopes: operations:refund\"",
+      }, 202)),
+    );
+
+    try {
+      await new ChariPayProvider().refund({
+        providerPaymentId: "ps-scope-denied",
+        paymentExternalId: "payment-scope-denied",
+        amountCents: 100,
+        currency: "MAD",
+        reason: "Capture failureCode reelle",
+        idempotencyKey: "refund-scope-denied",
+      });
+      throw new Error("expected provider failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      const providerError = error as ProviderRequestError;
+      expect(providerError.message).toBe("ChariPay reports this refund reference as FAILED");
+      expect(providerError.status).toBe(202);
+      expect(providerError.providerCode).toBe("BAAS_CHARI_ERROR");
+      expect(providerError.providerMessageHint).toContain("Missing required scopes: operations:refund");
+      // The admin-entered reason must never leak into the surfaced hint --
+      // this failure message happens not to contain it, but the redaction
+      // pass still runs against known request values.
+      expect(providerError.providerMessageHint).not.toContain("Capture failureCode reelle");
+    }
+  });
+
+  it("never exposes failureMessage from a 2xx FAILED refund response outside the ChariPay sandbox", async () => {
+    vi.stubEnv("CHARIPAY_ENV", "live");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(response({
+        refundId: null,
+        refundReference: "refund-scope-denied-live",
+        status: "FAILED",
+        failureCode: "BAAS_CHARI_ERROR",
+        failureMessage: "Access denied. Missing required scopes: operations:refund",
+      }, 202)),
+    );
+
+    try {
+      await new ChariPayProvider().refund({
+        providerPaymentId: "ps-scope-denied-live",
+        paymentExternalId: "payment-scope-denied-live",
+        amountCents: 100,
+        currency: "MAD",
+        reason: "test",
+        idempotencyKey: "refund-scope-denied-live",
+      });
+      throw new Error("expected provider failure");
+    } catch (error) {
+      expect(error).toBeInstanceOf(ProviderRequestError);
+      const providerError = error as ProviderRequestError;
+      // providerCode is a bounded machine code (never a secret) and is
+      // always safe to surface regardless of environment -- only the raw
+      // provider message is sandbox-gated.
+      expect(providerError.providerCode).toBe("BAAS_CHARI_ERROR");
+      expect(providerError.providerMessageHint).toBeUndefined();
+    }
+  });
+
   it("parses the provider's own machine error code onto providerCode for diagnostics", async () => {
     vi.stubGlobal(
       "fetch",
