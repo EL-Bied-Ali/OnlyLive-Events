@@ -278,6 +278,28 @@ integrated yet (see Known scope limitations below).
      jitter, up to 8 attempts, before marking the row permanently `failed`.
    - Never logs a raw recipient address (a truncated SHA-256 hash only) or
      a full error object (a bounded message only).
+4. Two independent triggers actually call `dispatchPendingEmails()` — Vercel
+   Hobby's native cron only runs once/day, far too infrequent on its own:
+   - **Eager, near-real-time:** `lib/email/eagerDispatch.ts` wraps
+     `after()` (`next/server`) around a dispatch call from every route that
+     enqueues a customer-facing email (both webhook handlers, the expired-
+     holds sweep, admin manual fulfillment, and the customer's own payment-
+     reconciliation poll — gated to only fire when that poll actually
+     recovers a payment, not on every routine ~5s check). `after()` throws
+     synchronously outside a real request scope; the wrapper swallows that
+     and logs a fixed safe code only, never the raw exception.
+   - **Scheduled backstop:** `.github/workflows/dispatch-emails-cron.yml`
+     on `main` calls the same endpoint every 5 minutes (GitHub's minimum
+     schedule interval; best-effort, not a guarantee) for whatever the
+     eager trigger missed. Vercel's own Deployment Protection (SSO wall)
+     sits in front of the app and would otherwise redirect this
+     unauthenticated caller before it ever reaches `X-Internal-Secret`;
+     the workflow authenticates through Vercel's "Trusted Sources" feature
+     with a short-lived GitHub Actions OIDC token
+     (`x-vercel-trusted-oidc-idp-token`) rather than a second static bypass
+     secret. See `TASKS.md`'s "email dispatch scheduling" entry for the
+     full incident history (a real production SSO-wall failure only found
+     by an actual `workflow_dispatch` run, not by review).
 
 ## Rate limiting
 

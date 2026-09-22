@@ -820,6 +820,30 @@
     "testFile": "tests/integration/notifications.test.ts"
   },
   {
+    "id": "email-eager-dispatch-after-webhook",
+    "scenario": "after() eagerly triggers dispatchPendingEmails() following a webhook/sweep/admin-fulfillment/reconciliation write, swallowing after()'s synchronous throw outside a real request scope and logging only a fixed safe code on dispatch-level failure, never the raw exception",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/email/eagerDispatch.test.ts"
+  },
+  {
+    "id": "email-eager-dispatch-reconcile-payment-gated",
+    "scenario": "The customer-facing reconcile-payment poll route only schedules eager dispatch when a payment was actually recovered this call, never on a no-op poll or when the provider ledger has nothing new to report",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/reconcilePaymentRoute.test.ts"
+  },
+  {
+    "id": "email-eager-vs-periodic-dispatch-no-double-send",
+    "scenario": "An eager after()-triggered dispatch racing a periodic dispatch call for the same backlog never double-sends or drops a row, without draining or otherwise mutating the shared test-suite backlog",
+    "category": "email",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/emailDispatchConcurrency.test.ts"
+  },
+  {
     "id": "email-console-provider-production-guard",
     "scenario": "The console email provider is refused in production unless ALLOW_CONSOLE_EMAIL_IN_PRODUCTION is explicitly set",
     "category": "configuration",
