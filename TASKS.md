@@ -976,12 +976,14 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   and ran the full pipeline end-to-end against a real, throwaway, local,
   non-application Postgres cluster before ever proposing a merge.
 - That local run found and fixed two real bugs in the doc's original inline
-  commands: `pg_dump`/`psql` both silently mishandle a bare positional
-  connection string ahead of further flags on at least one real build
-  (confirmed on Windows) — `psql` is the worse case, since it silently
-  ignores every flag after the positional argument, including
-  `ON_ERROR_STOP` and `-f`, so the invariant check would never actually run
-  with no visible error. Fixed both by using `-d "$URL"` explicitly.
+  commands: `pg_dump`/`psql` both mishandle a bare positional connection
+  string ahead of further flags on at least one real build (confirmed on
+  Windows), but differently — `pg_dump` fails outright with a misleading
+  "too many command-line arguments" error that misattributes the failure to
+  the flag itself; `psql` is the worse case, since it silently ignores
+  every flag after the positional argument, including `ON_ERROR_STOP` and
+  `-f`, so the invariant check would never actually run with no visible
+  error at all. Fixed both by using `-d "$URL"` explicitly.
 - GPT's independent cold audit (required before merge per this project's
   standing rule) then found and confirmed four further real gaps across two
   review passes, all fixed and re-verified end-to-end before merging:
@@ -1053,6 +1055,7 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    captured and pinned (see above). Still needed: a real payment failure,
    a real refund success/failure (full and partial) with its webhook
    payload pinned, and a webhook-delivery/`refundReference` replay test
+   against the real provider.
 
    **Attempted and inconclusive (2026-09-18):** tried to force a payment
    failure via a hosted checkout using card `4000000000000002` (shown as
@@ -1073,22 +1076,32 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    either. No code or docs changed based on this result (correctly, per
    GPT — the `AUTHORISATION REJECTED` return is real but doesn't
    represent the kind of failure ChariPay's `notifyOnFailure` /
-   `payment.failed` path is documented to fire for). Next attempt should
-   use the documented success card but a **deliberately wrong 3DS code**
-   (not `555`) or an abandoned/timed-out 3DS challenge, to reach a
-   genuine decline within the recognized card-processing path rather
-   than an upstream PAN rejection.
-   against the real provider.
+   `payment.failed` path is documented to fire for).
+
+   **Update, later investigation:** no documented self-service way exists in
+   ChariPay's sandbox to force a genuine `payment.failed` (no wrong-3DS or
+   abandoned-challenge procedure is published) — this acceptance item is
+   blocked pending a provider-supported sandbox procedure, which needs a
+   direct ChariPay support contact (`info@charipay.ma` / `+212 632 646
+   464`), not another local attempt.
+
+   The refund half of this item is separately blocked: `POST /v1/refunds`
+   currently 403s because the sandbox API key lacks the `operations:refund`
+   scope — needs the account holder to grant/regenerate that scope in the
+   ChariPay merchant portal before a real refund lifecycle can be captured
+   (see `docs/CHARIPAY.md`).
 2. **Delivery pipeline now proven end-to-end on Preview (2026-09-19/20, see
    "Completed" above); production sending domain still open.** The full
    EmailOutbox → dispatcher → Resend chain was exercised with a real paid
-   order and confirmed delivered/idempotent. What remains: verify a real
-   `RESEND_FROM_EMAIL` sending domain for production (today's test used the
-   shared `onboarding@resend.dev` address + `RESEND_TEST_RECIPIENT`
-   override, not a production-ready sender), add production
-   `RESEND_API_KEY`, and resolve #48 (no scheduled trigger for
-   `dispatch-emails` — the outbox currently only drains when someone calls
-   it manually).
+   order and confirmed delivered/idempotent. #48 is closed: the scheduled
+   `dispatch-emails` trigger has real observed scheduled runs and is now a
+   working backstop (GitHub's `schedule` trigger has no 5-minute recovery
+   guarantee, so the eager `after()` dispatch remains the primary path —
+   see the "eager email dispatch trigger" entry above). What remains: verify
+   a real `RESEND_FROM_EMAIL` sending domain for production (today's test
+   used the shared `onboarding@resend.dev` address +
+   `RESEND_TEST_RECIPIENT` override, not a production-ready sender), and add
+   production `RESEND_API_KEY`.
 3. **Production database recovery — scripts now exist and are locally
    proven; production provisioning drill still open.** Neon is the selected
    production Postgres target and `docs/DATABASE_RECOVERY.md` defines
@@ -1111,10 +1124,13 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    common dump artifacts.
    Still required before go-live: provision the separate production Neon
    project, choose/verify its region against Vercel, configure paid recovery
-   retention + independent backup storage, and complete a **real** timed
-   restore drill against that production project (the local-cluster run
-   above proves the scripts' mechanics, not a production drill — it used a
-   throwaway, non-application cluster and a stripped-down test schema).
+   retention + independent backup storage, and then perform a timed
+   recovery drill using a real production backup/PITR recovery into a
+   disposable, isolated restore target (never the live production
+   database itself), followed by the invariant check and application
+   smoke tests. The local-cluster run above proves the scripts' mechanics,
+   not a production drill — it used a throwaway, non-application cluster
+   and a stripped-down test schema.
    Do not infer the current Vercel Preview database from the connected Neon
    project named for the sandbox: read-only inspection on 2026-09-19 found
    that project contains no application tables.
