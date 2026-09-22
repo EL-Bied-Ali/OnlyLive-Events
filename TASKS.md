@@ -1136,8 +1136,25 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    Do not infer the current Vercel Preview database from the connected Neon
    project named for the sandbox: read-only inspection on 2026-09-19 found
    that project contains no application tables.
-4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
-   requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
+4. **Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
+   structural placeholders now published, real legal review still required.**
+   Added four draft pages (`/legal/mentions-legales`,
+   `/legal/conditions-generales`, `/legal/politique-de-confidentialite`,
+   `/legal/politique-de-remboursement`), linked from the homepage footer,
+   each carrying a visible "brouillon — ne pas utiliser en production"
+   banner and explicit `[À COMPLÉTER]` markers on every clause requiring a
+   legal/accounting decision this project must not invent (governing law,
+   company registration numbers, CNDP declaration, data-retention periods,
+   withdrawal-right applicability, refund-fee allocation). The factual
+   parts these pages do state (what personal data is actually collected —
+   email, optional name/phone, order/ticket history; that OnlyLive never
+   receives card PAN/CVV because ChariPay's hosted checkout handles
+   payment; that refunds are admin-initiated and only take effect once
+   ChariPay confirms success) were checked directly against
+   `prisma/schema.prisma` and `docs/CHARIPAY.md`, not invented. Still
+   requires OnlyLive's accountant/lawyer to complete every `[À COMPLÉTER]`
+   and formally approve before removing the draft banner and treating
+   these as real, binding legal documents.
 5. Stage Vercel WAF rate-limit rules in log mode before production, observe
    real traffic, then tune/enforce without replacing account-level limiting.
 6. Before production rollout, smoke-test admin login/logout, catalogue
