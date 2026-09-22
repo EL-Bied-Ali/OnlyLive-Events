@@ -444,12 +444,61 @@ email).
     self-request-changes. Its audits are recorded as `COMMENTED` reviews
     with explicit pass/fail findings instead; treat those, not the GitHub
     review-decision field, as the real audit record here.
-- **Still open before #48 can close again:** observe one genuine
-  *scheduled* (not manual `workflow_dispatch`) run actually firing on the
-  5-minute cadence, then repeat the full unattended
-  `EmailOutbox → dispatcher → Resend` smoke test (a real purchase, without
-  ever manually calling `/api/internal/dispatch-emails`) to prove the
-  scheduler — not a manual call — is what delivered the email.
+- **PR #56 — real GitHub-side schedule-registration bug, found only by
+  actually watching the run history, not by review.** After #54 merged,
+  the `schedule` trigger fired **zero times in 2.5+ hours** (~31 missed
+  5-minute windows), despite the workflow reporting `active`, the repo
+  being public/non-fork/non-archived, Actions permissions allowing all,
+  and the correct `schedule:` block being present on `main`'s HEAD.
+  Independently confirmed by a second GPT session directly querying
+  `repos/.../actions/runs?event=schedule` (`total_count: 0`) — matching
+  the exact signature of real 2026 GitHub Community reports of a
+  scheduler-registration bug (manual dispatch works, valid cron, GitHub
+  simply never emits the `schedule` event). Fix: changed the cron from
+  `*/5 * * * *` to `2-59/5 * * * *` — same 5-minute cadence, offset off
+  the round `:00/:05/:10...` boundaries. This is *not* a documented
+  guarantee (GitHub's docs only promise cron-expression changes reactivate
+  a formally *deactivated* workflow, and this one reported as merely
+  `active`), only a reasonable attempt at the actual observed fault — a
+  wording overclaim GPT's audit caught and had corrected before merge.
+  It worked: the schedule trigger began firing within the next few
+  windows.
+- **Real end-to-end confirmation, both open items closed:**
+  - A genuine unattended purchase (real ChariPay sandbox card, real
+    signed webhook, `POST /api/payments/webhook/charipay 200`) delivered
+    its confirmation email via the eager `after()` trigger alone, with
+    zero manual `/api/internal/dispatch-emails` calls at any point.
+  - As of 2026-09-22, 13 genuine `event: schedule` runs have completed
+    successfully since the PR #56 fix, the most recent returning real
+    dispatcher JSON (`{"claimed":0,"sent":0,"retried":0,
+    "permanentlyFailed":0,"skipped":0}`), confirmed from the actual run
+    log.
+  - **Observed cadence caveat, worth recording honestly:** the 13 runs
+    are spaced roughly 2–5 hours apart, not every 5 minutes as
+    configured — GitHub is evidently still dropping the large majority of
+    windows under whatever load/throttling applies to this repo's tier.
+    This matches the workflow's own documented caveat ("best-effort, can
+    be delayed or silently dropped") taken to a further extreme than
+    expected. Not re-chased further: the eager `after()` trigger (PR #52)
+    remains the actual near-real-time delivery path in every normal case;
+    this scheduler is strictly the backstop for whatever that path
+    misses, and firing every few hours instead of every 5 minutes still
+    closes that gap far better than the zero-runs status quo it replaced.
+    If this ever matters more (e.g. once real production volume makes a
+    multi-hour stuck-email window unacceptable), the next step is a
+    GitHub Support ticket referencing workflow ID `362547657`, not
+    further changes to this app's own code.
+  - Case not independently live-tested: OIDC-token-present-but-
+    `X-Internal-Secret`-absent returning an app-level 401. Not pursued
+    further — this is guaranteed by existing, already-tested application
+    code (the app's own secret check is unrelated to and unaware of the
+    Vercel-layer OIDC header), and adding another live probe here would
+    mean either a temporary workflow step invoking real production
+    endpoints again (the exact side-effect risk PR #56's own debug-step
+    incident already illustrated) or weakening this app's own auth for a
+    test, neither of which was judged worth it for an already-covered
+    code path.
+- Issue #48 closed 2026-09-22 with this evidence.
 
 ## In progress
 
