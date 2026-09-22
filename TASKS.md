@@ -1155,6 +1155,37 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    requires OnlyLive's accountant/lawyer to complete every `[À COMPLÉTER]`
    and formally approve before removing the draft banner and treating
    these as real, binding legal documents.
+
+   **Update — GPT's audit of PR #71 found and fixed four further real
+   issues before merge:** (1) the refund policy's "vente ferme et
+   définitive" sentence decided a real legal/commercial policy itself
+   instead of leaving it to counsel — now a placeholder; (2) the CGV's
+   checkout-expiry description contradicted `lib/orders/checkout.ts`'s
+   actual behavior (inventory stays reserved past local expiry until
+   provider reconciliation proves it safe to release, not released
+   immediately) — corrected to match; (3) the privacy policy claimed an
+   exhaustive ("uniquement") data list while omitting technical/security
+   processing already in the app (IP-based rate limiting, session data,
+   payment-event records, audit logs) — changed to "notamment" plus an
+   explicit technical/security category, and "nous ne vendons pas vos
+   données" (an unverifiable business-policy claim) became a placeholder
+   too; (4) most importantly, a real deployment-safety gap: the pages said
+   "ne pas utiliser en production" while the homepage linked them
+   unconditionally, with nothing stopping the branch from eventually
+   reaching production with unfinished placeholders publicly live. Added
+   `lib/legal/approval.ts`'s `legalDocumentsApproved()` gate (`notFound()`
+   on all four pages plus the homepage footer links, unless
+   `LEGAL_DOCUMENTS_APPROVED=true` is explicitly set outside
+   non-production) and `robots: noindex` on all four, matching this
+   project's existing `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION`-style pattern for
+   a dangerous default. Covered by a new
+   `tests/unit/legal/approval.test.ts` (the gate logic itself, matching
+   how the sibling fake-payment gate is tested) plus
+   `playwright.config.ts` explicitly opting the e2e server into
+   `LEGAL_DOCUMENTS_APPROVED=true` — discovered while wiring this up that
+   `next start` always runs `NODE_ENV=production`, so e2e needs the same
+   explicit opt-in as the other production guards, not something the
+   original PR's test comment had accounted for.
 5. Stage Vercel WAF rate-limit rules in log mode before production, observe
    real traffic, then tune/enforce without replacing account-level limiting.
 6. Before production rollout, smoke-test admin login/logout, catalogue

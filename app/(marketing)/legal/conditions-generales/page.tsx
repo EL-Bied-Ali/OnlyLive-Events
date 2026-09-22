@@ -1,11 +1,16 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { legalDocumentsApproved } from "@/lib/legal/approval";
 import { LegalPage, Section, ToFill } from "../_components/LegalPage";
 
 export const metadata: Metadata = {
   title: "Conditions générales de vente — OnlyLive",
+  robots: { index: false, follow: false },
 };
 
 export default function TermsPage() {
+  if (!legalDocumentsApproved()) notFound();
+
   return (
     <LegalPage
       title="Conditions générales de vente"
@@ -23,9 +28,13 @@ export default function TermsPage() {
         <p>
           Chaque événement propose plusieurs catégories de billets (par exemple VVIP, VIP,
           Gradins), réparties en phases de vente successives à prix et quantités distincts. Le
-          prix et la disponibilité affichés au moment du paiement sont ceux qui s&apos;appliquent ;
-          une réservation temporaire est mise de côté le temps du paiement puis libérée si le
-          paiement n&apos;est pas finalisé.
+          prix et la disponibilité affichés au moment du paiement sont ceux qui s&apos;appliquent.
+          Une réservation temporaire bloque les billets pendant le paiement. Elle n&apos;est
+          libérée qu&apos;après expiration, échec ou annulation définitivement établis,
+          conformément aux mécanismes de réconciliation avec notre prestataire de paiement —
+          elle n&apos;est donc pas nécessairement libérée immédiatement au premier signe
+          d&apos;inactivité, le temps de confirmer avec certitude qu&apos;aucun paiement n&apos;est
+          en cours de traitement.
         </p>
       </Section>
 

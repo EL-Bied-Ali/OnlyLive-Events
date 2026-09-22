@@ -1,11 +1,16 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { legalDocumentsApproved } from "@/lib/legal/approval";
 import { LegalPage, Section, ToFill } from "../_components/LegalPage";
 
 export const metadata: Metadata = {
   title: "Mentions légales — OnlyLive",
+  robots: { index: false, follow: false },
 };
 
 export default function LegalNoticePage() {
+  if (!legalDocumentsApproved()) notFound();
+
   return (
     <LegalPage title="Mentions légales" updatedNote="Brouillon — non publié.">
       <Section heading="1. Éditeur du site">
@@ -33,8 +38,12 @@ export default function LegalNoticePage() {
 
       <Section heading="2. Hébergement">
         <p>
-          Le site est hébergé par Vercel Inc. (application) et la base de données est hébergée par
-          Neon (PostgreSQL). <ToFill>confirmer si une mention d&apos;hébergeur détaillée est requise et ses coordonnées exactes</ToFill>.
+          Le site est hébergé par Vercel Inc. (application).{" "}
+          <ToFill>
+            confirmer l&apos;hébergeur de base de données réellement utilisé en production au
+            moment de la mise en ligne, ses coordonnées exactes, et si une mention d&apos;hébergeur
+            plus détaillée est requise
+          </ToFill>
         </p>
       </Section>
 

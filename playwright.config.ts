@@ -87,6 +87,12 @@ export default defineConfig({
       ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true",
       // Same production guard, for the sandbox console email provider.
       ALLOW_CONSOLE_EMAIL_IN_PRODUCTION: "true",
+      // Same production guard, for the draft /legal pages (see
+      // lib/legal/approval.ts): they 404 in production unless explicitly
+      // approved. E2E needs to verify the real page content; the
+      // gate-blocking logic itself is covered by
+      // tests/unit/legal/approval.test.ts, not here.
+      LEGAL_DOCUMENTS_APPROVED: "true",
       // Keep rate limiting enabled in browser tests so the real Auth.js
       // callback path is covered. The IP ceilings are deliberately above
       // this serial suite's normal traffic.

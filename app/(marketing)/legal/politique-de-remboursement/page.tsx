@@ -1,11 +1,16 @@
 import type { Metadata } from "next";
+import { notFound } from "next/navigation";
+import { legalDocumentsApproved } from "@/lib/legal/approval";
 import { LegalPage, Section, ToFill } from "../_components/LegalPage";
 
 export const metadata: Metadata = {
   title: "Politique de remboursement — OnlyLive",
+  robots: { index: false, follow: false },
 };
 
 export default function RefundPolicyPage() {
+  if (!legalDocumentsApproved()) notFound();
+
   return (
     <LegalPage
       title="Politique de remboursement"
@@ -13,18 +18,28 @@ export default function RefundPolicyPage() {
     >
       <Section heading="1. Principe général">
         <p>
-          Sauf annulation ou report de l&apos;événement par son organisateur, la vente de billets
-          est ferme et définitive. <ToFill>confirmer la position officielle d&apos;OnlyLive sur
-          les demandes de remboursement pour simple changement d&apos;avis du client</ToFill>
+          <ToFill>
+            position officielle d&apos;OnlyLive sur le caractère ferme et définitif (ou non) de la
+            vente de billets, notamment en cas de simple changement d&apos;avis du client — cette
+            page ne doit pas trancher cette question elle-même
+          </ToFill>
         </p>
       </Section>
 
       <Section heading="2. Annulation ou report d'un événement">
         <p>
-          Si un événement est annulé ou reporté par son organisateur, les détenteurs de billets
-          sont informés par email et un remboursement (total ou partiel selon le cas) est initié
-          par l&apos;équipe OnlyLive. <ToFill>confirmer le délai cible de traitement et si un
-          billet peut être conservé pour la nouvelle date en cas de report</ToFill>
+          <ToFill>
+            engagement officiel d&apos;OnlyLive en cas d&apos;annulation ou de report d&apos;un
+            événement par son organisateur (information des détenteurs de billets, remboursement
+            total ou partiel, possibilité de conserver le billet pour une nouvelle date, délai
+            cible) — à décider avec la direction/l&apos;avocat, cette page ne doit pas
+            présenter un engagement non encore pris comme acquis
+          </ToFill>
+        </p>
+        <p>
+          Si un remboursement est décidé, sa mise en œuvre technique suit le processus décrit à la
+          section 3 ci-dessous : il est initié par un membre habilité de l&apos;équipe OnlyLive
+          depuis l&apos;interface d&apos;administration, jamais automatiquement par le système.
         </p>
       </Section>
 
