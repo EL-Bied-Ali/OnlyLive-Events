@@ -118,17 +118,17 @@ Create a daily custom-format PostgreSQL dump from a trusted operator/backup
 runner. Use a **direct/unpooled** Neon connection for this job rather than the
 serverless application's pooled runtime connection.
 
+`scripts/backup-database.sh` implements this exactly, and has been run
+end-to-end against a real (throwaway, local) Postgres cluster — a bare
+positional connection string ahead of `--format=custom`-style flags is
+mishandled by at least one real `pg_dump` build (confirmed 2026-09-22,
+Windows), so the script explicitly uses `-d "$BACKUP_DATABASE_URL"` rather
+than a positional argument:
+
 ```bash
-umask 077
-backup_file="onlylive-$(date -u +%Y%m%dT%H%M%SZ).dump"
-
-pg_dump "$BACKUP_DATABASE_URL" \
-  --format=custom \
-  --no-owner \
-  --no-acl \
-  --file="$backup_file"
-
-sha256sum "$backup_file" > "$backup_file.sha256"
+BACKUP_DATABASE_URL="postgresql://..." \
+BACKUP_OUTPUT_DIR="/path/to/backups" \
+  scripts/backup-database.sh
 ```
 
 `BACKUP_DATABASE_URL` is a backup-runner secret, not an application runtime
@@ -157,20 +157,18 @@ that provider's credentials at runtime.
 The drill must use a disposable, isolated Postgres target. Never restore over
 the live production database.
 
-Example:
+`scripts/restore-drill.sh` implements this exactly, refuses to run without an
+explicit `RESTORE_DRILL_CONFIRM=yes`, and verifies the dump's checksum before
+touching anything. Run end-to-end against a real (throwaway, local) Postgres
+cluster on 2026-09-22, which is also where the `pg_dump` bug above was found
+— the same bug affects `psql`'s positional connection-string form here too:
+without the script's `-d` fix, `ON_ERROR_STOP`/`-f` are silently ignored and
+the invariant check never actually runs, with no visible error.
 
 ```bash
-pg_restore \
-  --dbname="$RESTORE_DRILL_DATABASE_URL" \
-  --clean \
-  --if-exists \
-  --no-owner \
-  --no-acl \
-  onlylive-YYYYMMDDTHHMMSSZ.dump
-
-psql "$RESTORE_DRILL_DATABASE_URL" \
-  -v ON_ERROR_STOP=1 \
-  -f scripts/recovery-smoke.sql
+RESTORE_DRILL_DATABASE_URL="postgresql://..." \
+RESTORE_DRILL_CONFIRM=yes \
+  scripts/restore-drill.sh onlylive-YYYYMMDDTHHMMSSZ.dump
 ```
 
 Then start the same application commit against the restored database and
@@ -238,5 +236,19 @@ As of 2026-09-19:
   this workflow;
 - production recovery objectives have therefore **not** yet been drill-tested.
 
+**Update, 2026-09-22:** `scripts/backup-database.sh` and
+`scripts/restore-drill.sh` now exist and were run end-to-end against a real
+(throwaway, local, non-application) Postgres cluster: dump → checksum →
+`--clean` restore → `recovery-smoke.sql` invariant check, using the scripts'
+own safety guard (`RESTORE_DRILL_CONFIRM=yes`) rather than bypassing it. This
+found and fixed two real bugs the original inline command examples had (a
+positional connection-string argument silently mishandled by at least one
+real `pg_dump`/`psql` build on Windows — see both sections above). This
+proves the **mechanics** of the backup/restore pipeline and the invariant
+check actually work; it is explicitly **not** the real production restore
+drill this gate requires — that still needs the actual production Neon
+project, its real PITR/backup behavior, and the application smoke tests
+listed above, none of which a throwaway local cluster can stand in for.
+
 Do not mark this gate complete until production provisioning and the first
-timed restore drill are recorded.
+timed restore drill against the real production database are recorded.
