@@ -1088,9 +1088,13 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    The refund half of this item is separately blocked: `POST /v1/refunds`
    is accepted at the HTTP layer (`202`) but returns a synchronous
    body-level `FAILED` result whose `failureMessage` reports a downstream
-   Chari `403` because the sandbox API key lacks the `operations:refund`
-   scope — needs the account holder to grant/regenerate that scope in the
-   ChariPay merchant portal before a real refund lifecycle can be captured
+   Chari `403` for missing `operations:refund`. The active merchant key
+   already has the portal-exposed `refund:create` and `refund:read`
+   permissions, and the complete editable portal list has no
+   `operations:refund` option. This is therefore a provider-side sandbox
+   enablement/support issue, not a self-service key edit. Escalate the exact
+   error plus correlation id `46965bf5-7d91-4655-9e71-7d909e5a11b0` to
+   ChariPay support; do not rotate/broaden the key speculatively
    (see `docs/CHARIPAY.md`).
 2. **Delivery pipeline now proven end-to-end on Preview (2026-09-19/20, see
    "Completed" above); production sending domain still open.** The full
@@ -1209,12 +1213,14 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
     real sandbox attempts (`operationId` vs `externalId`; `reason` closed
     enum vs free text — see `docs/CHARIPAY.md`'s Refund lifecycle
     section for both). With those fixed, the next real attempt exposed
-    the actual current blocker: the sandbox `CHARIPAY_API_KEY` is missing
-    the `operations:refund` scope entirely (`403 Forbidden`,
-    `failureCode: BAAS_CHARI_ERROR`) — a real new credential/permission
-    requirement, not just another exercise. Needs a ChariPay
-    merchant-portal action (grant the scope, or issue a new key that has
-    it) before a real refund can be attempted again.
+    the actual current blocker: the provider returns downstream
+    `403 Forbidden` / `BAAS_CHARI_ERROR` for missing
+    `operations:refund`. The active sandbox key already has
+    `refund:create` and `refund:read`, while the portal exposes no
+    editable `operations:refund` permission. This now requires ChariPay
+    support/provider-side sandbox enablement, using correlation id
+    `46965bf5-7d91-4655-9e71-7d909e5a11b0`; do not rotate or broaden the
+    key speculatively.
   Real production go-live additionally requires OnlyLive merchant/KYB
   approval and live credentials; no production secret should be committed
   or pasted here.
