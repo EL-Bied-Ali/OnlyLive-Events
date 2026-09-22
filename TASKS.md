@@ -1086,7 +1086,9 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    464`), not another local attempt.
 
    The refund half of this item is separately blocked: `POST /v1/refunds`
-   currently 403s because the sandbox API key lacks the `operations:refund`
+   is accepted at the HTTP layer (`202`) but returns a synchronous
+   body-level `FAILED` result whose `failureMessage` reports a downstream
+   Chari `403` because the sandbox API key lacks the `operations:refund`
    scope — needs the account holder to grant/regenerate that scope in the
    ChariPay merchant portal before a real refund lifecycle can be captured
    (see `docs/CHARIPAY.md`).
