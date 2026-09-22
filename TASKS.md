@@ -476,7 +476,9 @@ email).
   - **Observed cadence caveat, worth recording honestly:** the 13 runs
     are spaced roughly 2–5 hours apart, not every 5 minutes as
     configured — GitHub is evidently still dropping the large majority of
-    windows under whatever load/throttling applies to this repo's tier.
+    windows for reasons not exposed by GitHub (the missed runs are
+    proven; the specific cause is not — don't overclaim a specific
+    load/tier explanation we can't actually verify).
     This matches the workflow's own documented caveat ("best-effort, can
     be delayed or silently dropped") taken to a further extreme than
     expected. Not re-chased further: the eager `after()` trigger (PR #52)
@@ -487,7 +489,12 @@ email).
     If this ever matters more (e.g. once real production volume makes a
     multi-hour stuck-email window unacceptable), the next step is a
     GitHub Support ticket referencing workflow ID `362547657`, not
-    further changes to this app's own code.
+    further changes to this app's own code. Do not describe this
+    scheduler elsewhere as a "5-minute recovery guarantee" — if eager
+    dispatch ever fails with no subsequent purchase to trigger another
+    global dispatch, an affected email can genuinely sit for hours before
+    this backstop runs. Defensible for the current MVP given the
+    architecture chosen, but a real characteristic to keep accurate.
   - Case not independently live-tested: OIDC-token-present-but-
     `X-Internal-Secret`-absent returning an app-level 401. Not pursued
     further — this is guaranteed by existing, already-tested application
@@ -510,11 +517,14 @@ email).
    from official docs (never speculatively). Re-derive contradictory-event
    reconciliation from that provider's real lifecycle and revisit holding a
    database row lock across the real network refund call.
-2. Select a real email provider (Resend/Postmark/SES/...) and implement its
-   `EmailProvider` adapter from official docs — the durable outbox/dispatcher
-   (batching, retry with backoff, idempotency key) already exist and need no
-   change to accept it; only `lib/email/index.ts`'s `getEmailProvider()`
-   factory gains a new case.
+2. ~~Select a real email provider~~ — done: Resend is selected and
+   integrated (`lib/email/resendProvider.ts`), verified end-to-end via a
+   real unattended purchase (see the "email dispatch scheduling" section
+   above). Remaining gap here specifically: production sending still uses
+   Resend's shared `onboarding@resend.dev` test sender rather than a
+   verified OnlyLive domain — needs a real domain (e.g. a subdomain of
+   onlylive.ma) verified in Resend (SPF/DKIM/DMARC records) before
+   production go-live.
 3. Decide the production managed-Postgres provider and document/test the
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
@@ -531,6 +541,14 @@ email).
    existing customer add a phone number. Needs a small "complete your
    phone" flow, ideally surfaced at the start of checkout. Not a blocker if
    production has no real historical customers yet by go-live.
+9. Low-priority maintenance (flagged by GPT's final #48 review, 2026-09-22):
+   `.github/workflows/dispatch-emails-cron.yml` pins `actions/github-script`
+   to `60a0d83…` (v7.0.1, the exact commit GPT's original audit vetted).
+   GitHub Actions now emits a Node.js 20 deprecation warning for it (forced
+   onto Node 24 at runtime) — it still works today, including OIDC token
+   generation, but the current released version is v9.0.0. Since this
+   action runs with `id-token: write`, don't bump it casually; audit a
+   newer immutable SHA against the same OIDC-minting usage before updating.
 
 ## Blocked
 
