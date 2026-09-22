@@ -660,6 +660,14 @@ export class ChariPayProvider implements PaymentProvider {
       input.reason,
       operationId,
     ])) as ChariPayRefundResponse;
+    // TEMP DEBUG (remove before final merge): capture the exact real
+    // sandbox shape for a 2xx refund response -- never log amounts/ids,
+    // only field names and the specific status literal.
+    console.error("[TEMP DEBUG] charipay refund response", {
+      httpStatus: response.status,
+      keys: Object.keys(body),
+      statusField: body.status,
+    });
     const providerRefundId = typeof body.refundId === "string"
       ? body.refundId
       : typeof body.refundReference === "string"
