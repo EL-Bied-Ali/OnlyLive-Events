@@ -125,6 +125,14 @@ interface ChariPayRefundResponse {
   refundId?: unknown;
   refundReference?: unknown;
   status?: unknown;
+  // Confirmed on a real signed sandbox delivery, 2026-09-22: a 2xx POST
+  // /v1/refunds response can carry a synchronously-known business failure
+  // (e.g. insufficient wallet balance) via these two fields, distinct from
+  // an HTTP-level (non-2xx) rejection. Previously discarded entirely --
+  // the thrown error gave no indication of why, only that status was
+  // "FAILED". See refund()'s status === "failed" branch.
+  failureCode?: unknown;
+  failureMessage?: unknown;
 }
 
 interface ChariPayTransaction {
@@ -275,12 +283,26 @@ function extractProviderFieldHint(code: string, message: string): string | undef
   return undefined;
 }
 
+// A 2xx POST /v1/refunds response can still carry a synchronously-known
+// business failure (failureCode/failureMessage), confirmed on a real
+// signed sandbox delivery, 2026-09-22 -- separate from the !response.ok
+// path redactProviderMessage below covers. Same redaction discipline
+// applies: sandbox-only exposure, provider-controlled prose never safe to
+// persist/log verbatim.
+function redactFailureMessage(
+  message: string,
+  knownValues: Array<string | number | null | undefined> = [],
+): string | undefined {
+  return redactProviderMessage("__FAILURE_MESSAGE__", message, knownValues, true);
+}
+
 function redactProviderMessage(
   code: string,
   message: string,
   knownValues: Array<string | number | null | undefined> = [],
+  bypassCodeGate = false,
 ): string | undefined {
-  if (code !== "MISSING_PARAMETER" || !message || process.env.CHARIPAY_ENV !== "sandbox") return undefined;
+  if ((!bypassCodeGate && code !== "MISSING_PARAMETER") || !message || process.env.CHARIPAY_ENV !== "sandbox") return undefined;
 
   let redacted = message.replace(/[\u0000-\u001F\u007F]/g, " ");
 
@@ -660,14 +682,6 @@ export class ChariPayProvider implements PaymentProvider {
       input.reason,
       operationId,
     ])) as ChariPayRefundResponse;
-    // TEMP DEBUG (remove before final merge): capture the exact real
-    // sandbox shape for a 2xx refund response -- never log amounts/ids,
-    // only field names and the specific status literal.
-    console.error("[TEMP DEBUG] charipay refund response", {
-      httpStatus: response.status,
-      keys: Object.keys(body),
-      statusField: body.status,
-    });
     const providerRefundId = typeof body.refundId === "string"
       ? body.refundId
       : typeof body.refundReference === "string"
@@ -675,12 +689,36 @@ export class ChariPayProvider implements PaymentProvider {
         : input.idempotencyKey;
     const status = normalizeRefundStatus(body.status);
     if (status === "failed") {
+      // Confirmed on a real signed sandbox delivery, 2026-09-22: a 2xx
+      // POST /v1/refunds response can carry a synchronously-known business
+      // failure via these two fields (e.g. insufficient wallet balance),
+      // separate from an HTTP-level rejection. Previously discarded
+      // entirely -- the thrown error gave no indication of why beyond
+      // "status was FAILED". Surface them the same safe way the
+      // !response.ok path already does: a bounded machine code plus a
+      // sandbox-only redacted message, never raw provider prose.
+      const failureCode = typeof body.failureCode === "string"
+        ? safeProviderCode(body.failureCode, response.status)
+        : undefined;
+      const failureMessage = typeof body.failureMessage === "string"
+        ? redactFailureMessage(body.failureMessage, [
+            input.providerPaymentId,
+            input.paymentExternalId,
+            input.orderExternalId,
+            input.idempotencyKey,
+            input.reason,
+            operationId,
+          ])
+        : undefined;
       throw new ProviderRequestError(
         "ChariPay reports this refund reference as FAILED",
         false,
         response.status,
         undefined,
         responseCorrelationId(response),
+        failureCode,
+        undefined,
+        failureMessage,
       );
     }
     // A successful HTTP response without a definitive terminal status is kept
