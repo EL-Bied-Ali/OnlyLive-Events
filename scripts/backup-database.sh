@@ -37,7 +37,17 @@ pg_dump -d "$BACKUP_DATABASE_URL" \
   --no-acl \
   --file="$backup_file"
 
-sha256sum "$backup_file" > "$backup_file.sha256"
+# Hash the bare filename from within $output_dir, not the full path: these
+# backups are meant to leave this machine, and sha256sum -c later verifies
+# the filename recorded inside the checksum file. A path-qualified entry
+# (e.g. /var/backups/onlylive-....dump) would fail to verify once the dump
+# and its checksum are copied to independent storage or a different host/
+# path, even though the dump bytes are perfectly intact.
+backup_name="$(basename "$backup_file")"
+(
+  cd "$output_dir"
+  sha256sum "$backup_name" > "$backup_name.sha256"
+)
 
 echo "Backup written: $backup_file"
 echo "Checksum:        $backup_file.sha256"

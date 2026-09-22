@@ -36,9 +36,18 @@ if [ ! -f "$dump_file" ]; then
   echo "Dump file not found: $dump_file" >&2
   exit 1
 fi
-if [ -f "$dump_file.sha256" ]; then
-  if ! sha256sum -c "$dump_file.sha256" 2>&1; then
-    echo "Checksum mismatch — refusing to restore a dump that may be corrupted or tampered with" >&2
+# Verify by bare filename from within the dump's own directory, not by full
+# path: backup-database.sh hashes the bare filename (from within its output
+# directory) precisely so this pair keeps verifying after being copied to
+# independent storage or a different host/path. Resolving dump_dir here
+# rather than trusting a relative dump_file argument keeps that true
+# regardless of the caller's own working directory.
+dump_dir="$(cd "$(dirname "$dump_file")" && pwd)"
+dump_name="$(basename "$dump_file")"
+
+if [ -f "$dump_dir/$dump_name.sha256" ]; then
+  if ! (cd "$dump_dir" && sha256sum -c -- "$dump_name.sha256") 2>&1; then
+    echo "Checksum mismatch — refusing to restore a dump that may be corrupted or mismatched" >&2
     exit 1
   fi
 elif [ "${RESTORE_DRILL_ALLOW_UNVERIFIED:-}" = "yes" ]; then
@@ -73,10 +82,18 @@ fi
 started_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "Restore drill started: $started_at"
 
+# --exit-on-error: pg_restore's own default is to continue past SQL errors
+# and only report an error count at the end. set -e already fails this
+# script once pg_restore's final exit code is nonzero, so that default
+# isn't a false-green bug, but stopping at the first error is materially
+# cleaner for a destructive recovery script. Deliberately not adding
+# --single-transaction: PostgreSQL notes it can have locking/resource
+# implications for large restores.
 pg_restore \
   --dbname="$RESTORE_DRILL_DATABASE_URL" \
   --clean \
   --if-exists \
+  --exit-on-error \
   --no-owner \
   --no-acl \
   "$dump_file"

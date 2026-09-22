@@ -288,5 +288,30 @@ throwaway local cluster before merging:
 `backup-database.sh`, so a newly created backup directory cannot inherit a
 looser ambient umask.
 
+**Update, 2026-09-22 (second audit pass — checksum portability):** the same
+independent reviewer then caught a fourth real gap in the fix above:
+`sha256sum` was hashing the dump's full path, not its bare filename. Since
+these backups are specifically meant to leave the machine that created them,
+a checksum file recorded against a path like
+`/var/backups/onlylive-....dump` would fail to verify once the `.dump`/
+`.sha256` pair was copied to independent storage or a different host/path —
+even though the dump bytes were perfectly intact. Fixed by having
+`backup-database.sh` hash the bare filename from within its output directory,
+and `restore-drill.sh` verify by bare filename from within the dump's own
+directory (resolved from the dump path actually given, not assumed to be the
+caller's working directory). Re-verified end-to-end: created a backup in one
+directory, copied the `.dump`/`.sha256` pair to a second directory, deleted
+the first directory entirely, and confirmed `restore-drill.sh` still verifies
+and restores correctly from the copy.
+
+Also added `pg_restore --exit-on-error` (its own default is to continue past
+SQL errors and only report a count afterward; `set -e` already fails this
+script on `pg_restore`'s final nonzero exit, so this isn't a false-green fix,
+but stopping at the first error is materially cleaner for a destructive
+recovery script) and softened the checksum-mismatch message from "corrupted
+or tampered with" to "corrupted or mismatched", since a plain SHA-256 file
+next to the dump protects against accidental corruption/mismatch, not a
+malicious actor capable of replacing both files.
+
 Do not mark this gate complete until production provisioning and the first
 timed restore drill against the real production database are recorded.
