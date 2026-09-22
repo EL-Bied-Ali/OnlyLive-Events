@@ -19,21 +19,26 @@ export default function RefundPolicyPage() {
       <Section heading="1. Principe général">
         <p>
           <ToFill>
-            position officielle d&apos;OnlyLive sur le caractère ferme et définitif (ou non) de la
-            vente de billets, notamment en cas de simple changement d&apos;avis du client — cette
-            page ne doit pas trancher cette question elle-même
+            décider la politique commerciale applicable lorsqu&apos;un client change simplement
+            d&apos;avis. La loi n° 31-08 prévoit un régime particulier pour les prestations de
+            loisirs fournies à une date déterminée, mais la rédaction définitive doit être validée
+            par l&apos;avocat avant publication
           </ToFill>
         </p>
       </Section>
 
       <Section heading="2. Annulation ou report d'un événement">
         <p>
+          La loi marocaine n° 31-08 prévoit à son article 40 qu&apos;en cas de défaut
+          d&apos;exécution résultant de l&apos;indisponibilité du service commandé, le consommateur
+          doit être informé et, le cas échéant, pouvoir être remboursé sans délai et au plus tard
+          dans les quinze jours du paiement.
+        </p>
+        <p>
           <ToFill>
-            engagement officiel d&apos;OnlyLive en cas d&apos;annulation ou de report d&apos;un
-            événement par son organisateur (information des détenteurs de billets, remboursement
-            total ou partiel, possibilité de conserver le billet pour une nouvelle date, délai
-            cible) — à décider avec la direction/l&apos;avocat, cette page ne doit pas
-            présenter un engagement non encore pris comme acquis
+            faire valider l&apos;application exacte de cette règle à l&apos;annulation d&apos;un
+            événement et décider séparément la politique applicable en cas de report : maintien du
+            billet, possibilité de remboursement, délai et canal d&apos;information
           </ToFill>
         </p>
         <p>
@@ -47,14 +52,12 @@ export default function RefundPolicyPage() {
         <p>
           Les remboursements sont initiés depuis l&apos;interface d&apos;administration OnlyLive et
           traités via ChariPay, notre prestataire de paiement. Un remboursement peut être total ou
-          partiel. Son statut passe par les étapes suivantes : en attente, en cours de traitement,
-          réussi, ou échoué.
+          partiel.
         </p>
         <p>
           Le remboursement n&apos;est considéré comme effectif, et le statut de votre commande
           n&apos;est mis à jour, qu&apos;après confirmation du succès du remboursement par
-          ChariPay — jamais sur la seule base d&apos;une action interne. Le délai réel de
-          réception des fonds dépend ensuite de votre banque.
+          ChariPay. Le délai réel de réception des fonds dépend ensuite de la banque du client.
         </p>
       </Section>
 
@@ -68,19 +71,23 @@ export default function RefundPolicyPage() {
       <Section heading="5. Comment demander un remboursement">
         <p>
           <ToFill>
-            canal officiel par lequel un client peut soumettre une demande de remboursement
-            (email dédié, formulaire) et délai cible de réponse — le remboursement lui-même n&apos;est
-            actuellement déclenché que par un membre habilité de l&apos;équipe OnlyLive, pas en
-            libre-service par le client
+            canal officiel de demande de remboursement (email ou formulaire) et délai cible de
+            réponse ; le remboursement lui-même est actuellement déclenché par un membre habilité
+            de l&apos;équipe OnlyLive et non en libre-service par le client
           </ToFill>
         </p>
       </Section>
 
-      <Section heading="6. Frais bancaires ou de plateforme">
+      <Section heading="6. Frais">
+        <p>
+          ChariPay indique publiquement que l&apos;opération de remboursement, totale ou partielle,
+          est gratuite.
+        </p>
         <p>
           <ToFill>
-            confirmer si des frais sont retenus lors d&apos;un remboursement (frais de transaction
-            ChariPay, frais bancaires) et, le cas échéant, qui les supporte
+            confirmer avec ChariPay et l&apos;expert-comptable le traitement de la commission
+            prélevée sur la transaction d&apos;origine et décider si un quelconque coût peut être
+            retenu au client ; ne rien promettre au client avant cette confirmation
           </ToFill>
         </p>
       </Section>
