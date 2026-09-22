@@ -1096,18 +1096,23 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    error plus correlation id `46965bf5-7d91-4655-9e71-7d909e5a11b0` to
    ChariPay support; do not rotate/broaden the key speculatively
    (see `docs/CHARIPAY.md`).
-2. **Delivery pipeline now proven end-to-end on Preview (2026-09-19/20, see
-   "Completed" above); production sending domain still open.** The full
+2. **Delivery pipeline now proven end-to-end on Preview (2026-09-19/20);
+   production sending domain verified on 2026-09-22.** The full
    EmailOutbox → dispatcher → Resend chain was exercised with a real paid
    order and confirmed delivered/idempotent. #48 is closed: the scheduled
    `dispatch-emails` trigger has real observed scheduled runs and is now a
    working backstop (GitHub's `schedule` trigger has no 5-minute recovery
    guarantee, so the eager `after()` dispatch remains the primary path —
-   see the "eager email dispatch trigger" entry above). What remains: verify
-   a real `RESEND_FROM_EMAIL` sending domain for production (today's test
-   used the shared `onboarding@resend.dev` address +
-   `RESEND_TEST_RECIPIENT` override, not a production-ready sender), and add
-   production `RESEND_API_KEY`.
+   see the "eager email dispatch trigger" entry above). Resend now reports
+   `mail.medinabelgique.com` verified after Cloudflare DNS setup; the
+   intended temporary sender is
+   `tickets@mail.medinabelgique.com` (the adapter adds the `OnlyLive` display name itself). This domain is for
+   pre-production/testing and can be replaced later with the final OnlyLive
+   domain without a code change. What remains for production runtime is to
+   configure/verify `EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL`, and a
+   production-scoped `RESEND_API_KEY` in Vercel, with no
+   `RESEND_TEST_RECIPIENT` override in Production, then redeploy and send
+   a real application-originated smoke email.
 3. **Production database recovery — scripts now exist and are locally
    proven; production provisioning drill still open.** Neon is the selected
    production Postgres target and `docs/DATABASE_RECOVERY.md` defines
@@ -1224,7 +1229,7 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   Real production go-live additionally requires OnlyLive merchant/KYB
   approval and live credentials; no production secret should be committed
   or pasted here.
-- Real email delivery is no longer blocked at the pipeline level — proven end-to-end on Preview 2026-09-19/20 (see "Completed" above). Production delivery is still blocked on verifying a real sending domain (today's test used the shared `onboarding@resend.dev` address) and adding production `RESEND_API_KEY`/`RESEND_FROM_EMAIL`; see #48 for the still-open scheduling gap.
+- Real email delivery is no longer blocked at the pipeline or domain-verification level — proven end-to-end on Preview 2026-09-19/20, and `mail.medinabelgique.com` was verified by Resend on 2026-09-22. Production delivery still needs the Vercel Production variables (`EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL=tickets@mail.medinabelgique.com`, and a production-scoped `RESEND_API_KEY`) plus a redeploy/smoke send. Do not set `RESEND_TEST_RECIPIENT` in Production. The scheduler gap is already closed by the working GitHub Actions backstop; eager dispatch remains primary.
 - Legal document drafting is blocked on legal/accountant review and ChariPay's
   final merchant/go-live requirements.
 
