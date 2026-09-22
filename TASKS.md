@@ -967,6 +967,59 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   `nextAttemptAt` and scoping every assertion to their specific idempotency
   keys instead of the dispatch summaries' global totals.
 
+## Completed (backup/restore-drill scripts — PR #69, merged 2026-09-22)
+
+- `docs/DATABASE_RECOVERY.md`'s "Layer 2" and "Restore drill" sections had
+  only inline bash snippets, no committed runnable script. Added
+  `scripts/backup-database.sh` (dump + checksum) and `scripts/restore-drill.sh`
+  (checksum verify + `--clean` restore + `recovery-smoke.sql` invariant check),
+  and ran the full pipeline end-to-end against a real, throwaway, local,
+  non-application Postgres cluster before ever proposing a merge.
+- That local run found and fixed two real bugs in the doc's original inline
+  commands: `pg_dump`/`psql` both mishandle a bare positional connection
+  string ahead of further flags on at least one real build (confirmed on
+  Windows), but differently — `pg_dump` fails outright with a misleading
+  "too many command-line arguments" error that misattributes the failure to
+  the flag itself; `psql` is the worse case, since it silently ignores
+  every flag after the positional argument, including `ON_ERROR_STOP` and
+  `-f`, so the invariant check would never actually run with no visible
+  error at all. Fixed both by using `-d "$URL"` explicitly.
+- GPT's independent cold audit (required before merge per this project's
+  standing rule) then found and confirmed four further real gaps across two
+  review passes, all fixed and re-verified end-to-end before merging:
+  1. both scripts were committed with git mode `100644` (non-executable),
+     which would fail with `Permission denied` since the docs invoke them
+     directly on a normal Linux runner — fixed to `100755`;
+  2. the restore script's checksum check only warned and proceeded when
+     `<dump>.sha256` was missing, contradicting its own fail-closed safety
+     model — changed to refuse by default, with
+     `RESTORE_DRILL_ALLOW_UNVERIFIED=yes` as the sole explicit override;
+  3. `pg_restore --clean` does not guarantee a pristine target (it only
+     drops objects present in the dump archive itself) — added a required
+     `RESTORE_DRILL_TARGET_IS_FRESH=yes` confirmation gate rather than
+     attempting to solve this with `--create`, which changes required
+     privileges and database-naming semantics;
+  4. the checksum hashed the dump's full path, not a portable bare
+     filename, which would silently break verification once a backup was
+     copied to independent storage or a different host/path (the entire
+     point of these backups) — fixed by hashing/verifying the bare filename
+     from within the relevant directory on both sides, re-verified with an
+     explicit cross-directory relocation test (backup in directory A, copy
+     the pair to directory B, delete A, restore from B).
+  Also added `pg_restore --exit-on-error` (not a false-green bug — `set -e`
+  already fails the script on `pg_restore`'s nonzero exit — but materially
+  cleaner for a destructive recovery script to stop at the first error),
+  reordered `umask 077` before output-directory creation, and softened the
+  checksum-mismatch wording from "corrupted or tampered with" to "corrupted
+  or mismatched" since an unsigned SHA-256 file protects against accidental
+  corruption, not a malicious actor able to replace both files.
+- **Explicitly not the real production restore drill.** This proves the
+  backup/restore/invariant-check pipeline's mechanics work; the real gate in
+  `docs/DATABASE_RECOVERY.md` still requires provisioning the actual
+  production Neon project and drilling against it with the full application
+  schema and smoke tests, none of which a throwaway local cluster with a
+  stripped-down test schema can stand in for.
+
 ## Next
 
 0. **Resolved, was never a code bug**: an earlier draft of this file
@@ -1002,6 +1055,7 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    captured and pinned (see above). Still needed: a real payment failure,
    a real refund success/failure (full and partial) with its webhook
    payload pinned, and a webhook-delivery/`refundReference` replay test
+   against the real provider.
 
    **Attempted and inconclusive (2026-09-18):** tried to force a payment
    failure via a hosted checkout using card `4000000000000002` (shown as
@@ -1022,34 +1076,63 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    either. No code or docs changed based on this result (correctly, per
    GPT — the `AUTHORISATION REJECTED` return is real but doesn't
    represent the kind of failure ChariPay's `notifyOnFailure` /
-   `payment.failed` path is documented to fire for). Next attempt should
-   use the documented success card but a **deliberately wrong 3DS code**
-   (not `555`) or an abandoned/timed-out 3DS challenge, to reach a
-   genuine decline within the recognized card-processing path rather
-   than an upstream PAN rejection.
-   against the real provider.
+   `payment.failed` path is documented to fire for).
+
+   **Update, later investigation:** no documented self-service way exists in
+   ChariPay's sandbox to force a genuine `payment.failed` (no wrong-3DS or
+   abandoned-challenge procedure is published) — this acceptance item is
+   blocked pending a provider-supported sandbox procedure, which needs a
+   direct ChariPay support contact (`info@charipay.ma` / `+212 632 646
+   464`), not another local attempt.
+
+   The refund half of this item is separately blocked: `POST /v1/refunds`
+   is accepted at the HTTP layer (`202`) but returns a synchronous
+   body-level `FAILED` result whose `failureMessage` reports a downstream
+   Chari `403` because the sandbox API key lacks the `operations:refund`
+   scope — needs the account holder to grant/regenerate that scope in the
+   ChariPay merchant portal before a real refund lifecycle can be captured
+   (see `docs/CHARIPAY.md`).
 2. **Delivery pipeline now proven end-to-end on Preview (2026-09-19/20, see
    "Completed" above); production sending domain still open.** The full
    EmailOutbox → dispatcher → Resend chain was exercised with a real paid
-   order and confirmed delivered/idempotent. What remains: verify a real
-   `RESEND_FROM_EMAIL` sending domain for production (today's test used the
-   shared `onboarding@resend.dev` address + `RESEND_TEST_RECIPIENT`
-   override, not a production-ready sender), add production
-   `RESEND_API_KEY`, and resolve #48 (no scheduled trigger for
-   `dispatch-emails` — the outbox currently only drains when someone calls
-   it manually).
-3. **Production database recovery — provider decision/documentation done,
-   provisioning drill still open.** Neon is the selected production Postgres
-   target and `docs/DATABASE_RECOVERY.md` now defines separate production
-   provisioning, a >=7-day PITR target, daily independent logical backups,
-   RPO/RTO targets, and a mandatory restore drill. A read-only
-   `scripts/recovery-smoke.sql` validates core inventory/ticket/payment
-   invariants after restore; CI executes it on a freshly migrated empty test
-   database to catch schema/SQL drift, and `.gitignore` blocks common dump
-   artifacts.
+   order and confirmed delivered/idempotent. #48 is closed: the scheduled
+   `dispatch-emails` trigger has real observed scheduled runs and is now a
+   working backstop (GitHub's `schedule` trigger has no 5-minute recovery
+   guarantee, so the eager `after()` dispatch remains the primary path —
+   see the "eager email dispatch trigger" entry above). What remains: verify
+   a real `RESEND_FROM_EMAIL` sending domain for production (today's test
+   used the shared `onboarding@resend.dev` address +
+   `RESEND_TEST_RECIPIENT` override, not a production-ready sender), and add
+   production `RESEND_API_KEY`.
+3. **Production database recovery — scripts now exist and are locally
+   proven; production provisioning drill still open.** Neon is the selected
+   production Postgres target and `docs/DATABASE_RECOVERY.md` defines
+   separate production provisioning, a >=7-day PITR target, daily
+   independent logical backups, RPO/RTO targets, and a mandatory restore
+   drill. `scripts/backup-database.sh` and `scripts/restore-drill.sh` (#69,
+   merged 2026-09-22 after an independent GPT audit found and fixed four
+   real issues across two review passes: non-executable git mode, a
+   checksum check that warned instead of failing closed, `pg_restore
+   --clean` not guaranteeing a pristine target, and a checksum that hashed
+   the dump's full path instead of a portable bare filename) now implement
+   this exactly, gated by `RESTORE_DRILL_CONFIRM=yes`,
+   `RESTORE_DRILL_TARGET_IS_FRESH=yes`, and fail-closed checksum
+   verification. Run end-to-end against a real throwaway local Postgres
+   cluster, including a cross-directory relocation test (backup in one
+   directory, copy to another, delete the original, restore from the copy).
+   A read-only `scripts/recovery-smoke.sql` validates core inventory/ticket/
+   payment invariants after restore; CI executes it on a freshly migrated
+   empty test database to catch schema/SQL drift, and `.gitignore` blocks
+   common dump artifacts.
    Still required before go-live: provision the separate production Neon
    project, choose/verify its region against Vercel, configure paid recovery
-   retention + independent backup storage, and complete a timed restore drill.
+   retention + independent backup storage, and then perform a timed
+   recovery drill using a real production backup/PITR recovery into a
+   disposable, isolated restore target (never the live production
+   database itself), followed by the invariant check and application
+   smoke tests. The local-cluster run above proves the scripts' mechanics,
+   not a production drill — it used a throwaway, non-application cluster
+   and a stripped-down test schema.
    Do not infer the current Vercel Preview database from the connected Neon
    project named for the sandbox: read-only inspection on 2026-09-19 found
    that project contains no application tables.
