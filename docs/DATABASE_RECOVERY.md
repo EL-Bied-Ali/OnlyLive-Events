@@ -118,17 +118,17 @@ Create a daily custom-format PostgreSQL dump from a trusted operator/backup
 runner. Use a **direct/unpooled** Neon connection for this job rather than the
 serverless application's pooled runtime connection.
 
+`scripts/backup-database.sh` implements this exactly, and has been run
+end-to-end against a real (throwaway, local) Postgres cluster — a bare
+positional connection string ahead of `--format=custom`-style flags is
+mishandled by at least one real `pg_dump` build (confirmed 2026-09-22,
+Windows), so the script explicitly uses `-d "$BACKUP_DATABASE_URL"` rather
+than a positional argument:
+
 ```bash
-umask 077
-backup_file="onlylive-$(date -u +%Y%m%dT%H%M%SZ).dump"
-
-pg_dump "$BACKUP_DATABASE_URL" \
-  --format=custom \
-  --no-owner \
-  --no-acl \
-  --file="$backup_file"
-
-sha256sum "$backup_file" > "$backup_file.sha256"
+BACKUP_DATABASE_URL="postgresql://..." \
+BACKUP_OUTPUT_DIR="/path/to/backups" \
+  scripts/backup-database.sh
 ```
 
 `BACKUP_DATABASE_URL` is a backup-runner secret, not an application runtime
@@ -157,20 +157,33 @@ that provider's credentials at runtime.
 The drill must use a disposable, isolated Postgres target. Never restore over
 the live production database.
 
-Example:
+`scripts/restore-drill.sh` implements this exactly, refuses to run without an
+explicit `RESTORE_DRILL_CONFIRM=yes`, and verifies the dump's checksum before
+touching anything — a missing `.sha256` file **fails closed** (refuses to
+restore) unless the operator deliberately overrides it with
+`RESTORE_DRILL_ALLOW_UNVERIFIED=yes`. Run end-to-end against a real
+(throwaway, local) Postgres cluster on 2026-09-22, which is also where the
+`pg_dump` bug above was found — the same bug affects `psql`'s positional
+connection-string form here too: without the script's `-d` fix,
+`ON_ERROR_STOP`/`-f` are silently ignored and the invariant check never
+actually runs, with no visible error.
+
+`pg_restore --clean` only drops objects present in the dump archive itself —
+it does **not** guarantee a pristine target, so a target reused across runs
+can retain leftover objects that silently contaminate the drill's result
+(flagged in GPT's audit of PR #69, citing PostgreSQL's own `pg_restore`
+documentation). The script therefore also refuses to run unless
+`RESTORE_DRILL_TARGET_IS_FRESH=yes` is set, which is this project's way of
+making the operator explicitly confirm, every run, that the target database
+was freshly created or independently reset beforehand — never solved by
+adding `pg_restore --create`, since that changes required privileges and
+database-naming semantics.
 
 ```bash
-pg_restore \
-  --dbname="$RESTORE_DRILL_DATABASE_URL" \
-  --clean \
-  --if-exists \
-  --no-owner \
-  --no-acl \
-  onlylive-YYYYMMDDTHHMMSSZ.dump
-
-psql "$RESTORE_DRILL_DATABASE_URL" \
-  -v ON_ERROR_STOP=1 \
-  -f scripts/recovery-smoke.sql
+RESTORE_DRILL_DATABASE_URL="postgresql://..." \
+RESTORE_DRILL_CONFIRM=yes \
+RESTORE_DRILL_TARGET_IS_FRESH=yes \
+  scripts/restore-drill.sh onlylive-YYYYMMDDTHHMMSSZ.dump
 ```
 
 Then start the same application commit against the restored database and
@@ -238,5 +251,67 @@ As of 2026-09-19:
   this workflow;
 - production recovery objectives have therefore **not** yet been drill-tested.
 
+**Update, 2026-09-22:** `scripts/backup-database.sh` and
+`scripts/restore-drill.sh` now exist and were run end-to-end against a real
+(throwaway, local, non-application) Postgres cluster: dump → checksum →
+`--clean` restore → `recovery-smoke.sql` invariant check, using the scripts'
+own safety guard (`RESTORE_DRILL_CONFIRM=yes`) rather than bypassing it. This
+found and fixed two real bugs the original inline command examples had (a
+positional connection-string argument silently mishandled by at least one
+real `pg_dump`/`psql` build on Windows — see both sections above). This
+proves the **mechanics** of the backup/restore pipeline and the invariant
+check actually work; it is explicitly **not** the real production restore
+drill this gate requires — that still needs the actual production Neon
+project, its real PITR/backup behavior, and the application smoke tests
+listed above, none of which a throwaway local cluster can stand in for.
+
+**Update, 2026-09-22 (independent audit fixes):** an independent cold audit of
+the PR adding these scripts (GPT, reviewing before merge) found and confirmed
+three real gaps, all fixed and re-verified end-to-end against the same
+throwaway local cluster before merging:
+
+- both scripts were committed with git mode `100644` (non-executable), which
+  would fail with `Permission denied` when the docs' own examples invoke them
+  directly on a normal Linux runner — fixed to `100755`;
+- `restore-drill.sh`'s checksum check only warned and proceeded when
+  `<dump>.sha256` was missing, contradicting this document's own "verifies the
+  dump's checksum before restoring" claim — changed to fail closed by default,
+  re-verified locally that a missing checksum now refuses with exit 1, with
+  `RESTORE_DRILL_ALLOW_UNVERIFIED=yes` as the sole, explicit override;
+- `pg_restore --clean` does not guarantee a pristine target (it only drops
+  objects present in the dump archive itself, per PostgreSQL's own
+  documentation) — the script now also refuses to run unless
+  `RESTORE_DRILL_TARGET_IS_FRESH=yes`, re-verified locally that this refuses
+  by default and that a genuinely fresh target proceeds.
+
+`umask 077` was also reordered to run before `mkdir -p "$output_dir"` in
+`backup-database.sh`, so a newly created backup directory cannot inherit a
+looser ambient umask.
+
+**Update, 2026-09-22 (second audit pass — checksum portability):** the same
+independent reviewer then caught a fourth real gap in the fix above:
+`sha256sum` was hashing the dump's full path, not its bare filename. Since
+these backups are specifically meant to leave the machine that created them,
+a checksum file recorded against a path like
+`/var/backups/onlylive-....dump` would fail to verify once the `.dump`/
+`.sha256` pair was copied to independent storage or a different host/path —
+even though the dump bytes were perfectly intact. Fixed by having
+`backup-database.sh` hash the bare filename from within its output directory,
+and `restore-drill.sh` verify by bare filename from within the dump's own
+directory (resolved from the dump path actually given, not assumed to be the
+caller's working directory). Re-verified end-to-end: created a backup in one
+directory, copied the `.dump`/`.sha256` pair to a second directory, deleted
+the first directory entirely, and confirmed `restore-drill.sh` still verifies
+and restores correctly from the copy.
+
+Also added `pg_restore --exit-on-error` (its own default is to continue past
+SQL errors and only report a count afterward; `set -e` already fails this
+script on `pg_restore`'s final nonzero exit, so this isn't a false-green fix,
+but stopping at the first error is materially cleaner for a destructive
+recovery script) and softened the checksum-mismatch message from "corrupted
+or tampered with" to "corrupted or mismatched", since a plain SHA-256 file
+next to the dump protects against accidental corruption/mismatch, not a
+malicious actor capable of replacing both files.
+
 Do not mark this gate complete until production provisioning and the first
-timed restore drill are recorded.
+timed restore drill against the real production database are recorded.
