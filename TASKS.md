@@ -1065,11 +1065,28 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
 - ChariPay sandbox API key, webhook signing secret, and public HTTPS
   preview URL are obtained and end-to-end payment.succeeded validation is
   done (see "In progress" above and docs/CHARIPAY.md's checklist) — no
-  longer blocking. Still open: a real `payment.failed` and real refund
-  success/failure captures, both requiring only more sandbox exercises, not
-  new credentials. Real production go-live additionally requires OnlyLive
-  merchant/KYB approval and live credentials; no production secret should
-  be committed or pasted here.
+  longer blocking. **Update, 2026-09-22 — both remaining captures turned out
+  to need more than sandbox exercises alone, not less:**
+  - `payment.failed`: the sandbox has exactly one valid test card and no
+    documented way to force a decline, cancel a session without firing any
+    webhook, or synthesize anything but a fake `payment.succeeded` via the
+    test-event endpoint. Genuinely blocked on ChariPay's own guidance —
+    the next step is asking their integrator contact
+    (info@charipay.ma / +212 632 646 464) for a supported sandbox
+    procedure, not more app-side attempts.
+  - Refund success/failure: two real code bugs were found and fixed via
+    real sandbox attempts (`operationId` vs `externalId`; `reason` closed
+    enum vs free text — see `docs/CHARIPAY.md`'s Refund lifecycle
+    section for both). With those fixed, the next real attempt exposed
+    the actual current blocker: the sandbox `CHARIPAY_API_KEY` is missing
+    the `operations:refund` scope entirely (`403 Forbidden`,
+    `failureCode: BAAS_CHARI_ERROR`) — a real new credential/permission
+    requirement, not just another exercise. Needs a ChariPay
+    merchant-portal action (grant the scope, or issue a new key that has
+    it) before a real refund can be attempted again.
+  Real production go-live additionally requires OnlyLive merchant/KYB
+  approval and live credentials; no production secret should be committed
+  or pasted here.
 - Real email delivery is no longer blocked at the pipeline level — proven end-to-end on Preview 2026-09-19/20 (see "Completed" above). Production delivery is still blocked on verifying a real sending domain (today's test used the shared `onboarding@resend.dev` address) and adding production `RESEND_API_KEY`/`RESEND_FROM_EMAIL`; see #48 for the still-open scheduling gap.
 - Legal document drafting is blocked on legal/accountant review and ChariPay's
   final merchant/go-live requirements.
