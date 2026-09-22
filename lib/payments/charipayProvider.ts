@@ -632,7 +632,22 @@ export class ChariPayProvider implements PaymentProvider {
         ...(operationId !== undefined ? { operationId } : { externalId: input.paymentExternalId }),
         refundReference: input.idempotencyKey,
         refundAmount: centsToMad(input.amountCents),
-        reason: input.reason,
+        // A second, distinct real sandbox 400/MISSING_PARAMETER (2026-09-22,
+        // correlation id 9bd23512-ab87-4022-8f7b-3a19a9706850) showed the
+        // operationId fix above was necessary but not sufficient: ChariPay's
+        // `reason` is a closed enum (MERCHANT_CANCELLATION /
+        // CUSTOMER_CANCELLATION / PLATFORM_ORCHESTRATION / OTHER), not free
+        // text -- the provider's own error said so verbatim: "Free text
+        // belongs in note." OnlyLive's generic RefundInput.reason is admin-
+        // entered free text (an internal note per docs/PAYMENTS.md, never
+        // shown to the customer), so it maps to ChariPay's `note`, never to
+        // `reason`. This adapter has no provider-recognized category signal
+        // from the generic admin refund form to pick a specific enum value
+        // honestly, so `reason` is fixed to the least presumptive option,
+        // "OTHER", rather than guessing e.g. CUSTOMER_CANCELLATION for a
+        // refund that might have been merchant- or admin-initiated.
+        reason: "OTHER",
+        note: input.reason,
         metadata: { onlyliveRefundId: input.idempotencyKey },
       }),
     });
