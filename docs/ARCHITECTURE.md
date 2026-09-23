@@ -279,12 +279,14 @@ adapter; account/domain activation remains operational work (see Known scope
 limitations below).
 
 1. `lib/email/provider.ts` defines the same kind of swappable interface as
-   payments. `ConsoleEmailProvider` is local/test-only; `ResendEmailProvider`
-   sends plain-text transactional email through Resend's REST API.
-   `SendEmailInput.idempotencyKey` is the stable EmailOutbox row id and is
-   forwarded as Resend's Idempotency-Key. Resend retains idempotency keys for
-   24 hours, so this protects the normal retry/lease-reclaim window rather
-   than claiming infinite exactly-once delivery.
+   payments — `lib/email/fakeProvider.ts` (`ConsoleEmailProvider`, local/
+   test-only) just logs the message and returns a fake id;
+   `lib/email/resendProvider.ts` (`ResendEmailProvider`) sends real
+   transactional email through Resend's REST API. `SendEmailInput` carries
+   an `idempotencyKey` (mirroring `RefundInput`'s, forwarded as Resend's own
+   `Idempotency-Key`); Resend retains idempotency keys for 24 hours, so this
+   protects the normal retry/lease-reclaim window rather than claiming
+   infinite exactly-once delivery.
 2. `lib/email/notifications.ts::enqueue*` (`enqueueOrderConfirmationEmail`,
    `enqueuePaymentFailedEmail`, `enqueueRefundConfirmationEmail`,
    `enqueueReconciliationAlertEmail`) each take a `Prisma.TransactionClient`
@@ -304,9 +306,17 @@ limitations below).
    crash or thrown error between "commit" and "send" can no longer lose
    the notification silently.
 3. `lib/email/dispatcher.ts::dispatchPendingEmails` runs separately,
-   out-of-band (invoked by `/api/internal/dispatch-emails` on the same
-   `X-Internal-Secret` auth pattern as `sweep-expired-holds`, meant to run
-   on a schedule):
+   out-of-band (invoked by `/api/internal/dispatch-emails`, authorized via
+   `lib/http/internalAuth.ts`'s `isInternalRequestAuthorized` — either an
+   explicitly configured `X-Internal-Secret`, the same pattern
+   `sweep-expired-holds` uses, or Vercel Cron's own
+   `Authorization: Bearer <CRON_SECRET>` — meant to run on a schedule
+   either way). `lib/email/eagerDispatch.ts::scheduleEagerEmailDispatch`
+   is also called at every enqueue call site (webhook, refund action,
+   sweep) to additionally trigger `after(() => dispatchPendingEmails())`
+   so most confirmation emails go out within seconds instead of waiting
+   for the next scheduled run — a latency optimization only; the
+   scheduled trigger remains the correctness backstop.
    - Claims a batch of due rows with `SELECT ... FOR UPDATE SKIP LOCKED`
      (pending rows whose `nextAttemptAt` has arrived, or `processing` rows
      whose lease has expired — a crashed worker never finished them) —
@@ -326,19 +336,31 @@ limitations below).
      jitter, up to 8 attempts, before marking the row permanently `failed`.
    - Never logs a raw recipient address (a truncated SHA-256 hash only) or
      a full error object (a bounded message only).
-4. `lib/email/eagerDispatch.ts::scheduleEagerEmailDispatch` is called at
-   every request-scoped call site that can create a new `EmailOutbox` row
-   (both payment webhooks, `sweep-expired-holds`, the customer's on-demand
-   `reconcile-payment` route, the admin refund Server
-   Action) right after that work succeeds. It wraps
-   `after(() => dispatchPendingEmails())` so most confirmation emails go out
-   within seconds instead of waiting for #3's periodic run — but `after()`
-   only fires after the caller's own response is already sent, and throws
-   synchronously (swallowed here) outside a real request/Server Action
-   scope, so this is strictly a latency optimization on top of #3, never a
-   replacement for it. A crash between an outbox row's creation and
-   `after()` running is exactly the case #3's periodic trigger exists to
-   recover.
+4. Two independent triggers actually call `dispatchPendingEmails()` — Vercel
+   Hobby's native cron only runs once/day, far too infrequent on its own:
+   - **Eager, near-real-time:** `lib/email/eagerDispatch.ts` wraps
+     `after()` (`next/server`) around a dispatch call from every route that
+     enqueues a customer-facing email (both payment webhooks,
+     `sweep-expired-holds`, the admin refund Server Action, and the
+     customer's own payment-reconciliation poll — gated to only fire when
+     that poll actually recovers a payment, not on every routine ~5s
+     check). `after()` throws synchronously outside a real request/Server
+     Action scope; the wrapper swallows that and logs a fixed safe code
+     only, never the raw exception. A crash between an outbox row's
+     creation and `after()` running is exactly the case the scheduled
+     backstop below exists to recover.
+   - **Scheduled backstop:** `.github/workflows/dispatch-emails-cron.yml`
+     calls the same endpoint every 5 minutes (GitHub's minimum schedule
+     interval; best-effort, not a guarantee) for whatever the eager
+     trigger missed. Vercel's own Deployment Protection (SSO wall) sits in
+     front of the app and would otherwise redirect this unauthenticated
+     caller before it ever reaches `X-Internal-Secret`; the workflow
+     authenticates through Vercel's "Trusted Sources" feature with a
+     short-lived GitHub Actions OIDC token
+     (`x-vercel-trusted-oidc-idp-token`) rather than a second static
+     bypass secret. See `TASKS.md`'s "email dispatch scheduling" entry for
+     the full incident history (a real production SSO-wall failure only
+     found by an actual `workflow_dispatch` run, not by review).
 
 ## Rate limiting
 
@@ -453,11 +475,21 @@ historical rather than future.
   multi-device reconciliation is not implemented.
 - **Real payment provider** — no Moroccan PSP is integrated; only the
   `fake` sandbox provider. See docs/PAYMENTS.md.
-- **Real email delivery** — the durable outbox/dispatcher foundation and
-  a Resend adapter are implemented. Production activation still requires a
-  Resend account, verified sender domain, `RESEND_API_KEY` and
-  `RESEND_FROM_EMAIL`, followed by a real delivery/bounce smoke test. The
-  console provider remains local/test-only.
+- **Real email provider** — implemented. `lib/email/resendProvider.ts`
+  (`ResendEmailProvider`) sends through Resend's REST API on top of the same
+  durable outbox/dispatcher foundation (idempotent enqueue in the same
+  transaction as the business fact, batched claiming, lease-timeout reclaim,
+  retry with backoff, business-state re-validation at send time); the
+  `console` sandbox provider remains for local/CI/test use only, refused in
+  production unless explicitly opted into (`ALLOW_CONSOLE_EMAIL_IN_PRODUCTION`).
+  `lib/email/eagerDispatch.ts` also schedules a best-effort immediate drain
+  right after checkout/refund/webhook requests (via Next.js `after()`), so a
+  confirmation email typically arrives within seconds rather than waiting for
+  the next periodic `/api/internal/dispatch-emails` run — a latency
+  optimization only, never a substitute for that periodic trigger. Production
+  activation still requires a Resend account, verified sender domain,
+  `RESEND_API_KEY` and `RESEND_FROM_EMAIL`, followed by a real delivery/bounce
+  smoke test.
 - **Rate limiting** — implemented in the application per IP and per
   account/email on registration, admin login, and customer login
   (`lib/rateLimit.ts`). Production WAF rules and final thresholds still
