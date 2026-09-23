@@ -1,9 +1,16 @@
 import crypto from "node:crypto";
 import { describe, expect, it } from "vitest";
+import type { OrderStatus } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { getAuditLog, getAuditLogEntityTypes } from "@/lib/admin/audit";
-import { getOrdersForExport } from "@/lib/admin/dashboard";
+import { iterateOrdersForExport } from "@/lib/admin/dashboard";
 import { createOrderAwaitingPayment } from "../helpers/fixtures";
+
+async function collectExportedOrders(status?: OrderStatus, batchSize?: number) {
+  const rows = [];
+  for await (const batch of iterateOrdersForExport(status, batchSize)) rows.push(...batch);
+  return rows;
+}
 
 async function createAdmin(name = "Reporting Admin") {
   return prisma.adminUser.create({
@@ -89,14 +96,49 @@ describe("admin orders CSV export data", () => {
   it("includes the fields needed for the export and respects a status filter", async () => {
     const { order } = await createOrderAwaitingPayment({ quantity: 2, priceCents: 15_000 });
 
-    const pending = await getOrdersForExport("pending_payment");
+    const pending = await collectExportedOrders("pending_payment");
     const exported = pending.find((o) => o.id === order.id);
     expect(exported).toBeTruthy();
     expect(exported!.totalAmountCents).toBe(30_000);
     expect(exported!.items[0]!.ticketCategory.name).toBeTruthy();
     expect(exported!.user.email).toContain("@");
 
-    const paidOnly = await getOrdersForExport("paid");
+    const paidOnly = await collectExportedOrders("paid");
     expect(paidOnly.some((o) => o.id === order.id)).toBe(false);
+  });
+
+  it("keyset-paginates identical createdAt values without duplicates or gaps", async () => {
+    const orderIds: string[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const { order } = await createOrderAwaitingPayment({ quantity: 1, priceCents: 5_000 });
+      orderIds.push(order.id);
+    }
+
+    // Force the exact boundary condition instead of relying on several inserts
+    // happening to land in the same millisecond.
+    const sameCreatedAt = new Date("2026-01-02T03:04:05.678Z");
+    await prisma.order.updateMany({
+      where: { id: { in: orderIds } },
+      data: { createdAt: sameCreatedAt },
+    });
+
+    const rows = await collectExportedOrders("pending_payment", 2);
+    const seenIds = rows.map((row) => row.id);
+    expect(new Set(seenIds).size).toBe(seenIds.length);
+    for (const id of orderIds) expect(seenIds).toContain(id);
+
+    // For equal createdAt values, the secondary id DESC ordering is the
+    // deterministic order promised by the export query.
+    const relative = seenIds.filter((id) => orderIds.includes(id));
+    const expected = await prisma.order.findMany({
+      where: { id: { in: orderIds } },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: { id: true },
+    });
+    expect(relative).toEqual(expected.map((row) => row.id));
+  });
+
+  it("rejects an invalid internal batch size instead of issuing a malformed pagination query", async () => {
+    await expect(collectExportedOrders("paid", 0)).rejects.toThrow(/positive integer/);
   });
 });
