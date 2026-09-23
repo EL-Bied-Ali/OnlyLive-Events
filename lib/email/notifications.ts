@@ -24,6 +24,21 @@ export function money(cents: number, currency: string): string {
  * (the same business transition reached again, e.g. a redelivered
  * webhook event that still resolves to a fresh transition) can never
  * enqueue a second row for the same (type, entityType, entityId).
+ *
+ * `nextAttemptAt` is passed explicitly (a JS `Date`, true UTC digits)
+ * rather than left to the schema's `@default(now())` — that default is
+ * `CURRENT_TIMESTAMP`, evaluated server-side and subject to the same
+ * naive-timestamp/session-TimeZone skew as the raw-SQL `now()` comparison
+ * fixed in this same file's `lib/email/dispatcher.ts`. Leaving it to the
+ * DB default would make a freshly enqueued row's readiness check
+ * consistent with itself, but inconsistent with every retried row
+ * (rescheduled from JS) once the dispatcher's comparison is corrected to
+ * `(now() AT TIME ZONE 'UTC')` — delaying a brand-new email's first
+ * dispatch attempt by the server's UTC offset. (`lib/inventory.ts` has
+ * the identical class of bug in its own `expires_at < now()` comparisons
+ * — not fixed by this change; tracked separately in TASKS.md since it's
+ * entangled with unrelated in-flight-checkout behavior on the branch
+ * where it was originally fixed.)
  */
 async function enqueue(
   tx: Tx,
@@ -33,7 +48,7 @@ async function enqueue(
   recipientEmail: string,
 ): Promise<void> {
   await tx.emailOutbox.createMany({
-    data: [{ type, entityType, entityId, recipientEmail }],
+    data: [{ type, entityType, entityId, recipientEmail, nextAttemptAt: new Date() }],
     skipDuplicates: true,
   });
 }
@@ -112,6 +127,7 @@ export async function enqueueReconciliationAlertEmail(tx: Tx, orderId: string): 
       entityType: "order",
       entityId: `${orderId}:${admin.id}`,
       recipientEmail: admin.email,
+      nextAttemptAt: new Date(),
     })),
     skipDuplicates: true,
   });

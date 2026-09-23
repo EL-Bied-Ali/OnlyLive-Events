@@ -511,6 +511,82 @@ email).
 
 - None.
 
+## Completed (production Resend email backport — branch feat/production-resend-email-backport)
+
+`main`'s email stack was missing several reliability fixes and the real
+Resend provider that only existed on `feat/charipay-integration` — brought
+over as a clean, email-only slice, deliberately without any ChariPay code:
+
+- New: `lib/email/resendProvider.ts` (`ResendEmailProvider`, real Resend
+  REST API delivery, idempotency-key forwarding, retryable-vs-permanent
+  error classification), `lib/email/runtime.ts`
+  (`isResendTestRecipientAllowed`), `lib/email/eagerDispatch.ts`
+  (`scheduleEagerEmailDispatch`, a best-effort immediate post-request
+  drain via Next.js `after()` — swallows the synchronous throw `after()`
+  raises outside a real request scope, e.g. every existing test that
+  calls a route handler directly, so it's always safe to call
+  unconditionally), and `lib/http/internalAuth.ts`
+  (`isInternalRequestAuthorized` — accepts either the existing
+  `X-Internal-Secret` or Vercel Cron's own `Authorization: Bearer
+  <CRON_SECRET>`, needed by the dispatch-emails route this port also
+  brought over unchanged).
+- Updated: `lib/email/dispatcher.ts`, `lib/email/index.ts`,
+  `lib/email/notifications.ts`, `lib/email/provider.ts`, and
+  `app/api/internal/dispatch-emails/route.ts` replaced wholesale with
+  `feat/charipay-integration`'s versions (confirmed zero ChariPay
+  references in any of them beforehand) — includes the privacy-safe
+  sanitized `EmailProviderError` codes, retryable/non-retryable
+  classification, and the naive-timestamp-vs-`now()` fix
+  (`next_attempt_at <= (now() AT TIME ZONE 'UTC')`, not a bare `now()`).
+- Hand-patched (not wholesale-copied, since the source files also carried
+  unrelated ChariPay-specific changes): `scheduleEagerEmailDispatch()`
+  wired into `app/api/payments/webhook/fake/route.ts` (which also picked
+  up the same `now()`-vs-naive-timestamp fix for its own
+  `payment_events.received_at` insert),
+  `app/api/internal/sweep-expired-holds/route.ts`, and
+  `app/(admin)/admin/orders/[orderId]/actions.ts`'s refund action —
+  skipped porting `getPaymentProviderByName`'s multi-provider refactor
+  (unneeded while `main` only has the `fake` provider) and the ChariPay
+  two-phase-refund `"processing"` state branch.
+- Test files replaced/added to match:
+  `tests/integration/notifications.test.ts`,
+  `tests/unit/email/fakeProvider.test.ts` (both had grown substantially
+  on the feature branch and would otherwise assert the old unsanitized
+  error-message behavior), plus the new
+  `tests/integration/dispatch-emails-route.test.ts`,
+  `tests/integration/emailDispatchConcurrency.test.ts`,
+  `tests/unit/email/eagerDispatch.test.ts`,
+  `tests/unit/email/resendProvider.test.ts`, plus
+  `tests/integration/sweep-expired-holds-route.test.ts` (added for the
+  auth-surface change below). Full suite: 249/249 passing,
+  `tsc --noEmit`/`eslint`/`next build` all clean.
+- Deliberately not ported: the CI Postgres-TimeZone regression guard in
+  `tests/setup.ts` that enforces the `now()`-vs-naive-timestamp fix stays
+  caught (would require also updating `.github/workflows/ci.yml`'s
+  Postgres service `TZ`, which `main`'s CI doesn't currently set). Only
+  the email/outbox and `payment_events.received_at` timestamp fixes are
+  included by this port — **not** `lib/inventory.ts`'s identical bug
+  class, which remains genuinely present on `main` (see item 10 below);
+  the extra CI safety net is a smaller follow-up once that's addressed
+  too.
+- `sweep-expired-holds` now shares `dispatch-emails`'s
+  `isInternalRequestAuthorized` (`X-Internal-Secret` or Vercel Cron's
+  `Authorization: Bearer <CRON_SECRET>`) and exposes `GET` alongside
+  `POST`, matching its own doc comment's claim (GPT catch — this route
+  had been left on the old raw-secret-only, POST-only check while the
+  ported `dispatch-emails` comment already described both routes as
+  sharing the same pattern); covered by the new test file above.
+- `.env.example` and `docs/ARCHITECTURE.md` updated to describe Resend/
+  eager-dispatch/Cron-auth instead of the stale "console only, no real
+  provider" description; `TASKS.md`'s own pre-existing self-contradiction
+  (item 2 below already claimed Resend was "done" while `## Blocked`
+  simultaneously listed email delivery as blocked on provider selection —
+  neither was accurate on `main` until this port) corrected.
+- Still needed before real customer traffic: set Production's actual
+  `EMAIL_PROVIDER=resend`/`RESEND_FROM_EMAIL`/a production-scoped
+  `RESEND_API_KEY` (currently `console`), redeploy, and run one real
+  application-originated delivery smoke test — see item 2 below.
+
 ## Next
 
 1. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
@@ -518,13 +594,18 @@ email).
    reconciliation from that provider's real lifecycle and revisit holding a
    database row lock across the real network refund call.
 2. ~~Select a real email provider~~ — done: Resend is selected and
-   integrated (`lib/email/resendProvider.ts`), verified end-to-end via a
-   real unattended purchase (see the "email dispatch scheduling" section
-   above). Remaining gap here specifically: production sending still uses
-   Resend's shared `onboarding@resend.dev` test sender rather than a
-   verified OnlyLive domain — needs a real domain (e.g. a subdomain of
-   onlylive.ma) verified in Resend (SPF/DKIM/DMARC records) before
-   production go-live.
+   integrated (`lib/email/resendProvider.ts`, PR #81 — ported from
+   `feat/charipay-integration`, where it was already implemented,
+   audited, and verified end-to-end via a real unattended purchase on
+   Preview). This wording was previously inaccurate on `main`: the
+   integration existed only on the feature branch until this port, while
+   this file simultaneously (and self-contradictorily) also listed real
+   email delivery as "Blocked" below — both corrected together. Remaining
+   gap here specifically: Production's actual env vars still need
+   `EMAIL_PROVIDER=resend`/`RESEND_FROM_EMAIL`/a production-scoped
+   `RESEND_API_KEY` set (currently `console`, since `main` couldn't
+   support `resend` before this port) and one real post-deploy delivery
+   smoke test — the code path itself is now ready either way.
 3. Decide the production managed-Postgres provider and document/test the
    backup/restore strategy required by `CLAUDE.md`.
 4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
@@ -549,11 +630,33 @@ email).
    generation, but the current released version is v9.0.0. Since this
    action runs with `id-token: write`, don't bump it casually; audit a
    newer immutable SHA against the same OIDC-minting usage before updating.
+10. **`main`'s `lib/inventory.ts` still has the naive-timestamp-vs-`now()`
+    bug** (found by GPT auditing PR #81; three raw-SQL comparisons —
+    `releaseExpiredAndLock`, the per-user purchase-limit count in
+    `createHold`, and `sweepExpiredHolds` — compare the naive `expires_at`
+    timestamp column against a bare `now()`, which implicitly casts through
+    the session's `TimeZone` GUC before comparing, silently skewing every
+    hold's effective lifetime whenever Postgres isn't running with
+    `TimeZone=UTC`). This is the exact same bug class already fixed in
+    `lib/email/dispatcher.ts` and (via PR #81) the fake webhook's
+    `payment_events.received_at` insert, but affects the core
+    oversell-prevention hold-expiry mechanism specifically, not just email
+    scheduling. **Deliberately not fixed as part of PR #81** (an email-only
+    backport): `feat/charipay-integration`'s version of this fix is heavily
+    entangled with unrelated in-flight-checkout behavior added for ChariPay
+    (excluding order-linked reservations — `order_id IS NULL` — from lazy
+    release/expiry-counting, since a hosted-checkout redirect can leave a
+    reservation "expired" locally while a real async payment is still in
+    flight). Needs its own careful review: on `main`, decide whether the
+    same order-linked-exclusion behavior is independently correct
+    regardless of provider (the fake provider's checkout page can also sit
+    open past a hold's expiry) or whether just the narrow
+    `now()` → `(now() AT TIME ZONE 'UTC')` comparison fix can land alone
+    without also changing lazy-release semantics for in-flight checkouts.
 
 ## Blocked
 
 - Real PSP integration is blocked on OnlyLive selecting a provider.
-- Real email delivery is blocked on OnlyLive selecting a provider.
 - Legal document drafting is blocked on legal/accountant review and the
   eventual PSP's requirements.
 

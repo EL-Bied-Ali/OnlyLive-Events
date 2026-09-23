@@ -2,9 +2,10 @@ import "server-only";
 import crypto from "node:crypto";
 import { prisma } from "@/lib/db";
 import { getEmailProvider } from "@/lib/email";
+import { EmailProviderError } from "@/lib/email/provider";
 import { absoluteAppUrl } from "@/lib/appUrl";
 import { money } from "@/lib/email/notifications";
-import type { EmailOutbox } from "@prisma/client";
+import type { EmailOutbox, Prisma } from "@prisma/client";
 
 const MAX_ATTEMPTS = 8;
 const BASE_BACKOFF_MS = 30_000;
@@ -31,10 +32,15 @@ function hashRecipient(email: string): string {
   return crypto.createHash("sha256").update(email).digest("hex").slice(0, 12);
 }
 
-/** Never log a raw error object (may embed a future real provider's response body) or the email body — only a short, bounded code. */
+/**
+ * Never persist/log arbitrary exception messages: Prisma/render/runtime
+ * errors can include SQL details, URLs, or customer data. Provider adapters
+ * expose a sanitized machine code through EmailProviderError; every other
+ * exception collapses to one fixed internal code while remaining retryable.
+ */
 function errorCode(error: unknown): string {
-  if (error instanceof Error) return error.message.slice(0, 200);
-  return "unknown_error";
+  if (error instanceof EmailProviderError) return error.safeCode;
+  return "email_dispatch_internal_error";
 }
 
 interface RenderedEmail {
@@ -214,13 +220,20 @@ async function renderEmail(row: Pick<EmailOutbox, "type" | "entityId" | "recipie
  * multiple concurrent dispatcher invocations (e.g. overlapping cron
  * triggers) each get a disjoint batch instead of double-processing the
  * same rows or blocking on each other.
+ *
+ * `next_attempt_at` is a naive `timestamp` column, always written as a JS
+ * `Date` (true UTC digits) — both at enqueue time (`lib/email/notifications.ts`)
+ * and on every backoff reschedule below. Comparing it against a bare `now()`
+ * would implicitly cast that `timestamptz` through the session's `TimeZone`
+ * GUC, letting retried (and freshly enqueued) rows fire up to that offset
+ * early whenever the server isn't UTC.
  */
 async function claimBatch(): Promise<EmailOutbox[]> {
   const leaseCutoff = new Date(Date.now() - LEASE_TIMEOUT_MS);
   return prisma.$transaction(async (tx) => {
     const claimable = await tx.$queryRaw<{ id: string }[]>`
       SELECT id FROM email_outbox
-      WHERE (status = 'pending' AND next_attempt_at <= now())
+      WHERE (status = 'pending' AND next_attempt_at <= (now() AT TIME ZONE 'UTC'))
          OR (status = 'processing' AND processing_started_at < ${leaseCutoff})
       ORDER BY next_attempt_at ASC
       LIMIT ${BATCH_SIZE}
@@ -246,6 +259,29 @@ export interface DispatchSummary {
 }
 
 /**
+ * Finalize only the exact lease this worker claimed. If another worker
+ * reclaimed the row after the lease expired, processingStartedAt changes
+ * (or the row leaves processing), so the stale worker must not overwrite
+ * the newer worker's result after its provider call eventually returns.
+ */
+async function finalizeClaim(
+  row: Pick<EmailOutbox, "id" | "processingStartedAt">,
+  data: Prisma.EmailOutboxUpdateManyMutationInput,
+): Promise<boolean> {
+  if (!row.processingStartedAt) return false;
+
+  const result = await prisma.emailOutbox.updateMany({
+    where: {
+      id: row.id,
+      status: "processing",
+      processingStartedAt: row.processingStartedAt,
+    },
+    data,
+  });
+  return result.count === 1;
+}
+
+/**
  * Invoked by the authenticated internal endpoint
  * (app/api/internal/dispatch-emails/route.ts), the same pattern as
  * sweepExpiredHolds — meant to run on a schedule. Each claimed row is
@@ -267,11 +303,12 @@ export async function dispatchPendingEmails(): Promise<DispatchSummary> {
       // provider send failure below.
       const rendered = await renderEmail(row);
       if (!rendered) {
-        await prisma.emailOutbox.update({
-          where: { id: row.id },
-          data: { status: "failed", lastErrorCode: "entity_state_no_longer_valid" },
+        const finalized = await finalizeClaim(row, {
+          status: "failed",
+          processingStartedAt: null,
+          lastErrorCode: "entity_state_no_longer_valid",
         });
-        summary.skipped += 1;
+        if (finalized) summary.skipped += 1;
         continue;
       }
 
@@ -281,34 +318,44 @@ export async function dispatchPendingEmails(): Promise<DispatchSummary> {
         text: rendered.text,
         idempotencyKey: row.id,
       });
-      await prisma.emailOutbox.update({
-        where: { id: row.id },
-        data: { status: "sent", sentAt: new Date(), providerMessageId: result.providerMessageId, lastErrorCode: null },
+      const finalized = await finalizeClaim(row, {
+        status: "sent",
+        processingStartedAt: null,
+        sentAt: new Date(),
+        providerMessageId: result.providerMessageId,
+        lastErrorCode: null,
       });
-      summary.sent += 1;
+      if (finalized) summary.sent += 1;
     } catch (error) {
       const nextAttemptCount = row.attemptCount + 1;
       const code = errorCode(error);
-      console.error(
-        `[email:dispatch] processing failed type=${row.type} outboxId=${row.id} recipientHash=${hashRecipient(row.recipientEmail)} attempt=${nextAttemptCount} error=${code}`,
-      );
+      const retryable = !(error instanceof EmailProviderError) || error.retryable;
 
-      if (nextAttemptCount >= MAX_ATTEMPTS) {
-        await prisma.emailOutbox.update({
-          where: { id: row.id },
-          data: { status: "failed", attemptCount: nextAttemptCount, lastErrorCode: code },
-        });
-        summary.permanentlyFailed += 1;
-      } else {
-        await prisma.emailOutbox.update({
-          where: { id: row.id },
-          data: {
+      const finalized = !retryable || nextAttemptCount >= MAX_ATTEMPTS
+        ? await finalizeClaim(row, {
+            status: "failed",
+            processingStartedAt: null,
+            attemptCount: nextAttemptCount,
+            lastErrorCode: code,
+          })
+        : await finalizeClaim(row, {
             status: "pending",
+            processingStartedAt: null,
             attemptCount: nextAttemptCount,
             nextAttemptAt: new Date(Date.now() + backoffMs(nextAttemptCount)),
             lastErrorCode: code,
-          },
-        });
+          });
+
+      // A lost fence means a newer worker already reclaimed or completed
+      // this row. The stale worker's outcome must not rewind that state.
+      if (!finalized) continue;
+
+      console.error(
+        `[email:dispatch] processing failed type=${row.type} outboxId=${row.id} recipientHash=${hashRecipient(row.recipientEmail)} attempt=${nextAttemptCount} error=${code}`,
+      );
+      if (!retryable || nextAttemptCount >= MAX_ATTEMPTS) {
+        summary.permanentlyFailed += 1;
+      } else {
         summary.retried += 1;
       }
     }

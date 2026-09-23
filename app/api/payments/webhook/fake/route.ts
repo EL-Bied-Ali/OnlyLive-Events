@@ -8,6 +8,7 @@ import {
   enqueuePaymentFailedEmail,
   enqueueReconciliationAlertEmail,
 } from "@/lib/email/notifications";
+import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 import { apiErrorResponse } from "@/lib/http/errors";
 
 export const runtime = "nodejs";
@@ -115,9 +116,13 @@ export async function POST(request: NextRequest) {
       // Claim (or reclaim) this event row inside the SAME transaction as
       // all processing below — see the function doc comment for why.
       const newEventId = crypto.randomUUID();
+      // A JS Date parameter, not raw-SQL now(): received_at is a naive
+      // timestamp column, and a bare now() would implicitly cast through
+      // the session's TimeZone GUC before comparing/storing, silently
+      // skewing it whenever the server isn't UTC.
       const claimed = await tx.$queryRaw<{ id: string }[]>`
         INSERT INTO payment_events (id, payment_id, provider, external_event_id, event_type, raw_payload, signature_valid, received_at)
-        VALUES (${newEventId}, ${payment.id}, ${provider.name}, ${event.externalEventId}, ${event.type}, ${JSON.stringify(event.raw)}::jsonb, ${event.signatureValid}, now())
+        VALUES (${newEventId}, ${payment.id}, ${provider.name}, ${event.externalEventId}, ${event.type}, ${JSON.stringify(event.raw)}::jsonb, ${event.signatureValid}, ${new Date()})
         ON CONFLICT (provider, external_event_id) DO NOTHING
         RETURNING id
       `;
@@ -258,6 +263,7 @@ export async function POST(request: NextRequest) {
       case "event_collision":
         return NextResponse.json({ error: "EVENT_COLLISION" }, { status: 409 });
       case "processed":
+        scheduleEagerEmailDispatch();
         return NextResponse.json({ ok: true, outcome: result.outcome });
     }
   } catch (error) {
