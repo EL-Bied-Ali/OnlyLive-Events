@@ -630,29 +630,75 @@ over as a clean, email-only slice, deliberately without any ChariPay code:
    generation, but the current released version is v9.0.0. Since this
    action runs with `id-token: write`, don't bump it casually; audit a
    newer immutable SHA against the same OIDC-minting usage before updating.
-10. **`main`'s `lib/inventory.ts` still has the naive-timestamp-vs-`now()`
-    bug** (found by GPT auditing PR #81; three raw-SQL comparisons —
-    `releaseExpiredAndLock`, the per-user purchase-limit count in
-    `createHold`, and `sweepExpiredHolds` — compare the naive `expires_at`
-    timestamp column against a bare `now()`, which implicitly casts through
-    the session's `TimeZone` GUC before comparing, silently skewing every
-    hold's effective lifetime whenever Postgres isn't running with
-    `TimeZone=UTC`). This is the exact same bug class already fixed in
+10. **`main`'s `lib/inventory.ts` naive-timestamp-vs-`now()` bug — fix open
+    in PR #82, awaiting GPT review** (found by GPT auditing PR #81; three
+    raw-SQL comparisons — `releaseExpiredAndLock`, the per-user
+    purchase-limit count in `createHold`, and `sweepExpiredHolds` — compared
+    the naive `expires_at` timestamp column against a bare `now()`, which
+    implicitly casts through the session's `TimeZone` GUC before comparing,
+    silently skewing every hold's effective lifetime whenever Postgres
+    isn't running with `TimeZone=UTC`). Same bug class already fixed in
     `lib/email/dispatcher.ts` and (via PR #81) the fake webhook's
-    `payment_events.received_at` insert, but affects the core
+    `payment_events.received_at` insert, but this one affects the core
     oversell-prevention hold-expiry mechanism specifically, not just email
-    scheduling. **Deliberately not fixed as part of PR #81** (an email-only
-    backport): `feat/charipay-integration`'s version of this fix is heavily
-    entangled with unrelated in-flight-checkout behavior added for ChariPay
-    (excluding order-linked reservations — `order_id IS NULL` — from lazy
-    release/expiry-counting, since a hosted-checkout redirect can leave a
-    reservation "expired" locally while a real async payment is still in
-    flight). Needs its own careful review: on `main`, decide whether the
-    same order-linked-exclusion behavior is independently correct
-    regardless of provider (the fake provider's checkout page can also sit
-    open past a hold's expiry) or whether just the narrow
-    `now()` → `(now() AT TIME ZONE 'UTC')` comparison fix can land alone
-    without also changing lazy-release semantics for in-flight checkouts.
+    scheduling.
+
+    PR #82 (`fix/inventory-naive-timestamp-now-skew` → `main`) fixes only
+    the narrow `now()` → `(now() AT TIME ZONE 'UTC')` comparison in all
+    three spots. It deliberately does **not** port
+    `feat/charipay-integration`'s additional `order_id IS NULL` exclusion
+    of order-linked reservations from lazy release/expiry-counting — that
+    behavior exists there to stop a ChariPay hosted-checkout redirect from
+    looking "expired" locally while a real async payment is still in
+    flight, and is a separate behavioral hardening question, not a
+    timezone-correctness one.
+
+    **Correction (GPT's review of PR #82 caught a factual error in the
+    original version of this paragraph):** this doc previously justified
+    leaving `order_id IS NULL` out by claiming `main`'s fake-provider
+    checkout is "synchronous, no redirect-then-wait window" — that is
+    false. `FakeProvider.createPayment()` (`lib/payments/fakeProvider.ts`)
+    returns `redirectUrl: /pay/fake/${paymentId}`, architecturally
+    identical to a real hosted-checkout redirect: the customer can sit on
+    that page indefinitely before clicking "simulate," exactly the same
+    redirect-then-wait window ChariPay has. So `main` is **not** exempt
+    from this race by construction; the real reasons PR #82 still leaves
+    `order_id IS NULL` out are narrower ones: `releaseHold` already
+    refuses to release a reservation once `orderId` is set
+    (`CHECKOUT_IN_PROGRESS`), and `confirmOrderPayment`'s
+    `paid_but_unfulfillable`/`reconciliation_required` states already
+    exist specifically to catch payment-success-after-reservation-expiry
+    without allowing double-ticketing — so the race PR #82 leaves
+    unaddressed degrades to a reconciliation-flagged order, not an
+    oversold ticket. Whether that's an acceptable interim posture for
+    `main`, or whether the `order_id IS NULL` exclusion should be ported
+    independently of ChariPay in its own PR, is still an open question —
+    not yet resolved, tracked as a follow-up separate from item 10.
+
+    PR #82 also ports the CI-only non-UTC TimeZone regression guard from
+    `feat/charipay-integration` (`.github/workflows/ci.yml`'s postgres
+    service `TZ: Asia/Kolkata`, `tests/setup.ts`'s CI-only assertion) so
+    this bug class stays caught in CI going forward, not just this once.
+
+    **The new CI guard immediately proved its worth**: it surfaced two
+    more instances of the exact same bug, outside `lib/inventory.ts` —
+    `lib/admin/catalog.ts`'s `updateEvent` (per-user committed-quantity
+    check before lowering `maxTicketsPerUser`) and `updateSalesPhase`
+    (committed-quantity check before lowering `phaseQuantityLimit`) both
+    compared `expires_at` against a bare `now()`. Reproduced locally
+    against a session TimeZone matching CI (`Asia/Kolkata`): 3 real
+    failures in `admin-catalog.test.ts` (limit-decrease guards silently
+    resolving instead of rejecting, since the implicit positive-offset
+    cast made already-committed active reservations look expired). Fixed
+    in the same PR with the identical `(now() AT TIME ZONE 'UTC')` cast;
+    all 13 admin-catalog tests and the full 249/249 suite now pass under
+    both a UTC and non-UTC session. Grepped the rest of `lib/` for any
+    remaining bare `now()`-vs-naive-timestamp comparisons — none found.
+    `lib/orders/checkout.ts`'s `provider_init_at` comparison was checked
+    and is NOT this bug: that column is written via DB-side `now()`, not
+    a JS `Date`, so both sides of its comparison already share the same
+    session's `now()` with no cross-source skew — a different issue,
+    already fixed separately in commit `dad10c6`.
 
 ## Blocked
 
