@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildFakeWebhookForwardHeaders } from "@/app/api/pay/fake/[paymentId]/simulate/route";
+import { buildFakeWebhookForwardHeaders } from "@/lib/payments/fakeWebhookForwarding";
 
 describe("buildFakeWebhookForwardHeaders — Vercel Deployment Protection bypass", () => {
   it("omits x-vercel-protection-bypass when no bypass secret is configured", () => {
