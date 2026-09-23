@@ -1349,6 +1349,35 @@ build` clean with the full merged route list (ChariPay webhook,
 reconcile-payment, legal pages, customer phone endpoint all present
 alongside everything from `main`).
 
+## Completed (`actions/github-script` v9.0.0 bump — PR #84, synced via PR #86)
+
+`.github/workflows/dispatch-emails-cron.yml`'s `actions/github-script` pin
+bumped from `60a0d83…` (v7.0.1) to `3a2844b…` (v9.0.0) on `main` (PR #84),
+following an independent GPT audit rather than bumping casually (this
+action runs with `id-token: write`, so a supply-chain regression here is
+high-stakes). Audit found: the workflow only calls
+`core.getIDToken()`/`setSecret()`/`setOutput()`, never Octokit or
+`@actions/github`, so v9's Octokit-related breaking changes don't apply;
+v7.0.1 and v9.0.0 lock the exact same `@actions/core` 1.10.1 tarball (same
+npm integrity hash), so the OIDC code path itself is byte-identical
+between versions; the runner (2.337.0) exceeds v8+'s minimum (2.327.1);
+and the upstream repo's own `check-dist` step rebuilds `dist/` from
+source and fails the bundle if it doesn't match — this audit read the
+source/locked dependencies but did not independently byte-diff the full
+built v9 bundle itself. Resolves the Node 20 deprecation warning the
+pinned v7.0.1 was emitting.
+
+**Runtime verification completed (2026-09-23):** GPT triggered a real
+`workflow_dispatch` run against `main` on the merged SHA (run
+`35901586420`), confirming the bumped action still mints the OIDC token,
+passes Vercel's Trusted Sources check, and the dispatcher responds with
+real JSON: `{"claimed":0,"sent":0,"retried":0,"permanentlyFailed":0,
+"skipped":0}` (zero across the board reflects no email backlog at that
+moment, not a failure — the call completing end-to-end with a valid
+typed response is the actual proof). This closes the item; no further
+action needed unless the pin is bumped again in the future, which should
+get its own fresh audit rather than reusing this one.
+
 ## Next
 
 0. **Resolved, was never a code bug**: an earlier draft of this file
@@ -1788,28 +1817,7 @@ alongside everything from `main`).
 
 ## Next (this branch, continued)
 
-7. **AUDIT DONE (2026-09-23) — runtime verification pending:**
-   `actions/github-script` bumped from `60a0d83…` (v7.0.1) to `3a2844b…`
-   (v9.0.0) in `.github/workflows/dispatch-emails-cron.yml`, following an
-   independent GPT audit rather than bumping casually (this action runs
-   with `id-token: write`, so a supply-chain regression here is
-   high-stakes). Audit found: the workflow only calls
-   `core.getIDToken()`/`setSecret()`/`setOutput()`, never Octokit or
-   `@actions/github`, so v9's Octokit-related breaking changes don't apply;
-   v7.0.1 and v9.0.0 lock the exact same `@actions/core` 1.10.1 tarball
-   (same npm integrity hash), so the OIDC code path itself is
-   byte-identical between versions; the runner (2.337.0) exceeds v8+'s
-   minimum (2.327.1); and the upstream repo's own `check-dist` step
-   rebuilds `dist/` from source and fails the bundle if it doesn't match —
-   this audit read the source/locked dependencies but did not
-   independently byte-diff the full built v9 bundle itself. Resolves the
-   Node 20 deprecation warning the pinned v7.0.1 was emitting.
-   **Still needed before fully closing this item:** a real
-   `workflow_dispatch` run against the merged `main` SHA, confirming it
-   still mints the OIDC token, passes Vercel's Trusted Sources check, and the
-   dispatcher receives a real response — GPT's recommended final gate,
-   not yet executed.
-8. **`main`-specific, resolved by not porting on this side of the sync:**
+7. **`main`-specific, resolved by not porting on this side of the sync:**
    whether `main` (independently of this branch's full ChariPay merge)
    should get a narrower version of this branch's `order_id IS NULL`
    in-flight-checkout exclusion in `lib/inventory.ts`. This branch's own
