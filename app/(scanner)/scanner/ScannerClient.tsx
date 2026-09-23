@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "
 import { useRouter } from "next/navigation";
 import type { IScannerControls } from "@zxing/browser";
 
-type ScannerDecision = "VALID" | "ALREADY_USED" | "INVALID" | "CANCELLED" | "WRONG_EVENT";
+type ScannerDecision = "VALID" | "ALREADY_USED" | "INVALID" | "CANCELLED" | "REFUND_PENDING" | "WRONG_EVENT";
 
 interface ScannerEvent {
   id: string;
@@ -28,6 +28,7 @@ const RESULT_COPY: Record<ScannerDecision, { title: string; message: string }> =
   ALREADY_USED: { title: "Déjà scanné", message: "Ce billet a déjà servi pour une entrée." },
   INVALID: { title: "Billet invalide", message: "Ce QR code ne correspond à aucun billet OnlyLive." },
   CANCELLED: { title: "Billet annulé", message: "Ce billet n’est plus valable." },
+  REFUND_PENDING: { title: "Remboursement en cours", message: "Entrée bloquée jusqu’au résultat du remboursement." },
   WRONG_EVENT: { title: "Mauvais événement", message: "Ce billet appartient à un autre événement." },
 };
 

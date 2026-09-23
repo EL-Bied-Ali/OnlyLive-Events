@@ -126,6 +126,13 @@ export async function updateEvent(input: EventMutationInput & { eventId: string 
       // shared lock, so this maximum cannot increase while we validate the
       // new cap. Expired active reservations are excluded exactly like the
       // purchase-time limit check in lib/inventory.ts.
+      //
+      // `expires_at` is a naive `timestamp` column written with true UTC
+      // digits (JS `Date`) — comparing it against a bare `now()` implicitly
+      // casts that `timestamptz` through the session's `TimeZone` GUC,
+      // which would under-count still-active holds (letting an admin lower
+      // the cap below what customers actually hold) whenever the server
+      // isn't UTC.
       const rows = await tx.$queryRaw<{ max_total: bigint }[]>`
         SELECT COALESCE(MAX(user_total), 0) AS max_total
         FROM (
@@ -349,6 +356,9 @@ export async function updateSalesPhase(
     }
 
     if (input.phaseQuantityLimit) {
+      // Same naive-timestamp-vs-now() hazard as the per-user cap check
+      // above — AT TIME ZONE 'UTC' keeps this correct regardless of the
+      // server's configured TimeZone.
       const totals = await tx.$queryRaw<{ total: bigint }[]>`
         SELECT COALESCE(SUM(quantity), 0) AS total
         FROM reservations

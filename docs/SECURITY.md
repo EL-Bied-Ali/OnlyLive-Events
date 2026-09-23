@@ -19,15 +19,15 @@ implemented" is an explicit gap, not an oversight — tracked in TASKS.md.
 | Session fixation | Mitigated | Admin session tokens are freshly generated (`crypto.randomBytes(32)`) on every login and stored hashed; customer sessions are Auth.js JWTs signed with `NEXTAUTH_SECRET`, re-issued on sign-in. |
 | Insecure cookies | Mitigated | Admin cookie: `httpOnly`, `sameSite: "lax"`, `secure` in production. Auth.js manages its own cookies with its standard secure defaults. |
 | Secret exposure | Mitigated | All secrets via environment variables (`.env`, gitignored; `.env.example` has no real values). Argon2id hashes and HMAC-hashed admin session tokens are what's stored, never raw. |
-| Webhook forgery | Mitigated | `FakeProvider.parseWebhook` verifies an HMAC-SHA256 signature (`X-OnlyLive-Fake-Signature`) with `crypto.timingSafeEqual`, using a secret (`FAKE_PSP_WEBHOOK_SECRET`) never sent to the browser — the fake pay page's buttons call a same-origin API route that signs server-side, not client JS. An invalid/missing signature is rejected with 401 and the event is still logged (with `signature_valid: false`) but never applied. A validly-signed event whose `amountCents`/`currency` don't match the `Payment` row is also rejected (409, audit-logged) — a valid signature alone is not sufficient. |
+| Webhook forgery | Mitigated | `FakeProvider.parseWebhook` verifies an HMAC-SHA256 signature (`X-OnlyLive-Fake-Signature`) with `crypto.timingSafeEqual`, using a secret (`FAKE_PSP_WEBHOOK_SECRET`) never sent to the browser. ChariPay's documented HMAC input is exactly `timestamp + "." + rawBody`; its `Chari-Event-Type`/`Chari-Event-Id` delivery headers are outside that signed string. Therefore every new/unprocessed ChariPay payment event must also pass an authenticated transaction-ledger lookup that independently confirms the header-claimed outcome plus the immutable Order/amount/currency facts before any payment/order/ticket/inventory mutation. A terminal header/ledger contradiction is audit-logged and acknowledged for reconciliation with no mutation; an unavailable/pending/ambiguous lookup fails closed with 503. |
 | Webhook replay / duplicate processing | Mitigated | `payment_events` has `UNIQUE (provider, external_event_id)`; the claim (insert) and the fulfillment transition run in one database transaction, so a crash between them can never leave a "claimed but not applied" event that a retry would silently skip — see docs/PAYMENTS.md's Atomicity section. Defense in depth: the order-state transition itself is also a guarded `UPDATE ... WHERE status = 'pending_payment'`, and the Payment row is locked for the whole transaction, so even a different event id (or a simultaneous conflicting event) for the same logical payment can't double-process or leave Payment/Order status diverged. Reclaiming an interrupted (unprocessed) event additionally verifies the resolved payment id, event type, and prior signature validity all still agree with what was originally claimed — an inconsistent collision (e.g. a different payment, a changed event type, or a previously-invalid-signature id resent with a valid one) is rejected and audited rather than reprocessed. See docs/PAYMENTS.md's Reclaim consistency section. |
 | QR forgery | Mitigated | The validation token is 24 cryptographically random bytes (`crypto.randomBytes`), base64url-encoded — not a sequential id or derived from guessable input. Unknown tokens return `INVALID`; scan history stores only a SHA-256 digest of the presented bearer token, never a reusable copy. |
 | QR replay (scan twice) | Mitigated | `scanTicket()` locks the ticket row using PostgreSQL `FOR UPDATE`, decides status, atomically flips `valid → used`, and records the result in one transaction. Two simultaneous scanners deterministically produce exactly one `VALID` and one `ALREADY_USED`; cancelled and wrong-event tickets never transition. |
-| Duplicate payments / refunds | Mitigated | Payment idempotency as above, plus checkout-side idempotency: `OrderItem.reservationId` is `UNIQUE` (one reservation produces at most one Order/Payment), and a separate durable claim (`payments.provider_init_at`) ensures the external provider itself is only ever called once per Payment even when concurrent requests all see no stored redirect yet — a locked database row alone doesn't prevent that, since the provider call happens outside any transaction. `lib/orders/refund.ts::initiateRefund` holds the Payment/Order row lock for the whole operation (including the provider call), so concurrent refund attempts on the same payment serialize and their total can never exceed the paid amount; a failed provider call is recorded without blocking a later retry. See docs/PAYMENTS.md. |
+| Duplicate payments / refunds | Mitigated | Payment idempotency as above, plus checkout-side idempotency: `OrderItem.reservationId` is `UNIQUE` (one reservation produces at most one Order/Payment), and a separate durable claim (`payments.provider_init_at`) ensures the external provider itself is only ever called once per Payment even when concurrent requests all see no stored redirect yet — a locked database row alone doesn't prevent that, since the provider call happens outside any transaction. `lib/orders/refund.ts::initiateRefund` prepares a durable `processing` Refund under Payment/Order locks before external provider I/O. Because `processing + succeeded` refunds reserve the refundable balance, concurrent attempts cannot exceed the paid amount; the provider call then happens outside the database transaction, and ambiguous outcomes remain reserved for reconciliation instead of freeing money prematurely. See docs/PAYMENTS.md. |
 | Sale-limit bypass / catalogue race | Mitigated | `createHold` enforces event/category/phase eligibility and a per-user/event purchase cap atomically. It takes a shared catalogue advisory lock while admin catalogue writes take the matching exclusive lock, so an event/category/phase cannot change after a purchase validates it but before stock is reserved. Capacity and phase-cap edits are also checked under the inventory row lock. See `tests/integration/hold-eligibility.test.ts` and `tests/integration/admin-catalog.test.ts`. |
 | Fake payment provider reaching production | Mitigated | `PAYMENT_PROVIDER=fake` is refused at server boot (`instrumentation.ts`) and at every fake-payment route/page whenever `NODE_ENV=production`, unless `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION=true` is explicitly set — never for real traffic. See docs/PAYMENTS.md. |
 | Captured payment silently stranded on a dead order | Mitigated | A validly-signed `payment.succeeded` arriving after the order was already `failed`/`cancelled` is never a silent no-op: it's routed to an atomic re-fulfillment attempt, landing on `paid` (ticket generated) if stock allows or `reconciliation_required` (audited, human-resolved) if not — `Payment.status` is set to `paid` either way, since money was captured regardless of order outcome. This is a stopgap policy pending the real PSP's official event-lifecycle documentation — see docs/PAYMENTS.md's Reconciliation section. |
-| Checkout retry after hold expiry starting a new charge | Mitigated | Once provider initialization has started but not completed for a Payment, a retry is refused (`409 HOLD_EXPIRED`) if the reservation has since expired — checked directly, not dependent on the sweep having run — so a customer can't be charged for stock that was already released/resold. A retry after initialization *did* complete still returns the same stored redirect regardless of expiry. See docs/PAYMENTS.md. |
+| Checkout retry after hold expiry starting a new charge | Mitigated | Once provider initialization has started but not completed for a Payment, a retry is refused (`409 HOLD_EXPIRED`) if the reservation has since expired — checked directly, not dependent on the sweep having run. If initialization already completed, an expired local reservation returns `CHECKOUT_RECONCILIATION_REQUIRED` instead of resurfacing the stored provider redirect; order-linked stock remains reserved until provider-aware reconciliation proves the session non-payable or confirms payment. See docs/PAYMENTS.md. |
 | Console email provider reaching production | Mitigated | `EMAIL_PROVIDER=console` (the default) is refused at server boot (`instrumentation.ts`) and by `getEmailProvider()` whenever `NODE_ENV=production`, unless `ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=true` is explicitly set — same pattern as the fake payment provider guard above. |
 | Transactional email lost between commit and send | Mitigated | `EmailOutbox` rows are enqueued inside the same database transaction as the payment/refund state change they describe (webhook route, `initiateRefund`), not after it commits — a crash or thrown error between commit and send can no longer silently lose the notification. A separate dispatcher (`lib/email/dispatcher.ts`) re-validates the underlying business state fresh at send time before sending, and retries a transient provider failure with bounded backoff up to 8 attempts before giving up. See docs/ARCHITECTURE.md's transactional email section. |
 | Sensitive data in email dispatch logs | Mitigated | `lib/email/dispatcher.ts` never logs a raw recipient address (only a truncated SHA-256 hash) or a full error object (only a bounded `.message`), and the refund confirmation email itself omits the admin-entered internal `reason` text from its customer-facing content. |
@@ -74,11 +74,15 @@ mutations remains required before production rollout.
 Passwords, password hashes, full payment card data (never handled — see
 docs/PAYMENTS.md), Auth.js/admin session tokens, admin CSRF tokens,
 `NEXTAUTH_SECRET`, `ADMIN_SESSION_SECRET`, `FAKE_PSP_WEBHOOK_SECRET`, raw QR
-validation tokens presented to the scanner. Webhook payloads stored in
-`payment_events.raw_payload` for the fake provider contain no secrets by
-construction (just `{eventId, providerPaymentId, type, amountCents,
-currency}`); a real PSP adapter must redact its payload before storage if
-its webhooks ever include anything sensitive.
+validation tokens presented to the scanner, and raw ChariPay API error prose.
+ChariPay diagnostics retain only bounded machine codes/correlation ids plus a
+sandbox-only redacted provider-message hint. Fake-provider webhook payloads in
+`payment_events.raw_payload` contain no secrets by construction (just
+`{eventId, providerPaymentId, type, amountCents, currency}`). ChariPay event
+rows do **not** retain the provider body: they store only a versioned SHA-256
+canonical-payload fingerprint plus a top-level field count; provider-controlled
+field names and values are not retained. The same value-free evidence is used
+by unverified-shape audit records.
 
 ## Structured logging / error responses
 
@@ -91,12 +95,37 @@ leaked to the client.
 
 ## Admin bootstrap and password rotation
 
-No default admin account is ever created silently. `prisma/seed.ts` only
-creates/updates a `super_admin` when **both** `ADMIN_SEED_EMAIL` and
-`ADMIN_SEED_PASSWORD` are set in the environment (password: 16+
-characters, validated with zod); if either is missing, seeding skips
-admin creation entirely and says so. The seed script never prints
-credentials.
+No default admin account is ever created silently. Both bootstrap paths
+below only create/update a `super_admin` when **both** `ADMIN_SEED_EMAIL`
+and `ADMIN_SEED_PASSWORD` are set in the environment (password: 16+
+characters, validated with zod); if either is missing, they fail closed —
+`prisma/bootstrap-admin.ts` throws and exits non-zero rather than silently
+skipping. Neither script ever prints credentials.
+`prisma/bootstrap-admin.ts` also refuses to touch an email that already
+exists with a role other than `super_admin` or with `isActive: false`,
+rather than silently changing its role or reactivating it — the intent is
+to rotate the password of an already-active super_admin, or create a new
+one, never to escalate/reactivate an existing account implicitly. (Found
+and fixed 2026-09-23, second independent GPT audit pass on the new
+script.)
+
+**Two different scripts exist — use the right one:**
+
+- `prisma/seed.ts` (`npm run seed`) is a **full demo-environment seed**: it
+  unconditionally creates/upserts the demo venue, the real Tiakola —
+  Casablanca event marked `on_sale`, its ticket categories, inventory and
+  sales phases, *in addition to* the admin user if requested. Only use it
+  against a fresh dev/CI/demo database that is meant to hold that demo
+  catalogue data — **never against a real production database**, since it
+  would create that demo event as if it were really on sale.
+- `prisma/bootstrap-admin.ts` (`npm run bootstrap-admin`) creates/updates
+  **only** the one `AdminUser` row — no venue, event, category, inventory
+  or sales-phase data. This is the correct script for bootstrapping or
+  rotating an admin on any existing database, including production, where
+  the demo catalogue must not appear. (Found and fixed 2026-09-23 after an
+  independent GPT audit caught this document recommending `npm run seed`
+  as a general admin-bootstrap procedure without warning it also creates
+  demo catalogue data — a real risk for a production Neon database.)
 
 **Bootstrap procedure** (first admin, or any environment that needs one):
 
@@ -106,16 +135,24 @@ credentials.
    variables for that one run only (a deploy-time secret, a one-off
    shell export — not committed anywhere, not left in shell history if
    avoidable).
-3. Run `npm run seed`.
+3. Run `npm run bootstrap-admin` against an existing/production database,
+   or `npm run seed` only for a fresh dev/demo database that should also
+   receive the demo catalogue.
 4. Unset/rotate the environment variable value immediately after; treat
    the password as used/shared going forward.
 
-**Rotation procedure**: re-run `npm run seed` with the same
-`ADMIN_SEED_EMAIL` and a new `ADMIN_SEED_PASSWORD` — the upsert updates
-`passwordHash` for an existing admin. The current catalogue interface does
-not manage staff credentials, so password rotation remains a re-seed operation. A future self-service
-password change must require the current password and invalidate the
-administrator's existing sessions.
+**Rotation procedure**: re-run `npm run bootstrap-admin` (or `npm run
+seed` in a demo environment) with the same `ADMIN_SEED_EMAIL` and a new
+`ADMIN_SEED_PASSWORD` for an account that is already an active
+`super_admin` — this updates only `passwordHash`. The current catalogue
+interface does not manage staff credentials, so password rotation remains
+a re-seed operation. **This does not revoke existing `AdminSession` rows**
+— a session issued before rotation remains usable until its normal
+expiry (12 hours). This is not yet a complete emergency
+credential-revocation procedure; if a session itself may be compromised
+(not just the password), also delete the relevant `AdminSession` row(s)
+directly. A future self-service password change must require the current
+password and invalidate the administrator's existing sessions.
 
 ## Privacy
 

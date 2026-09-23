@@ -73,8 +73,47 @@ look for a `headless_shell` build that isn't preinstalled here. Elsewhere,
 a normal `npx playwright install` (or an already-correct preinstalled
 browser) makes this unnecessary — leave the env var unset.
 
-Production deployment should target a managed Postgres
-(Neon/Supabase/RDS — **not yet decided**) compatible with Vercel.
+Production managed Postgres target is **Neon**, provisioned as a project
+separate from every Preview/sandbox database. The production project itself is
+not provisioned yet; recovery objectives, PITR/logical-backup layers and the
+mandatory pre-go-live restore drill are defined in
+`docs/DATABASE_RECOVERY.md`.
+
+## Deployment migrations
+
+Vercel builds Next.js projects with `next build` by default, which never
+runs `prisma migrate deploy` — a schema change merged to a branch only
+reached whichever database someone remembered to migrate by hand. This bit
+us in practice: the Preview database was missing `email_outbox` for days
+after PR #17 merged, silently rolling back every real ChariPay webhook's
+`$transaction` (order confirmation included) on the `P2021` it threw.
+
+Fixed by adding a `vercel-build` script (`package.json`) — Vercel runs this
+instead of `build` automatically whenever it's present:
+
+```
+"vercel-build": "prisma migrate deploy && next build"
+```
+
+`prisma migrate deploy` runs against the same `DATABASE_URL` the app
+already uses at runtime; there is no separate pooled/direct-URL split in
+this project. (Older Prisma versions supported a `directUrl` field in
+`schema.prisma`'s `datasource` block specifically so migrations could use
+a session-level connection while runtime queries went through a
+transaction-mode pooler — Prisma 7's config-file-based setup removed that
+field entirely: `schema.prisma` now rejects `directUrl` outright, and
+`prisma.config.ts`'s own `Datasource` type only has `url`/`shadowDatabaseUrl`.
+If `DATABASE_URL` in some environment turns out to be a pooled connection
+that can't hold the advisory lock `migrate deploy` needs, that will surface
+as its own distinct, actionable Prisma error at deploy time — not something
+to pre-emptively guess a workaround for now.)
+
+A build with no pending migrations is a no-op (`No pending migrations to
+apply`); an unreachable or misconfigured `DATABASE_URL` now fails the build
+loudly instead of shipping code the database can't support — verified
+locally end-to-end against a from-scratch database (all 9 migrations
+applied, then `next build` succeeded) and confirmed idempotent on a
+second run.
 
 ## Folder structure
 
@@ -224,13 +263,20 @@ TASKS.md, tests.json
    spreadsheet formula injection (a cell opened by Excel/Sheets starting
    with `=`, `+`, `-`, or `@` can execute as a formula) and RFC4180
    quoting, and prefixes the file with a UTF-8 BOM so Excel on Windows
-   renders accented names correctly. It is bounded to the most recent
-   20,000 orders — there is no pagination UI for the export yet.
+   renders accented names correctly. The export uses deterministic
+   `(createdAt DESC, id DESC)` keyset pagination in 1,000-row batches and
+   streams rows as they are fetched, removing the previous silent 20,000-row
+   truncation without buffering the entire export in memory. Because batches
+   are separate database reads, a status-filtered export is a live operational
+   view rather than a repeatable-read accounting snapshot: an order whose
+   status changes while a long export is running may reflect that transition
+   according to which batch observes it.
 
 ## Request/data flow: transactional email (durable outbox)
 
 A production-safe outbox/dispatcher foundation with a Resend production
-provider on top.
+adapter; account/domain activation remains operational work (see Known scope
+limitations below).
 
 1. `lib/email/provider.ts` defines the same kind of swappable interface as
    payments — `lib/email/fakeProvider.ts` (`ConsoleEmailProvider`, local/
@@ -238,8 +284,9 @@ provider on top.
    `lib/email/resendProvider.ts` (`ResendEmailProvider`) sends real
    transactional email through Resend's REST API. `SendEmailInput` carries
    an `idempotencyKey` (mirroring `RefundInput`'s, forwarded as Resend's own
-   `Idempotency-Key`), so a retried send of the same outbox row can never
-   double-send at the real provider's own layer either.
+   `Idempotency-Key`); Resend retains idempotency keys for 24 hours, so this
+   protects the normal retry/lease-reclaim window rather than claiming
+   infinite exactly-once delivery.
 2. `lib/email/notifications.ts::enqueue*` (`enqueueOrderConfirmationEmail`,
    `enqueuePaymentFailedEmail`, `enqueueRefundConfirmationEmail`,
    `enqueueReconciliationAlertEmail`) each take a `Prisma.TransactionClient`
@@ -293,24 +340,27 @@ provider on top.
    Hobby's native cron only runs once/day, far too infrequent on its own:
    - **Eager, near-real-time:** `lib/email/eagerDispatch.ts` wraps
      `after()` (`next/server`) around a dispatch call from every route that
-     enqueues a customer-facing email (both webhook handlers, the expired-
-     holds sweep, admin manual fulfillment, and the customer's own payment-
-     reconciliation poll — gated to only fire when that poll actually
-     recovers a payment, not on every routine ~5s check). `after()` throws
-     synchronously outside a real request scope; the wrapper swallows that
-     and logs a fixed safe code only, never the raw exception.
+     enqueues a customer-facing email (both payment webhooks,
+     `sweep-expired-holds`, the admin refund Server Action, and the
+     customer's own payment-reconciliation poll — gated to only fire when
+     that poll actually recovers a payment, not on every routine ~5s
+     check). `after()` throws synchronously outside a real request/Server
+     Action scope; the wrapper swallows that and logs a fixed safe code
+     only, never the raw exception. A crash between an outbox row's
+     creation and `after()` running is exactly the case the scheduled
+     backstop below exists to recover.
    - **Scheduled backstop:** `.github/workflows/dispatch-emails-cron.yml`
-     on `main` calls the same endpoint every 5 minutes (GitHub's minimum
-     schedule interval; best-effort, not a guarantee) for whatever the
-     eager trigger missed. Vercel's own Deployment Protection (SSO wall)
-     sits in front of the app and would otherwise redirect this
-     unauthenticated caller before it ever reaches `X-Internal-Secret`;
-     the workflow authenticates through Vercel's "Trusted Sources" feature
-     with a short-lived GitHub Actions OIDC token
-     (`x-vercel-trusted-oidc-idp-token`) rather than a second static bypass
-     secret. See `TASKS.md`'s "email dispatch scheduling" entry for the
-     full incident history (a real production SSO-wall failure only found
-     by an actual `workflow_dispatch` run, not by review).
+     calls the same endpoint every 5 minutes (GitHub's minimum schedule
+     interval; best-effort, not a guarantee) for whatever the eager
+     trigger missed. Vercel's own Deployment Protection (SSO wall) sits in
+     front of the app and would otherwise redirect this unauthenticated
+     caller before it ever reaches `X-Internal-Secret`; the workflow
+     authenticates through Vercel's "Trusted Sources" feature with a
+     short-lived GitHub Actions OIDC token
+     (`x-vercel-trusted-oidc-idp-token`) rather than a second static
+     bypass secret. See `TASKS.md`'s "email dispatch scheduling" entry for
+     the full incident history (a real production SSO-wall failure only
+     found by an actual `workflow_dispatch` run, not by review).
 
 ## Rate limiting
 
@@ -423,8 +473,23 @@ historical rather than future.
 - **Offline scanning** — deliberately unsupported. The scanner PWA blocks
   validation without a live server connection because safe offline
   multi-device reconciliation is not implemented.
-- **Real payment provider** — no Moroccan PSP is integrated; only the
-  `fake` sandbox provider. See docs/PAYMENTS.md.
+- **Real payment provider** — ChariPay's hosted-checkout adapter is
+  implemented on this branch (`lib/payments/charipayProvider.ts`, draft
+  PR #13), including real webhook signature verification and checkout/
+  refund reconciliation. The sandbox purchase flow is proven end-to-end;
+  real sandbox refund attempts exposed and fixed two integration bugs
+  (`operationId` vs `externalId`; `reason` closed enum vs free text) but
+  the sandbox key itself is currently missing the `operations:refund`
+  capability, so a full refund cannot yet be exercised — see
+  docs/CHARIPAY.md. It is **not** production-approved: KYB/merchant
+  onboarding and two provider-side sandbox blockers (a supported
+  `payment.failed` procedure and the `operations:refund` capability — see
+  docs/CHARIPAY.md and TASKS.md's "Blocked" section) are still open before
+  PR #13 may merge to `main`. (The independent-audit gate itself is
+  already satisfied by this project's established Claude/GPT cross-audit
+  pattern — see TASKS.md — so it is not a separate open blocker.) The
+  `fake` provider remains available for local/CI testing regardless. See
+  docs/PAYMENTS.md.
 - **Real email provider** — implemented. `lib/email/resendProvider.ts`
   (`ResendEmailProvider`) sends through Resend's REST API on top of the same
   durable outbox/dispatcher foundation (idempotent enqueue in the same
@@ -436,7 +501,10 @@ historical rather than future.
   right after checkout/refund/webhook requests (via Next.js `after()`), so a
   confirmation email typically arrives within seconds rather than waiting for
   the next periodic `/api/internal/dispatch-emails` run — a latency
-  optimization only, never a substitute for that periodic trigger.
+  optimization only, never a substitute for that periodic trigger. Production
+  activation still requires a Resend account, verified sender domain,
+  `RESEND_API_KEY` and `RESEND_FROM_EMAIL`, followed by a real delivery/bounce
+  smoke test.
 - **Rate limiting** — implemented in the application per IP and per
   account/email on registration, admin login, and customer login
   (`lib/rateLimit.ts`). Production WAF rules and final thresholds still

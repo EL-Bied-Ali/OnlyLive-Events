@@ -83,54 +83,59 @@ export default async function AdminOrderDetailPage({ params }: PageProps) {
       <section className="admin-panel">
         <div className="admin-panel-title"><h2>Paiements et remboursements</h2></div>
         <div className="admin-order-payments">
-          {order.payments.map((payment) => (
-            <article key={payment.id} className="admin-payment-card">
-              <header>
-                <div>
-                  <strong>{money(payment.amountCents, payment.currency)}</strong>
-                  <span className="admin-muted"> via {payment.provider}</span>
-                </div>
-                <span className={`admin-status admin-status-${payment.status}`}>{ORDER_LABELS[payment.status] ?? payment.status}</span>
-              </header>
+          {order.payments.map((payment) => {
+            const refundableStatus = payment.status === "paid" || payment.status === "partially_refunded";
+            const pendingRefundCents = payment.committedRefundCents - payment.refundedCents;
+            return (
+              <article key={payment.id} className="admin-payment-card">
+                <header>
+                  <div>
+                    <strong>{money(payment.amountCents, payment.currency)}</strong>
+                    <span className="admin-muted"> via {payment.provider}</span>
+                  </div>
+                  <span className={`admin-status admin-status-${payment.status}`}>{ORDER_LABELS[payment.status] ?? payment.status}</span>
+                </header>
 
-              {payment.refundedCents > 0 && (
-                <p className="admin-muted">
-                  {money(payment.refundedCents, payment.currency)} déjà remboursé · reste remboursable :{" "}
-                  {money(payment.remainingRefundableCents, payment.currency)}
-                </p>
-              )}
+                {(payment.refundedCents > 0 || payment.committedRefundCents > 0) && (
+                  <p className="admin-muted">
+                    {money(payment.refundedCents, payment.currency)} confirmé remboursé
+                    {pendingRefundCents > 0 ? ` · ${money(pendingRefundCents, payment.currency)} en attente provider` : ""}
+                    {" · "}reste disponible : {money(payment.remainingRefundableCents, payment.currency)}
+                  </p>
+                )}
 
-              {payment.refunds.length > 0 && (
-                <ul className="admin-refund-history">
-                  {payment.refunds.map((refund) => (
-                    <li key={refund.id}>
-                      {money(refund.amountCents, payment.currency)} — {refund.status} — {refund.reason}
-                    </li>
-                  ))}
-                </ul>
-              )}
+                {payment.refunds.length > 0 && (
+                  <ul className="admin-refund-history">
+                    {payment.refunds.map((refund) => (
+                      <li key={refund.id}>
+                        {money(refund.amountCents, payment.currency)} — {refund.status} — {refund.reason}
+                      </li>
+                    ))}
+                  </ul>
+                )}
 
-              {canRefund && payment.remainingRefundableCents > 0 && (
-                <AdminMutationForm action={refundPaymentAction} submitLabel="Rembourser" className="admin-edit-form">
-                  <input name="paymentId" type="hidden" value={payment.id} />
-                  <label>
-                    Montant (MAD)
-                    <input
-                      name="amountCents"
-                      required
-                      inputMode="decimal"
-                      placeholder={(payment.remainingRefundableCents / 100).toFixed(2)}
-                      defaultValue={(payment.remainingRefundableCents / 100).toFixed(2)}
-                    />
-                  </label>
-                  <label className="admin-field-wide">
-                    Motif
-                    <input name="reason" required minLength={3} maxLength={500} placeholder="Annulation client" />
-                  </label>
-                </AdminMutationForm>
-              )}
-            </article>
-          ))}
+                {canRefund && refundableStatus && payment.remainingRefundableCents > 0 && (
+                  <AdminMutationForm action={refundPaymentAction} submitLabel="Rembourser" className="admin-edit-form">
+                    <input name="paymentId" type="hidden" value={payment.id} />
+                    <label>
+                      Montant (MAD)
+                      <input
+                        name="amountCents"
+                        required
+                        inputMode="decimal"
+                        placeholder={(payment.remainingRefundableCents / 100).toFixed(2)}
+                        defaultValue={(payment.remainingRefundableCents / 100).toFixed(2)}
+                      />
+                    </label>
+                    <label className="admin-field-wide">
+                      Motif
+                      <input name="reason" required minLength={3} maxLength={500} placeholder="Annulation client" />
+                    </label>
+                  </AdminMutationForm>
+                )}
+              </article>
+            );
+          })}
           {order.payments.length === 0 && <p className="admin-empty">Aucun paiement pour cette commande.</p>}
         </div>
       </section>

@@ -28,17 +28,13 @@ export function money(cents: number, currency: string): string {
  * `nextAttemptAt` is passed explicitly (a JS `Date`, true UTC digits)
  * rather than left to the schema's `@default(now())` — that default is
  * `CURRENT_TIMESTAMP`, evaluated server-side and subject to the same
- * naive-timestamp/session-TimeZone skew as the raw-SQL `now()` comparison
- * fixed in this same file's `lib/email/dispatcher.ts`. Leaving it to the
- * DB default would make a freshly enqueued row's readiness check
- * consistent with itself, but inconsistent with every retried row
+ * naive-timestamp/session-TimeZone skew as the raw-SQL `now()` comparisons
+ * fixed elsewhere in lib/email/dispatcher.ts and lib/inventory.ts. Leaving
+ * it to the DB default would make a freshly enqueued row's readiness
+ * check consistent with itself, but inconsistent with every retried row
  * (rescheduled from JS) once the dispatcher's comparison is corrected to
  * `(now() AT TIME ZONE 'UTC')` — delaying a brand-new email's first
- * dispatch attempt by the server's UTC offset. (`lib/inventory.ts` has
- * the identical class of bug in its own `expires_at < now()` comparisons
- * — not fixed by this change; tracked separately in TASKS.md since it's
- * entangled with unrelated in-flight-checkout behavior on the branch
- * where it was originally fixed.)
+ * dispatch attempt by the server's UTC offset.
  */
 async function enqueue(
   tx: Tx,

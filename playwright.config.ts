@@ -76,12 +76,23 @@ export default defineConfig({
     env: {
       DATABASE_URL: e2eDatabaseUrl,
       NEXTAUTH_URL: baseURL,
+      // getAppBaseUrl() requires HTTPS in production. This server is an
+      // isolated loopback-only E2E process, so opt into the narrow HTTP
+      // loopback exception explicitly instead of weakening the invariant
+      // for every production-mode localhost process.
+      ALLOW_HTTP_LOOPBACK_APP_URL_IN_PRODUCTION: "true",
       // `next start` always runs with NODE_ENV=production, and the fake
       // payment provider refuses to boot in production without this explicit
       // opt-in. E2E uses an isolated database and no real customer traffic.
       ALLOW_FAKE_PAYMENTS_IN_PRODUCTION: "true",
       // Same production guard, for the sandbox console email provider.
       ALLOW_CONSOLE_EMAIL_IN_PRODUCTION: "true",
+      // Same production guard, for the draft /legal pages (see
+      // lib/legal/approval.ts): they 404 in production unless explicitly
+      // approved. E2E needs to verify the real page content; the
+      // gate-blocking logic itself is covered by
+      // tests/unit/legal/approval.test.ts, not here.
+      LEGAL_DOCUMENTS_APPROVED: "true",
       // Keep rate limiting enabled in browser tests so the real Auth.js
       // callback path is covered. The IP ceilings are deliberately above
       // this serial suite's normal traffic.

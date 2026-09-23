@@ -1046,6 +1046,118 @@
     "note": "Configuration is enforced in playwright.config.ts and exercised by the full 17-test Playwright CI suite; auth, CSRF, scanner, catalogue, refund, reporting and purchase flows all pass on the isolated runtime."
   },
   {
+    "id": "charipay-webhook-invalid-signature",
+    "scenario": "The real ChariPay webhook route rejects an invalid HMAC signature before creating a PaymentEvent or mutating payment/order/ticket state",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-webhook.test.ts"
+  },
+  {
+    "id": "charipay-webhook-financial-integrity",
+    "scenario": "Signed ChariPay payment/refund events are rejected before financial mutation when amount, currency, payment reference, provider payment id or provider refund id conflicts with stored state; refund evidence is rechecked under row locks inside the finalizer transaction",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-webhook.test.ts"
+  },
+  {
+    "id": "charipay-webhook-event-id-content-collision",
+    "scenario": "Reusing one Chari-Event-Id with different signed content is rejected as an event collision instead of being treated as a harmless duplicate",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-webhook.test.ts"
+  },
+  {
+    "id": "charipay-refund-reconciliation-success",
+    "scenario": "A processing ChariPay refund is finalized by provider-status reconciliation when GET /v1/refunds/{reference} reports SUCCESS, so a lost webhook cannot strand it indefinitely",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-refunds.test.ts"
+  },
+  {
+    "id": "charipay-refund-not-found-same-reference-replay",
+    "scenario": "A processing refund whose provider lookup returns not_found is replayed with exactly the same Refund.id/refundReference and never a newly minted refund reference",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-refunds.test.ts"
+  },
+  {
+    "id": "charipay-refund-provider-mismatch",
+    "scenario": "A refund cannot be created through a provider different from the provider that captured the payment",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-refunds.test.ts"
+  },
+  {
+    "id": "charipay-preview-live-credentials-forbidden",
+    "scenario": "ChariPay live credentials are forbidden on Vercel Preview/Development and outside Vercel; Vercel Production requires explicit live mode plus the provider-verification gate",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/payments/charipayConfig.test.ts"
+  },
+  {
+    "id": "charipay-canonical-public-origin",
+    "scenario": "ChariPay return/webhook URLs are built from an explicitly configured canonical HTTPS ONLYLIVE_PUBLIC_URL rather than request Host/Origin data",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/payments/charipayConfig.test.ts"
+  },
+  {
+    "id": "charipay-signed-payload-missing-currency-fails-closed",
+    "scenario": "A correctly signed ChariPay financial payload without an explicit currency is not trusted or defaulted to MAD",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/payments/charipayProvider.test.ts"
+  },
+  {
+    "id": "charipay-refund-ambiguous-network-reserved",
+    "scenario": "A ChariPay refund network/timeout ambiguity remains processing and keeps the same amount reserved so a second refund cannot over-refund",
+    "category": "refund-state-transitions",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-refunds.test.ts"
+  },
+  {
+    "id": "charipay-reconciliation-cron-config",
+    "scenario": "Vercel schedules the authenticated housekeeping endpoint and live ChariPay production requires a CRON_SECRET for refund-reconciliation fallback",
+    "category": "configuration",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/vercelCronConfig.test.ts"
+  },
+  {
+    "id": "payment-provider-customer-requirements-isolated",
+    "scenario": "FakeProvider checkout succeeds without a phone while ChariPay alone validates its required customer name/phone data before provider network I/O",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/checkout-provider-routing.test.ts"
+  },
+  {
+    "id": "historical-fake-provider-init-routing",
+    "scenario": "An existing uninitialized Payment persisted with provider=fake is still initialized through FakeProvider after the configured default provider changes to ChariPay",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/checkout-provider-routing.test.ts"
+  },
+  {
+    "id": "vitest-same-db-three-pass-pollution-check",
+    "scenario": "CI runs the complete Vitest suite once on the fresh migrated test DB and then twice more without resetting that DB, exposing cross-file/order pollution flakes before Playwright/build",
+    "category": "test-isolation",
+    "implemented": true,
+    "status": "pass",
+    "testFile": ".github/workflows/ci.yml"
+  },
+  {
     "id": "reconciliation-alert-paid-but-unfulfillable",
     "scenario": "Every active admin/super_admin gets a durable outbox row enqueued exactly once when an order becomes paid_but_unfulfillable, and it is delivered on dispatch; support and scanner accounts are never enqueued",
     "category": "notifications",
@@ -1092,5 +1204,63 @@
     "implemented": true,
     "status": "pass",
     "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "reconciliation-alert-revoked-admin-access",
+    "scenario": "An admin deactivated or downgraded to a non-admin role after a reconciliation alert was enqueued never receives it at dispatch time, while an unaffected admin in the same batch still does",
+    "category": "notifications",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/notifications.test.ts"
+  },
+  {
+    "id": "customer-phone-update-schema-shared",
+    "scenario": "updatePhoneSchema accepts and rejects the exact same phone formats as registerSchema's phoneSchema, since both share one export",
+    "category": "validation",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/unit/validation/auth.test.ts"
+  },
+  {
+    "id": "customer-phone-update-auth-and-ownership",
+    "scenario": "PATCH /api/customers/phone rejects an unauthenticated request and an invalid phone without mutating the database, updates only the signed-in customer's own phone, and writes a customer.phone_updated audit entry",
+    "category": "access-control",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/customerPhone.test.ts"
+  },
+  {
+    "id": "recovery-smoke-current-schema",
+    "scenario": "Post-restore recovery smoke SQL remains valid against the current fully migrated schema and core recovery invariants are zero on a fresh database",
+    "category": "recovery",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "scripts/recovery-smoke.sql",
+    "note": "CI runs this with psql and ON_ERROR_STOP immediately after Prisma migrations. It validates SQL/schema drift but does not replace a timed restore drill from an actual backup."
+  },
+  {
+    "id": "resend-charipay-preview-e2e-smoke-2026-09-19",
+    "scenario": "A human-driven real purchase on Vercel Preview (real login, real reservation/hold, real ChariPay sandbox hosted checkout, signed webhook) results in a paid order with a valid ticket, and the durable EmailOutbox/dispatcher/Resend chain delivers exactly one confirmation email to a real inbox, confirmed received; a second dispatcher call proves idempotency (claimed:0)",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": null,
+    "note": "One-time manual verification, not an automated regression test — see TASKS.md's 'Resend + ChariPay preview end-to-end smoke test' entry for the full account, including two real gaps found: #48 (no scheduled trigger for dispatch-emails) and a stale/misconfigured post-payment browser-redirect URL (cosmetic, webhook path unaffected)."
+  },
+  {
+    "id": "eager-email-dispatch-webhook-response-unaffected",
+    "scenario": "The ChariPay webhook still returns success and confirms the order/ticket even though scheduleEagerEmailDispatch()'s after() call cannot register outside a real Next.js request scope (the exact situation this whole test suite runs in)",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/charipay-webhook.test.ts"
+  },
+  {
+    "id": "eager-email-dispatch-concurrent-race-safety",
+    "scenario": "Two concurrent dispatchPendingEmails() calls racing for the same backlog (an eager trigger overlapping the periodic sweep, or two eager triggers from near-simultaneous webhook deliveries) never double-send or drop a row, via the existing FOR UPDATE SKIP LOCKED claim",
+    "category": "payments",
+    "implemented": true,
+    "status": "pass",
+    "testFile": "tests/integration/emailDispatchConcurrency.test.ts"
   }
 ]

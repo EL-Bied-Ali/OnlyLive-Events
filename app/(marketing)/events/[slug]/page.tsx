@@ -75,7 +75,7 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
                     ticketCategoryId={category.id}
                     salesPhaseId={openPhase.id}
                     available={available}
-                    maxPerOrder={10}
+                    maxPerOrder={event.maxTicketsPerUser}
                   />
                 </>
               )}

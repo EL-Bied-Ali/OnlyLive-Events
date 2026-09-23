@@ -3,34 +3,49 @@ import { sweepExpiredHolds } from "@/lib/inventory";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 import { isInternalRequestAuthorized } from "@/lib/http/internalAuth";
 import { pruneRateLimitBuckets } from "@/lib/rateLimit";
+import { reconcileExpiredCheckouts } from "@/lib/orders/checkoutReconciliation";
+import { reconcileProcessingRefundsFair } from "@/lib/orders/refundReconciliation";
 import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 
 export const runtime = "nodejs";
 
-/**
- * Invoked by a scheduled trigger (Vercel Cron or an external scheduler),
- * using the same dual X-Internal-Secret/CRON_SECRET authorization pattern as
- * dispatch-emails. Vercel Cron invokes configured paths with GET, while POST
- * remains available for an explicitly configured external scheduler. Purely
- * for UI-freshness of displayed availability — correctness never depends on
- * this running; see lib/inventory.ts's lazy release inside createHold.
- */
-async function runSweep(request: NextRequest) {
+async function runHousekeeping(request: NextRequest) {
   try {
     if (!isInternalRequestAuthorized(request)) {
-      throw new ApiError(401, "UNAUTHENTICATED", "Invalid internal credentials");
+      throw new ApiError(401, "UNAUTHENTICATED", "Invalid housekeeping credentials");
     }
 
-    const [holds, rateLimits] = await Promise.all([sweepExpiredHolds(), pruneRateLimitBuckets()]);
-    // Runs after this response is sent (see eagerDispatch.ts) — an extra
-    // backstop trigger point alongside the dedicated dispatch-emails cron,
-    // never delays this route's own time-sensitive work.
+    // Purely local cleanup can run in parallel. Provider reconciliation is
+    // intentionally sequenced and bounded so the fallback cannot consume the
+    // whole ChariPay API budget during a checkout spike.
+    const [holds, rateLimits] = await Promise.all([
+      sweepExpiredHolds(),
+      pruneRateLimitBuckets(),
+    ]);
+    const checkouts = await reconcileExpiredCheckouts(5);
+    const refunds = await reconcileProcessingRefundsFair(10);
+
+    // Runs after this response is sent (see eagerDispatch.ts), so a slow
+    // email batch still never delays this route's own time-sensitive work —
+    // an extra backstop trigger point alongside the dedicated
+    // dispatch-emails cron.
     scheduleEagerEmailDispatch();
-    return NextResponse.json({ ...holds, rateLimitBucketsDeleted: rateLimits.deleted });
+    return NextResponse.json({
+      ...holds,
+      rateLimitBucketsDeleted: rateLimits.deleted,
+      checkoutReconciliation: checkouts,
+      refundReconciliation: refunds,
+    });
   } catch (error) {
     return apiErrorResponse(error);
   }
 }
 
-export const GET = runSweep;
-export const POST = runSweep;
+/**
+ * Vercel Cron invokes GET and sends CRON_SECRET as Authorization: Bearer.
+ * POST remains available for an explicitly configured external scheduler via
+ * X-Internal-Secret. Provider reconciliation is a correctness fallback for
+ * lost/ambiguous async outcomes; pre-checkout hold expiry also has lazy release.
+ */
+export const GET = runHousekeeping;
+export const POST = runHousekeeping;

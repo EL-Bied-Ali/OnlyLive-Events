@@ -5,12 +5,26 @@ import type { OrderStatus, Prisma } from "@prisma/client";
 const ATTENTION_STATUSES: OrderStatus[] = ["paid_but_unfulfillable", "reconciliation_required"];
 
 export async function getAdminMetrics() {
+  const now = new Date();
   const [paidPayments, ticketsSold, checkIns, awaitingPayment, attentionOrders] = await Promise.all([
     prisma.payment.aggregate({ where: { status: "paid" }, _sum: { amountCents: true } }),
     prisma.ticket.count(),
     prisma.ticket.count({ where: { status: "used" } }),
     prisma.order.count({ where: { status: "pending_payment" } }),
-    prisma.order.count({ where: { status: { in: ATTENTION_STATUSES } } }),
+    // Unresolved provider-backed financial work must remain visible even after
+    // the initiating admin/customer leaves the page. A processing refund is a
+    // reserved money operation whose final outcome is not known yet; failed
+    // refunds and expired-but-unresolved hosted checkouts also require review.
+    // One order is counted once even if several attention conditions apply.
+    prisma.order.count({
+      where: {
+        OR: [
+          { status: { in: ATTENTION_STATUSES } },
+          { status: "pending_payment", expiresAt: { lt: now } },
+          { payments: { some: { refunds: { some: { status: { in: ["processing", "failed"] } } } } } },
+        ],
+      },
+    }),
   ]);
 
   return {
@@ -155,10 +169,14 @@ export async function getOrderForAdmin(orderId: string) {
     const refundedCents = payment.refunds
       .filter((refund) => refund.status === "succeeded")
       .reduce((sum, refund) => sum + refund.amountCents, 0);
+    const committedRefundCents = payment.refunds
+      .filter((refund) => refund.status === "processing" || refund.status === "succeeded")
+      .reduce((sum, refund) => sum + refund.amountCents, 0);
     return {
       ...payment,
       refundedCents,
-      remainingRefundableCents: payment.amountCents - refundedCents,
+      committedRefundCents,
+      remainingRefundableCents: Math.max(0, payment.amountCents - committedRefundCents),
     };
   });
 
