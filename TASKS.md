@@ -677,7 +677,7 @@ pinned v7.0.1 was emitting.
 
 **Runtime verification completed (2026-09-23):** GPT triggered a real
 `workflow_dispatch` run against `main` on the merged SHA (run
-`35901586420`), confirming the bumped action still mints the OIDC token,
+`35903586420`), confirming the bumped action still mints the OIDC token,
 passes Vercel's Trusted Sources check, and the dispatcher responds with
 real JSON: `{"claimed":0,"sent":0,"retried":0,"permanentlyFailed":0,
 "skipped":0}` (zero across the board reflects no email backlog at that
