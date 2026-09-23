@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { sweepExpiredHolds } from "@/lib/inventory";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 import { pruneRateLimitBuckets } from "@/lib/rateLimit";
+import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 
 export const runtime = "nodejs";
 
@@ -20,6 +21,10 @@ export async function POST(request: NextRequest) {
     }
 
     const [holds, rateLimits] = await Promise.all([sweepExpiredHolds(), pruneRateLimitBuckets()]);
+    // Runs after this response is sent (see eagerDispatch.ts) — an extra
+    // backstop trigger point alongside the dedicated dispatch-emails cron,
+    // never delays this route's own time-sensitive work.
+    scheduleEagerEmailDispatch();
     return NextResponse.json({ ...holds, rateLimitBucketsDeleted: rateLimits.deleted });
   } catch (error) {
     return apiErrorResponse(error);

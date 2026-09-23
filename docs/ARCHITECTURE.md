@@ -229,14 +229,17 @@ TASKS.md, tests.json
 
 ## Request/data flow: transactional email (durable outbox)
 
-A production-safe outbox/dispatcher foundation — no real email provider is
-integrated yet (see Known scope limitations below).
+A production-safe outbox/dispatcher foundation with a Resend production
+provider on top.
 
 1. `lib/email/provider.ts` defines the same kind of swappable interface as
-   payments — `lib/email/fakeProvider.ts` (`ConsoleEmailProvider`) just
-   logs the message and returns a fake id. `SendEmailInput` carries an
-   `idempotencyKey` (mirroring `RefundInput`'s), so a retried send of the
-   same outbox row can never double-send at a real provider's own layer.
+   payments — `lib/email/fakeProvider.ts` (`ConsoleEmailProvider`, local/
+   test-only) just logs the message and returns a fake id;
+   `lib/email/resendProvider.ts` (`ResendEmailProvider`) sends real
+   transactional email through Resend's REST API. `SendEmailInput` carries
+   an `idempotencyKey` (mirroring `RefundInput`'s, forwarded as Resend's own
+   `Idempotency-Key`), so a retried send of the same outbox row can never
+   double-send at the real provider's own layer either.
 2. `lib/email/notifications.ts::enqueue*` (`enqueueOrderConfirmationEmail`,
    `enqueuePaymentFailedEmail`, `enqueueRefundConfirmationEmail`,
    `enqueueReconciliationAlertEmail`) each take a `Prisma.TransactionClient`
@@ -256,9 +259,17 @@ integrated yet (see Known scope limitations below).
    crash or thrown error between "commit" and "send" can no longer lose
    the notification silently.
 3. `lib/email/dispatcher.ts::dispatchPendingEmails` runs separately,
-   out-of-band (invoked by `/api/internal/dispatch-emails` on the same
-   `X-Internal-Secret` auth pattern as `sweep-expired-holds`, meant to run
-   on a schedule):
+   out-of-band (invoked by `/api/internal/dispatch-emails`, authorized via
+   `lib/http/internalAuth.ts`'s `isInternalRequestAuthorized` — either an
+   explicitly configured `X-Internal-Secret`, the same pattern
+   `sweep-expired-holds` uses, or Vercel Cron's own
+   `Authorization: Bearer <CRON_SECRET>` — meant to run on a schedule
+   either way). `lib/email/eagerDispatch.ts::scheduleEagerEmailDispatch`
+   is also called at every enqueue call site (webhook, refund action,
+   sweep) to additionally trigger `after(() => dispatchPendingEmails())`
+   so most confirmation emails go out within seconds instead of waiting
+   for the next scheduled run — a latency optimization only; the
+   scheduled trigger remains the correctness backstop.
    - Claims a batch of due rows with `SELECT ... FOR UPDATE SKIP LOCKED`
      (pending rows whose `nextAttemptAt` has arrived, or `processing` rows
      whose lease has expired — a crashed worker never finished them) —
@@ -414,14 +425,18 @@ historical rather than future.
   multi-device reconciliation is not implemented.
 - **Real payment provider** — no Moroccan PSP is integrated; only the
   `fake` sandbox provider. See docs/PAYMENTS.md.
-- **Real email provider** — the durable outbox/dispatcher foundation is in
-  place (idempotent enqueue in the same transaction as the business fact,
-  batched claiming, lease-timeout reclaim, retry with backoff, business-
-  state re-validation at send time), but sending still only goes through
-  the `console` sandbox provider (logs the message, no real delivery) — no
-  real provider (Resend/Postmark/SES/...) is integrated yet. Adding one is
-  a new `EmailProvider` implementation plus a `getEmailProvider()` case; no
-  change to the outbox/dispatcher is expected.
+- **Real email provider** — implemented. `lib/email/resendProvider.ts`
+  (`ResendEmailProvider`) sends through Resend's REST API on top of the same
+  durable outbox/dispatcher foundation (idempotent enqueue in the same
+  transaction as the business fact, batched claiming, lease-timeout reclaim,
+  retry with backoff, business-state re-validation at send time); the
+  `console` sandbox provider remains for local/CI/test use only, refused in
+  production unless explicitly opted into (`ALLOW_CONSOLE_EMAIL_IN_PRODUCTION`).
+  `lib/email/eagerDispatch.ts` also schedules a best-effort immediate drain
+  right after checkout/refund/webhook requests (via Next.js `after()`), so a
+  confirmation email typically arrives within seconds rather than waiting for
+  the next periodic `/api/internal/dispatch-emails` run — a latency
+  optimization only, never a substitute for that periodic trigger.
 - **Rate limiting** — implemented in the application per IP and per
   account/email on registration, admin login, and customer login
   (`lib/rateLimit.ts`). Production WAF rules and final thresholds still

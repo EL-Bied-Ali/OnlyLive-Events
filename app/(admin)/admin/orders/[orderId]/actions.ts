@@ -5,6 +5,7 @@ import { requireAdminRole } from "@/lib/auth/admin";
 import { assertAdminServerActionCsrf } from "@/lib/auth/adminCsrf";
 import { ApiError } from "@/lib/http/errors";
 import { initiateRefund } from "@/lib/orders/refund";
+import { scheduleEagerEmailDispatch } from "@/lib/email/eagerDispatch";
 import { refundMutationSchema } from "@/lib/validation/refund";
 import type { AdminActionState } from "@/lib/admin/actionState";
 
@@ -32,6 +33,7 @@ export async function refundPaymentAction(
     });
 
     revalidatePath("/admin", "layout");
+    scheduleEagerEmailDispatch();
     return {
       status: "success",
       message:
