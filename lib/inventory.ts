@@ -27,6 +27,14 @@ interface InventorySnapshot {
  * the same. That is the entire oversell-prevention mechanism — no
  * SERIALIZABLE isolation or retry loop is needed for a single-row
  * read-modify-write.
+ *
+ * `expires_at` is a naive `timestamp` column populated with UTC wall-clock
+ * digits (via JS `Date`, never a raw-SQL default) — comparing it against a
+ * bare `now()` would implicitly cast that `timestamptz` into the session's
+ * `TimeZone` GUC before comparing, silently skewing every hold's effective
+ * lifetime by that offset whenever the server isn't UTC. `AT TIME ZONE
+ * 'UTC'` makes the comparison timezone-independent instead of relying on
+ * every deployment happening to run Postgres with `TimeZone=UTC`.
  */
 async function releaseExpiredAndLock(tx: Tx, ticketCategoryId: string): Promise<InventorySnapshot> {
   const rows = await tx.$queryRaw<InventorySnapshot[]>`
@@ -35,7 +43,7 @@ async function releaseExpiredAndLock(tx: Tx, ticketCategoryId: string): Promise<
       SET status = 'expired'
       WHERE ticket_category_id = ${ticketCategoryId}
         AND status = 'active'
-        AND expires_at < now()
+        AND expires_at < (now() AT TIME ZONE 'UTC')
       RETURNING quantity
     )
     UPDATE inventory
@@ -155,7 +163,7 @@ export async function createHold(input: CreateHoldInput): Promise<CreateHoldResu
       JOIN ticket_categories tc ON tc.id = r.ticket_category_id
       WHERE r.user_id = ${input.userId}
         AND tc.event_id = ${event.id}
-        AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= now()))
+        AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= (now() AT TIME ZONE 'UTC')))
     `;
     const currentUserTotal = Number(userTotals[0]?.total ?? 0);
     if (currentUserTotal + input.quantity > event.maxTicketsPerUser) {
@@ -267,7 +275,7 @@ export async function sweepExpiredHolds(): Promise<{ categoriesAffected: number 
     WITH expired AS (
       UPDATE reservations
       SET status = 'expired'
-      WHERE status = 'active' AND expires_at < now()
+      WHERE status = 'active' AND expires_at < (now() AT TIME ZONE 'UTC')
       RETURNING ticket_category_id, quantity
     ),
     agg AS (
