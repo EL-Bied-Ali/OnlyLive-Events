@@ -103,9 +103,11 @@ jobs:
         # apply here); v7.0.1 and v9.0.0 lock the exact same @actions/core
         # 1.10.1 tarball, same npm integrity hash, so the OIDC code path
         # itself is byte-identical; the runner (currently 2.337.0) exceeds
-        # v8+'s minimum (2.327.1); and the published dist/index.js bundle
-        # was diffed for unexpected drift beyond the known v8 Node 20->24
-        # runtime bump. Re-audit before bumping again.
+        # v8+'s minimum (2.327.1); and the upstream repo's own check-dist
+        # step rebuilds dist/ from source and fails the bundle if it
+        # doesn't match -- this audit read the source/locked dependencies
+        # but did not independently byte-diff the full built bundle itself.
+        # Re-audit before bumping again.
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
