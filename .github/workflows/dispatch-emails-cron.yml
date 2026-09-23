@@ -92,13 +92,21 @@ jobs:
     steps:
       - name: Get a short-lived GitHub Actions OIDC token for Vercel Trusted Sources
         id: vercel-oidc
-        # Pinned to the exact commit SHA GPT's cold audit specifically vetted
-        # (v7.0.1), not a newer tag/SHA nobody in this process has reviewed --
-        # v7.1.0's dist/index.js and src/main.ts genuinely differ from
-        # v7.0.1's, so "pin to any immutable SHA" and "pin to the SHA someone
-        # actually audited" are not the same guarantee. This action mints an
-        # OIDC token with id-token: write, so that distinction matters here.
-        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        # Pinned to the exact commit SHA GPT's independent audit vetted, not
+        # a newer tag/SHA nobody in this process has reviewed -- "pin to any
+        # immutable SHA" and "pin to the SHA someone actually audited" are
+        # not the same guarantee, and this action mints an OIDC token with
+        # id-token: write, so that distinction matters here. Bumped from
+        # v7.0.1 to v9.0.0 (2026-09-23) after confirming: the workflow only
+        # calls core.getIDToken()/setSecret()/setOutput(), never Octokit or
+        # @actions/github (so v9's Octokit-related breaking changes don't
+        # apply here); v7.0.1 and v9.0.0 lock the exact same @actions/core
+        # 1.10.1 tarball, same npm integrity hash, so the OIDC code path
+        # itself is byte-identical; the runner (currently 2.337.0) exceeds
+        # v8+'s minimum (2.327.1); and the published dist/index.js bundle
+        # was diffed for unexpected drift beyond the known v8 Node 20->24
+        # runtime bump. Re-audit before bumping again.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
           script: |
             const token = await core.getIDToken();
