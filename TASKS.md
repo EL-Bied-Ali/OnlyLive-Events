@@ -630,29 +630,42 @@ over as a clean, email-only slice, deliberately without any ChariPay code:
    generation, but the current released version is v9.0.0. Since this
    action runs with `id-token: write`, don't bump it casually; audit a
    newer immutable SHA against the same OIDC-minting usage before updating.
-10. **`main`'s `lib/inventory.ts` still has the naive-timestamp-vs-`now()`
-    bug** (found by GPT auditing PR #81; three raw-SQL comparisons —
-    `releaseExpiredAndLock`, the per-user purchase-limit count in
-    `createHold`, and `sweepExpiredHolds` — compare the naive `expires_at`
-    timestamp column against a bare `now()`, which implicitly casts through
-    the session's `TimeZone` GUC before comparing, silently skewing every
-    hold's effective lifetime whenever Postgres isn't running with
-    `TimeZone=UTC`). This is the exact same bug class already fixed in
+10. **`main`'s `lib/inventory.ts` naive-timestamp-vs-`now()` bug — fix open
+    in PR #82, awaiting GPT review** (found by GPT auditing PR #81; three
+    raw-SQL comparisons — `releaseExpiredAndLock`, the per-user
+    purchase-limit count in `createHold`, and `sweepExpiredHolds` — compared
+    the naive `expires_at` timestamp column against a bare `now()`, which
+    implicitly casts through the session's `TimeZone` GUC before comparing,
+    silently skewing every hold's effective lifetime whenever Postgres
+    isn't running with `TimeZone=UTC`). Same bug class already fixed in
     `lib/email/dispatcher.ts` and (via PR #81) the fake webhook's
-    `payment_events.received_at` insert, but affects the core
+    `payment_events.received_at` insert, but this one affects the core
     oversell-prevention hold-expiry mechanism specifically, not just email
-    scheduling. **Deliberately not fixed as part of PR #81** (an email-only
-    backport): `feat/charipay-integration`'s version of this fix is heavily
-    entangled with unrelated in-flight-checkout behavior added for ChariPay
-    (excluding order-linked reservations — `order_id IS NULL` — from lazy
-    release/expiry-counting, since a hosted-checkout redirect can leave a
-    reservation "expired" locally while a real async payment is still in
-    flight). Needs its own careful review: on `main`, decide whether the
-    same order-linked-exclusion behavior is independently correct
-    regardless of provider (the fake provider's checkout page can also sit
-    open past a hold's expiry) or whether just the narrow
-    `now()` → `(now() AT TIME ZONE 'UTC')` comparison fix can land alone
-    without also changing lazy-release semantics for in-flight checkouts.
+    scheduling.
+
+    PR #82 (`fix/inventory-naive-timestamp-now-skew` → `main`) fixes only
+    the narrow `now()` → `(now() AT TIME ZONE 'UTC')` comparison in all
+    three spots. It deliberately does **not** port
+    `feat/charipay-integration`'s additional `order_id IS NULL` exclusion
+    of order-linked reservations from lazy release/expiry-counting — that
+    behavior exists there to stop a ChariPay hosted-checkout redirect from
+    looking "expired" locally while a real async payment is still in
+    flight, and is a separate behavioral hardening question, not a
+    timezone-correctness one. Reasoning for leaving it out of `main` for
+    now: `releaseHold` already refuses to release a reservation once
+    `orderId` is set (`CHECKOUT_IN_PROGRESS`), and
+    `confirmOrderPayment`'s `paid_but_unfulfillable`/
+    `reconciliation_required` states already exist specifically to catch
+    payment-success-after-reservation-expiration without allowing
+    double-ticketing — so `main`'s fake-provider checkout (synchronous,
+    no redirect-then-wait window) doesn't obviously need the same
+    in-flight exclusion. Not yet confirmed with GPT; revisit if GPT's
+    review of PR #82 disagrees.
+
+    PR #82 also ports the CI-only non-UTC TimeZone regression guard from
+    `feat/charipay-integration` (`.github/workflows/ci.yml`'s postgres
+    service `TZ: Asia/Kolkata`, `tests/setup.ts`'s CI-only assertion) so
+    this bug class stays caught in CI going forward, not just this once.
 
 ## Blocked
 
