@@ -1303,6 +1303,52 @@ is NOT this bug: that column is written via DB-side `now()`, not a JS
 `now()` with no cross-source skew — a different issue, already fixed
 separately in commit `dad10c6`.
 
+## Completed (sync `main` into `feat/charipay-integration` — branch chore/sync-main-into-charipay)
+
+`main` had drifted 10 commits ahead of this branch (PRs #52-58's email-
+dispatch-scheduling work, PR #79's Vercel bypass-header fix, PR #81's
+Resend backport, PR #82's naive-timestamp fix) since this branch was last
+resynced. Merged `origin/main` into a dedicated sync branch off this
+one's tip and resolved 9 conflicted files by hand rather than trusting
+either side blindly:
+
+- `lib/inventory.ts`, `lib/email/notifications.ts`,
+  `app/(admin)/admin/orders/[orderId]/actions.ts`,
+  `app/api/internal/sweep-expired-holds/route.ts`,
+  `app/api/payments/webhook/fake/route.ts` — this branch's own versions
+  were already more advanced (the `order_id IS NULL` in-flight-checkout
+  exclusion, real ChariPay reconciliation calls in the housekeeping route,
+  the `processing`-state refund-action branch), so kept this branch's
+  content; `main`'s versions of the same fixes had already converged
+  independently or were narrower subsets.
+- `.env.example`, `.github/workflows/ci.yml`,
+  `docs/ARCHITECTURE.md` — comment/prose-only conflicts; merged for
+  accuracy rather than picking one side wholesale (e.g. `ARCHITECTURE.md`'s
+  email-trigger description needed `main`'s newer GitHub Actions cron
+  backstop content, since `.github/workflows/dispatch-emails-cron.yml`
+  itself only existed on `main` before this merge and is a genuinely new
+  file on this branch now).
+- `TASKS.md` — both sides had added independent, non-overlapping
+  "Completed"/"Next"/"Blocked" entries; concatenated the two "Completed"
+  sections in full (no information lost), but for "Next"/"Blocked"
+  specifically, `main`'s shorter list was almost entirely superseded by
+  this branch's own more advanced entries for the same items (PSP
+  selection, email provider, Postgres/backup provider, legal documents,
+  CSV export pagination, customer phone-completion — all already done or
+  much further along on this branch) — kept this branch's list and
+  appended only the two genuinely new `main`-only items (the
+  `actions/github-script` version-pin maintenance note, and the still-open
+  question of whether `main` needs its own narrow `order_id IS NULL` port
+  independent of this branch).
+
+Verified post-merge, not assumed: `npm run typecheck`/`npx eslint .` both
+clean, full suite **440/440 passing** (up from 249 pre-merge, reflecting
+this branch's much larger ChariPay-specific test coverage) against the
+local dev cluster's non-UTC `Africa/Casablanca` session, and `npm run
+build` clean with the full merged route list (ChariPay webhook,
+reconcile-payment, legal pages, customer phone endpoint all present
+alongside everything from `main`).
+
 ## Next
 
 0. **Resolved, was never a code bug**: an earlier draft of this file
