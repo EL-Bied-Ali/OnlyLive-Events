@@ -680,6 +680,26 @@ over as a clean, email-only slice, deliberately without any ChariPay code:
     service `TZ: Asia/Kolkata`, `tests/setup.ts`'s CI-only assertion) so
     this bug class stays caught in CI going forward, not just this once.
 
+    **The new CI guard immediately proved its worth**: it surfaced two
+    more instances of the exact same bug, outside `lib/inventory.ts` —
+    `lib/admin/catalog.ts`'s `updateEvent` (per-user committed-quantity
+    check before lowering `maxTicketsPerUser`) and `updateSalesPhase`
+    (committed-quantity check before lowering `phaseQuantityLimit`) both
+    compared `expires_at` against a bare `now()`. Reproduced locally
+    against a session TimeZone matching CI (`Asia/Kolkata`): 3 real
+    failures in `admin-catalog.test.ts` (limit-decrease guards silently
+    resolving instead of rejecting, since the implicit positive-offset
+    cast made already-committed active reservations look expired). Fixed
+    in the same PR with the identical `(now() AT TIME ZONE 'UTC')` cast;
+    all 13 admin-catalog tests and the full 249/249 suite now pass under
+    both a UTC and non-UTC session. Grepped the rest of `lib/` for any
+    remaining bare `now()`-vs-naive-timestamp comparisons — none found.
+    `lib/orders/checkout.ts`'s `provider_init_at` comparison was checked
+    and is NOT this bug: that column is written via DB-side `now()`, not
+    a JS `Date`, so both sides of its comparison already share the same
+    session's `now()` with no cross-source skew — a different issue,
+    already fixed separately in commit `dad10c6`.
+
 ## Blocked
 
 - Real PSP integration is blocked on OnlyLive selecting a provider.
