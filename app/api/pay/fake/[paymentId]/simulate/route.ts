@@ -21,6 +21,29 @@ const OUTCOME_TO_EVENT_TYPE = {
 } as const;
 
 /**
+ * Exported separately so its one conditional branch — whether
+ * VERCEL_AUTOMATION_BYPASS_SECRET is set — is unit-testable without a
+ * real customer session or a real Vercel deployment. Actually bypassing
+ * Vercel's Deployment Protection can only be verified against the real
+ * platform, but whether our own code attaches the header correctly can
+ * and should be tested in isolation.
+ */
+export function buildFakeWebhookForwardHeaders(signature: string, bypassSecret: string | undefined) {
+  return {
+    "content-type": "application/json",
+    "x-onlylive-fake-signature": signature,
+    // Vercel's Deployment Protection sits in front of every URL on a
+    // project without a connected custom domain, including this
+    // server-to-server self-call — without this header it never
+    // reaches the webhook route at all (401 from Vercel, not from
+    // our own auth). Only set when the project has "Protection
+    // Bypass for Automation" configured; a no-op otherwise, matching
+    // unprotected local/CI/custom-domain environments.
+    ...(bypassSecret ? { "x-vercel-protection-bypass": bypassSecret } : {}),
+  };
+}
+
+/**
  * Stands in for "the customer completed (or abandoned) the PSP's hosted
  * checkout page". Requires the requesting customer to own the order —
  * this is a dev/sandbox convenience gate, not a substitute for the real
@@ -59,25 +82,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
     });
     const signature = signFakeWebhookPayload(payload);
 
-    const bypassSecret = process.env.VERCEL_AUTOMATION_BYPASS_SECRET;
     // Resolved from NEXTAUTH_URL (lib/appUrl.ts), never from the
     // incoming request's own URL/Host — this call now carries a secret
     // header when bypassSecret is set, so the target must not be
     // influenceable by request data.
     const webhookResponse = await fetch(absoluteAppUrl("/api/payments/webhook/fake"), {
       method: "POST",
-      headers: {
-        "content-type": "application/json",
-        "x-onlylive-fake-signature": signature,
-        // Vercel's Deployment Protection sits in front of every URL on a
-        // project without a connected custom domain, including this
-        // server-to-server self-call — without this header it never
-        // reaches the webhook route at all (401 from Vercel, not from
-        // our own auth). Only set when the project has "Protection
-        // Bypass for Automation" configured; a no-op otherwise, matching
-        // unprotected local/CI/custom-domain environments.
-        ...(bypassSecret ? { "x-vercel-protection-bypass": bypassSecret } : {}),
-      },
+      headers: buildFakeWebhookForwardHeaders(signature, process.env.VERCEL_AUTOMATION_BYPASS_SECRET),
       body: payload,
     });
     const webhookResult = await webhookResponse.json();
