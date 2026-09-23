@@ -15,10 +15,15 @@ function escapeCsvCell(value: string): string {
   return guarded;
 }
 
+// CRLF and a UTF-8 BOM: Excel on Windows otherwise mis-detects the
+// encoding and garbles accented characters (client/event names are
+// frequently French/Arabic-transliterated).
+export const CSV_BOM = "﻿";
+
+export function formatCsvRow(row: (string | number)[]): string {
+  return row.map((cell) => escapeCsvCell(String(cell))).join(",") + "\r\n";
+}
+
 export function toCsv(headers: string[], rows: (string | number)[][]): string {
-  const lines = [headers, ...rows].map((row) => row.map((cell) => escapeCsvCell(String(cell))).join(","));
-  // CRLF and a UTF-8 BOM: Excel on Windows otherwise mis-detects the
-  // encoding and garbles accented characters (client/event names are
-  // frequently French/Arabic-transliterated).
-  return "﻿" + lines.join("\r\n") + "\r\n";
+  return CSV_BOM + [headers, ...rows].map(formatCsvRow).join("");
 }
