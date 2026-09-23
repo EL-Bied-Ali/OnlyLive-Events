@@ -21,7 +21,8 @@
     "test:e2e": "npm run test:e2e:prepare && playwright test",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "bootstrap-admin": "tsx prisma/bootstrap-admin.ts"
   },
   "dependencies": {
     "@auth/prisma-adapter": "2.11.3",

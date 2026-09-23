@@ -1181,9 +1181,30 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    before that). Setting `EMAIL_PROVIDER=resend` in Production was therefore
    a mistake — corrected to `EMAIL_PROVIDER=console` +
    `ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=true`, the exact non-production-traffic
-   allowance already coded for this. Re-verified: deployment `READY`, zero
-   runtime errors afterward, and the user independently confirmed the real
-   homepage renders correctly through the SSO wall.
+   allowance already coded for this. Re-verified: deployment `READY`, and the
+   user independently confirmed the real homepage renders correctly through
+   the SSO wall.
+
+   **Correction, 2026-09-23 (GPT catch on PR #77):** the original "zero
+   runtime errors afterward" claim above was inaccurate — Vercel's own
+   runtime-error aggregation still showed a real
+   `SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are
+   treated as aliases for 'verify-full'` warning from the `pg` driver,
+   because `main`'s `lib/db.ts` lacks the code-level `sslmode` normalization
+   that only exists on `feat/charipay-integration` (PR #76). Fixed by setting
+   `sslmode=verify-full` explicitly in the `DATABASE_URL` connection string
+   itself (Vercel env var, not code) and triggering a fresh redeploy.
+   Verified by ordering, not assumption: the `DATABASE_URL` edit timestamp
+   (`1790123522448`) precedes the current live Production deployment's
+   creation (`dpl_DQ6x7KW8tcNARMaB1xSUy4peMnXg`, created `1790129513633`,
+   `READY`, aliased to production) — so that deployment's Lambda runtime
+   only ever read the corrected connection string. Re-querying
+   `get_runtime_errors` confirms zero errors of any kind (including the SSL
+   warning) attributed to `dpl_DQ6x7KW8tcNARMaB1xSUy4peMnXg` specifically;
+   the SSL warning remains visible in Vercel's history but only against the
+   prior deployment (`dpl_9hYPRgAXBYGCrQXKmCqKkJfmKxw2`), which predates the
+   fix. A direct authenticated request against the SSO-protected alias was
+   not exercised as part of this check.
    `RESEND_API_KEY`/`RESEND_FROM_EMAIL` were left set in Production during
    this pass but are dormant — `main` cannot read them — and per GPT's
    review should be removed for now (an unused live secret is unnecessary
@@ -1269,11 +1290,31 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    mutation and scanner validation on the real Vercel preview/custom domain.
    **Update, 2026-09-23:** now actually attemptable — Vercel Production was
    previously never in a working state at all (see item 3's update above).
-   Still needed: a seeded admin account and at least one test event/category
-   in the new `onlylive-production` Neon database (currently empty except
-   for Prisma's own migrations table — no seed has been run against it),
-   then the actual admin/catalogue/scanner walkthrough against the live
-   deployment.
+
+   **Correction, 2026-09-23 (GPT catch on PR #77):** the original plan here
+   ("seed an admin account") implicitly meant running `npm run seed`, which
+   is unsafe against a real production database — `prisma/seed.ts`
+   unconditionally creates the full demo catalogue (the real Tiakola/
+   Casablanca venue, event marked `on_sale`, three ticket categories,
+   inventory, two sales phases each) regardless of whether admin credentials
+   are supplied, which would create a real-looking on-sale event in
+   `onlylive-production`. Fixed by adding `prisma/bootstrap-admin.ts`
+   (`npm run bootstrap-admin`), a narrowly-scoped script that upserts
+   exactly one `super_admin` `AdminUser` row from `ADMIN_SEED_EMAIL`/
+   `ADMIN_SEED_PASSWORD` and touches nothing else — verified locally against
+   a throwaway Postgres cluster (admin_users count 1→2; events/venues/
+   ticket_categories/inventory/sales_phases counts unchanged at
+   1/1/3/3/6). `docs/SECURITY.md`'s admin-bootstrap section now documents
+   the split: `npm run seed` for fresh dev/demo databases only, `npm run
+   bootstrap-admin` for any existing/production database.
+
+   Still needed: run `npm run bootstrap-admin` for real against
+   `onlylive-production` with a freshly generated password (never pasted
+   into chat/Git/logs), then create the smoke-test venue/event/category
+   through the real Production admin UI itself — not via seed script, since
+   catalogue creation is itself one of the things being tested — then the
+   actual admin login/logout, catalogue-mutation, and scanner-validation
+   walkthrough against the live deployment.
 
 ## Blocked
 

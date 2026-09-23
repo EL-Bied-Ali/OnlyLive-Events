@@ -95,12 +95,29 @@ leaked to the client.
 
 ## Admin bootstrap and password rotation
 
-No default admin account is ever created silently. `prisma/seed.ts` only
-creates/updates a `super_admin` when **both** `ADMIN_SEED_EMAIL` and
-`ADMIN_SEED_PASSWORD` are set in the environment (password: 16+
-characters, validated with zod); if either is missing, seeding skips
-admin creation entirely and says so. The seed script never prints
-credentials.
+No default admin account is ever created silently. Both bootstrap paths
+below only create/update a `super_admin` when **both** `ADMIN_SEED_EMAIL`
+and `ADMIN_SEED_PASSWORD` are set in the environment (password: 16+
+characters, validated with zod); if either is missing, they skip admin
+creation entirely and say so. Neither script ever prints credentials.
+
+**Two different scripts exist — use the right one:**
+
+- `prisma/seed.ts` (`npm run seed`) is a **full demo-environment seed**: it
+  unconditionally creates/upserts the demo venue, the real Tiakola —
+  Casablanca event marked `on_sale`, its ticket categories, inventory and
+  sales phases, *in addition to* the admin user if requested. Only use it
+  against a fresh dev/CI/demo database that is meant to hold that demo
+  catalogue data — **never against a real production database**, since it
+  would create that demo event as if it were really on sale.
+- `prisma/bootstrap-admin.ts` (`npm run bootstrap-admin`) creates/updates
+  **only** the one `AdminUser` row — no venue, event, category, inventory
+  or sales-phase data. This is the correct script for bootstrapping or
+  rotating an admin on any existing database, including production, where
+  the demo catalogue must not appear. (Found and fixed 2026-09-23 after an
+  independent GPT audit caught this document recommending `npm run seed`
+  as a general admin-bootstrap procedure without warning it also creates
+  demo catalogue data — a real risk for a production Neon database.)
 
 **Bootstrap procedure** (first admin, or any environment that needs one):
 
@@ -110,14 +127,17 @@ credentials.
    variables for that one run only (a deploy-time secret, a one-off
    shell export — not committed anywhere, not left in shell history if
    avoidable).
-3. Run `npm run seed`.
+3. Run `npm run bootstrap-admin` against an existing/production database,
+   or `npm run seed` only for a fresh dev/demo database that should also
+   receive the demo catalogue.
 4. Unset/rotate the environment variable value immediately after; treat
    the password as used/shared going forward.
 
-**Rotation procedure**: re-run `npm run seed` with the same
-`ADMIN_SEED_EMAIL` and a new `ADMIN_SEED_PASSWORD` — the upsert updates
-`passwordHash` for an existing admin. The current catalogue interface does
-not manage staff credentials, so password rotation remains a re-seed operation. A future self-service
+**Rotation procedure**: re-run `npm run bootstrap-admin` (or `npm run
+seed` in a demo environment) with the same `ADMIN_SEED_EMAIL` and a new
+`ADMIN_SEED_PASSWORD` — the upsert updates `passwordHash` for an existing
+admin. The current catalogue interface does not manage staff credentials,
+so password rotation remains a re-seed operation. A future self-service
 password change must require the current password and invalidate the
 administrator's existing sessions.
 
