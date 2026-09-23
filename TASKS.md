@@ -651,16 +651,29 @@ over as a clean, email-only slice, deliberately without any ChariPay code:
     behavior exists there to stop a ChariPay hosted-checkout redirect from
     looking "expired" locally while a real async payment is still in
     flight, and is a separate behavioral hardening question, not a
-    timezone-correctness one. Reasoning for leaving it out of `main` for
-    now: `releaseHold` already refuses to release a reservation once
-    `orderId` is set (`CHECKOUT_IN_PROGRESS`), and
-    `confirmOrderPayment`'s `paid_but_unfulfillable`/
-    `reconciliation_required` states already exist specifically to catch
-    payment-success-after-reservation-expiration without allowing
-    double-ticketing — so `main`'s fake-provider checkout (synchronous,
-    no redirect-then-wait window) doesn't obviously need the same
-    in-flight exclusion. Not yet confirmed with GPT; revisit if GPT's
-    review of PR #82 disagrees.
+    timezone-correctness one.
+
+    **Correction (GPT's review of PR #82 caught a factual error in the
+    original version of this paragraph):** this doc previously justified
+    leaving `order_id IS NULL` out by claiming `main`'s fake-provider
+    checkout is "synchronous, no redirect-then-wait window" — that is
+    false. `FakeProvider.createPayment()` (`lib/payments/fakeProvider.ts`)
+    returns `redirectUrl: /pay/fake/${paymentId}`, architecturally
+    identical to a real hosted-checkout redirect: the customer can sit on
+    that page indefinitely before clicking "simulate," exactly the same
+    redirect-then-wait window ChariPay has. So `main` is **not** exempt
+    from this race by construction; the real reasons PR #82 still leaves
+    `order_id IS NULL` out are narrower ones: `releaseHold` already
+    refuses to release a reservation once `orderId` is set
+    (`CHECKOUT_IN_PROGRESS`), and `confirmOrderPayment`'s
+    `paid_but_unfulfillable`/`reconciliation_required` states already
+    exist specifically to catch payment-success-after-reservation-expiry
+    without allowing double-ticketing — so the race PR #82 leaves
+    unaddressed degrades to a reconciliation-flagged order, not an
+    oversold ticket. Whether that's an acceptable interim posture for
+    `main`, or whether the `order_id IS NULL` exclusion should be ported
+    independently of ChariPay in its own PR, is still an open question —
+    not yet resolved, tracked as a follow-up separate from item 10.
 
     PR #82 also ports the CI-only non-UTC TimeZone regression guard from
     `feat/charipay-integration` (`.github/workflows/ci.yml`'s postgres
