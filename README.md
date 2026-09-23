@@ -26,6 +26,12 @@ npm run dev
 - `npm test` — Vitest unit + integration tests (needs `TEST_DATABASE_URL`,
   a separate database from `DATABASE_URL`)
 - `npm run test:e2e` — Playwright, against a running build
+
+`TEST_DATABASE_URL` is intended to be disposable. If you deliberately reuse a local
+Postgres test database across many runs, reset its application data periodically:
+reconciliation workers claim globally oldest due rows, so stale fixtures from earlier
+runs can otherwise interfere with isolated reconciliation tests. CI always uses fresh
+test databases and is not affected.
 - `npm run seed` — seeds the Tiakola event and a `super_admin` AdminUser
   (`admin@onlylive.ma` / `ChangeMe123!` in dev — change immediately
   outside local development)
