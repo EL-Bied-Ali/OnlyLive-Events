@@ -984,8 +984,10 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   here) pointed at a stale/misconfigured URL
   (`onlylive-events-git-feat-charipay-ebf143-...vercel.app`) that 404'd.
   Cosmetic only — the real confirmation path was unaffected — but a real
-  customer would land on a 404 immediately after paying. Not yet filed as
-  its own issue; raised with GPT to fold into #48 or its own small PR.
+  customer would land on a 404 immediately after paying. **Later fixed:**
+  ChariPay checkout creation now builds browser callbacks from the explicit
+  canonical `ONLYLIVE_PUBLIC_URL` via `getOnlyLivePublicUrl()`, rather than
+  a branch/preview origin. This historical smoke-test finding is closed.
 - Sender was still the shared `onboarding@resend.dev` address with
   `RESEND_TEST_RECIPIENT` forcing delivery to one real inbox for this test
   — this proves the delivery *mechanism*, not a verified production sending
