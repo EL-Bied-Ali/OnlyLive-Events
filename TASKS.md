@@ -1308,13 +1308,56 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    the split: `npm run seed` for fresh dev/demo databases only, `npm run
    bootstrap-admin` for any existing/production database.
 
-   Still needed: run `npm run bootstrap-admin` for real against
-   `onlylive-production` with a freshly generated password (never pasted
-   into chat/Git/logs), then create the smoke-test venue/event/category
-   through the real Production admin UI itself — not via seed script, since
-   catalogue creation is itself one of the things being tested — then the
-   actual admin login/logout, catalogue-mutation, and scanner-validation
-   walkthrough against the live deployment.
+   **Update, 2026-09-23 — smoke test actually run against real Production.**
+   `npm run bootstrap-admin` run for real against `onlylive-production`
+   (verified via read-only query: exactly one active `super_admin`,
+   `ali.el.bied9898@gmail.com`; catalogue tables still all zero
+   immediately before/after). Admin login/logout: **passed** — real
+   dashboard renders, correct empty-state counts. Catalogue mutation:
+   **passed** — created a clearly-labeled `SMOKE TEST` venue, event
+   (`draft`, then `on_sale`), ticket category (capacity 5) and an active
+   sales phase (100 MAD) through the real admin UI; each step verified via
+   a read-only Neon query, not just the UI. Customer checkout/hold:
+   **passed** — reservation created with the expected 15-minute expiry
+   countdown.
+
+   **Payment confirmation: failed, and found a real production-readiness
+   gap, not a test-setup mistake.** Clicking "Simuler un paiement réussi"
+   on `/pay/fake/[paymentId]` returns a 401 every time. Root-caused by
+   inspecting the actual response shape (not just the status code): the
+   outer `POST /api/pay/fake/[paymentId]/simulate` route runs
+   successfully to completion (session, payment ownership, and signature
+   generation all fine) and reaches its final step, an internal
+   server-to-server `fetch()` call to this same deployment's own public
+   URL at `/api/payments/webhook/fake` (the exact code path the real
+   ChariPay webhook will also use). That inner call is the one receiving
+   the 401 — confirmed via Vercel's `get_runtime_logs`, which shows **zero
+   invocations of the webhook route** across multiple attempts, meaning
+   the request never reached our Next.js code at all.
+
+   The cause: this Vercel project has `ssoProtection.enabled: true` with
+   `deploymentType: "all_except_custom_domains"`, and **no custom domain
+   is connected yet** — so every current URL, including this internal
+   self-call, is behind the Vercel SSO wall. Vercel's own protection layer
+   is intercepting the request before Next.js ever sees it.
+
+   **This is a real production-launch blocker, not just a test artifact:**
+   once ChariPay is live, its real webhook deliveries will hit this exact
+   same public URL from outside Vercel's network, with no Vercel team SSO
+   session and no way for ChariPay to send a Vercel-specific bypass
+   header — they would be blocked identically. Launch must not happen
+   against an SSO-protected `.vercel.app` URL; either (a) a real custom
+   domain is connected before go-live (Vercel's own `deploymentType`
+   setting already exempts custom domains from SSO protection), or (b)
+   Vercel's "Protection Bypass for Automation" is configured and the
+   webhook-sending side is taught to send that header/secret. Recommend
+   (a), since (b) still depends on ChariPay supporting a custom outbound
+   header, which is unverified and adds ongoing operational fragility.
+   Scanner validation is still blocked on this, since it requires a real
+   paid ticket to scan. GPT review requested before deciding how to
+   unblock the smoke test itself (a temporary Protection Bypass secret vs.
+   a proper code fix that processes the webhook in-process instead of via
+   a self-HTTP-call).
 
 ## Blocked
 
