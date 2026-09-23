@@ -80,10 +80,8 @@ export default function PrivacyPolicyPage() {
           <li>Resend, pour l&apos;envoi des emails transactionnels ;</li>
           <li>Vercel, pour l&apos;hébergement de l&apos;application ;</li>
           <li>
-            <ToFill>
-              le prestataire de base de données de production, ainsi que sa région et son pays
-              d&apos;hébergement
-            </ToFill>
+            Neon, pour l&apos;hébergement de la base de données de production (région AWS
+            us-east-1, États-Unis) ;
           </li>
           <li>le personnel OnlyLive habilité au contrôle d&apos;accès lors des événements.</li>
         </ul>
