@@ -1380,7 +1380,30 @@ typed response is the actual proof). This closes the item; no further
 action needed unless the pin is bumped again in the future, which should
 get its own fresh audit rather than reusing this one.
 
-## Next
+## Remaining external / user-dependent gates
+
+All currently actionable repository/code cleanup that does not require an
+external decision or privileged production mutation is complete as of
+2026-09-23. The remaining go-live gates are:
+
+1. **ChariPay support / provider acceptance:** obtain a supported genuine
+   `payment.failed` sandbox procedure and provider-side `operations:refund`
+   enablement; then capture/pin the real failure/refund lifecycle and finish
+   merchant/KYB/live-credential approval.
+2. **Vercel Production email activation:** set the production Resend variables,
+   redeploy, and run the application-originated delivery smoke. This requires
+   a production env write path not exposed by the currently connected tooling.
+3. **Neon recovery capacity:** resume the deliberately deferred paid-plan
+   decision, configure >=7-day PITR plus independent daily logical backups,
+   then execute the timed isolated restore drill before public sales.
+4. **Legal/accounting/CNDP:** complete the guarded drafts' policy/tax/retention
+   decisions and required CNDP formalities; keep `LEGAL_DOCUMENTS_APPROVED`
+   disabled until formal approval.
+5. **Public-production perimeter:** when the final domain and Vercel write
+   access are available, stage/tune WAF rules and repeat the public-domain
+   customer/admin/scanner/webhook smoke.
+
+## Historical detailed follow-up record (audit trail)
 
 0. **Resolved, was never a code bug**: an earlier draft of this file
    reported `checkout-reconciliation.test.ts`'s "leases provider work"
@@ -1817,7 +1840,7 @@ get its own fresh audit rather than reusing this one.
 - Legal document drafting is blocked on legal/accountant review and ChariPay's
   final merchant/go-live requirements.
 
-## Next (this branch, continued)
+## Resolved decision record
 
 7. **`main`-specific, resolved by not porting on this side of the sync:**
    whether `main` (independently of this branch's full ChariPay merge)
