@@ -453,14 +453,21 @@ historical rather than future.
   multi-device reconciliation is not implemented.
 - **Real payment provider** — ChariPay's hosted-checkout adapter is
   implemented on this branch (`lib/payments/charipayProvider.ts`, draft
-  PR #13), including real webhook signature verification, checkout/refund
-  reconciliation, and audited sandbox purchase/refund flows. It is **not**
-  production-approved: KYB/merchant onboarding, an independent audit, and
-  two provider-side sandbox blockers (a supported `payment.failed`
-  procedure and the `operations:refund` capability — see docs/CHARIPAY.md
-  and TASKS.md's "Blocked" section) are still open before PR #13 may merge
-  to `main`. The `fake` provider remains available for local/CI testing
-  regardless. See docs/PAYMENTS.md.
+  PR #13), including real webhook signature verification and checkout/
+  refund reconciliation. The sandbox purchase flow is proven end-to-end;
+  real sandbox refund attempts exposed and fixed two integration bugs
+  (`operationId` vs `externalId`; `reason` closed enum vs free text) but
+  the sandbox key itself is currently missing the `operations:refund`
+  capability, so a full refund cannot yet be exercised — see
+  docs/CHARIPAY.md. It is **not** production-approved: KYB/merchant
+  onboarding and two provider-side sandbox blockers (a supported
+  `payment.failed` procedure and the `operations:refund` capability — see
+  docs/CHARIPAY.md and TASKS.md's "Blocked" section) are still open before
+  PR #13 may merge to `main`. (The independent-audit gate itself is
+  already satisfied by this project's established Claude/GPT cross-audit
+  pattern — see TASKS.md — so it is not a separate open blocker.) The
+  `fake` provider remains available for local/CI testing regardless. See
+  docs/PAYMENTS.md.
 - **Real email delivery** — the durable outbox/dispatcher foundation and
   a Resend adapter are implemented. Production activation still requires a
   Resend account, verified sender domain, `RESEND_API_KEY` and
