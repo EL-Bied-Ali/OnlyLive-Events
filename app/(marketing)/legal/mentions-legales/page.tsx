@@ -15,21 +15,28 @@ export default function LegalNoticePage() {
     <LegalPage title="Mentions légales" updatedNote="Brouillon — non publié.">
       <Section heading="1. Éditeur du site">
         <p>
-          Le présent site est édité par <ToFill>raison sociale / forme juridique d&apos;OnlyLive</ToFill>,
-          dont le siège social est situé <ToFill>adresse complète du siège social</ToFill>.
+          Le présent site est édité par ONLYLIVE ENTERTAINMENT, société à responsabilité limitée à
+          associé unique (SARL AU) au capital social de 100 000 MAD, dont le siège social est situé
+          au 59 Avenue Ibn Sina, Appartement n°11, Agdal, Rabat, Maroc.
         </p>
         <p>
-          Identifiant Commun de l&apos;Entreprise (ICE) : <ToFill>numéro ICE</ToFill>
+          Identifiant Commun de l&apos;Entreprise (ICE) : 004012555000024
           <br />
-          Registre du commerce : <ToFill>numéro RC et ville d&apos;immatriculation</ToFill>
+          Registre du commerce : RC Rabat n° 201789
           <br />
-          Identifiant fiscal : <ToFill>IF</ToFill>
+          Identifiant fiscal : <ToFill>IF — à récupérer auprès de la DGI / du dossier fiscal</ToFill>
+          <br />
+          Taxe professionnelle :{" "}
+          <ToFill>référence TP, si elle doit figurer dans les documents publiés</ToFill>
+        </p>
+        <p>Gérant : Amine El Bied.</p>
+        <p>
+          Directeur de la publication :{" "}
+          <ToFill>confirmer si le gérant assume aussi cette fonction ou désigner le responsable</ToFill>
         </p>
         <p>
-          Directeur de la publication : <ToFill>nom du responsable légal</ToFill>
-        </p>
-        <p>
-          Contact : <ToFill>adresse email de contact public</ToFill>, Instagram{" "}
+          Contact : <ToFill>adresse email publique OnlyLive</ToFill> ·{" "}
+          <ToFill>numéro de téléphone de contact / réclamation</ToFill> · Instagram{" "}
           <a href="https://www.instagram.com/onlylive.ma" target="_blank" rel="noreferrer">
             @onlylive.ma
           </a>
@@ -40,26 +47,32 @@ export default function LegalNoticePage() {
         <p>
           Le site est hébergé par Vercel Inc. (application).{" "}
           <ToFill>
-            confirmer l&apos;hébergeur de base de données réellement utilisé en production au
-            moment de la mise en ligne, ses coordonnées exactes, et si une mention d&apos;hébergeur
-            plus détaillée est requise
+            confirmer l&apos;hébergeur de base de données réellement utilisé en production, sa
+            région/pays d&apos;hébergement et les coordonnées à publier le cas échéant
           </ToFill>
         </p>
       </Section>
 
       <Section heading="3. Activité">
         <p>
-          OnlyLive commercialise directement des billets pour des événements live (concerts,
-          spectacles) au Maroc. OnlyLive est le vendeur des billets et le destinataire des
-          paiements des clients.
+          L&apos;activité enregistrée de ONLYLIVE ENTERTAINMENT comprend l&apos;événementiel et la
+          prestation de services.
+        </p>
+        <p>
+          <ToFill>
+            confirmer avant publication que ONLYLIVE ENTERTAINMENT est bien l&apos;entité
+            contractante qui vend les billets, détient le compte marchand ChariPay de production
+            et reçoit les paiements clients
+          </ToFill>
         </p>
       </Section>
 
       <Section heading="4. Propriété intellectuelle">
         <p>
           <ToFill>
-            clause standard de propriété intellectuelle sur les contenus du site (textes, visuels,
-            marque OnlyLive) — à valider par l&apos;avocat
+            clause de propriété intellectuelle sur les contenus du site, les visuels et la marque
+            OnlyLive — à valider avec l&apos;avocat, notamment la titularité de la marque et des
+            contenus utilisés pour chaque événement
           </ToFill>
         </p>
       </Section>
@@ -75,17 +88,17 @@ export default function LegalNoticePage() {
       <Section heading="6. Droit applicable et juridiction">
         <p>
           <ToFill>
-            droit applicable et tribunaux compétents en cas de litige — à déterminer avec
-            l&apos;avocat d&apos;OnlyLive
+            droit applicable et modalités de résolution des litiges — à valider par l&apos;avocat
+            au regard notamment des règles impératives de protection du consommateur
           </ToFill>
         </p>
       </Section>
 
-      <Section heading="7. Médiation / réclamations">
+      <Section heading="7. Réclamations">
         <p>
           <ToFill>
-            coordonnées de réclamation client et, le cas échéant, organisme de médiation
-            applicable au Maroc
+            adresse email et numéro de téléphone officiels pour les réclamations clients, ainsi que
+            toute procédure de médiation ou de règlement amiable finalement retenue
           </ToFill>
         </p>
       </Section>

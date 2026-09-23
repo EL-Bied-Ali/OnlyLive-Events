@@ -13,11 +13,17 @@ export default function PrivacyPolicyPage() {
 
   return (
     <LegalPage title="Politique de confidentialité" updatedNote="Brouillon — non publié.">
-      <Section heading="1. Qui sommes-nous">
+      <Section heading="1. Responsable du traitement">
         <p>
-          OnlyLive vend directement des billets pour des événements live au Maroc. Cette politique
-          décrit les données personnelles que nous collectons lorsque vous créez un compte,
-          achetez un billet, ou utilisez ce site, et comment elles sont utilisées.
+          Le responsable du traitement envisagé pour OnlyLive est ONLYLIVE ENTERTAINMENT, SARL AU
+          au capital de 100 000 MAD, siège social 59 Avenue Ibn Sina, Appartement n°11, Agdal,
+          Rabat, RC Rabat n° 201789, ICE 004012555000024.
+        </p>
+        <p>
+          <ToFill>
+            confirmer avant publication que cette société est bien l&apos;entité qui exploite le
+            site et détermine les finalités et moyens des traitements de données décrits ci-dessous
+          </ToFill>
         </p>
       </Section>
 
@@ -25,107 +31,138 @@ export default function PrivacyPolicyPage() {
         <p>Nous collectons notamment les informations suivantes :</p>
         <ul>
           <li>votre adresse email (nécessaire pour créer un compte et recevoir vos billets) ;</li>
-          <li>votre nom, si vous choisissez de le renseigner ;</li>
-          <li>votre numéro de téléphone, requis dès la création de votre compte ;</li>
+          <li>votre nom ;</li>
+          <li>votre numéro de téléphone, requis lors de la création de votre compte ;</li>
           <li>
             l&apos;historique de vos commandes et billets sur OnlyLive (catégorie, événement,
             statut) ;
           </li>
           <li>
-            un identifiant de scan lors du contrôle d&apos;accès à un événement (horodatage,
-            résultat du scan), sans donnée personnelle supplémentaire encodée dans le billet
-            lui-même ;
+            des informations liées au contrôle d&apos;accès (horodatage et résultat du scan) ;
           </li>
           <li>
             des données techniques et de sécurité nécessaires au fonctionnement du service, à la
-            prévention de la fraude et à la journalisation (par exemple : adresse IP utilisée pour
-            limiter les tentatives de connexion, données de session/authentification, journal des
-            événements de paiement, journal d&apos;audit interne).
+            prévention de la fraude et à la journalisation, par exemple l&apos;adresse IP utilisée
+            pour limiter certaines tentatives, les données de session/authentification, les
+            événements de paiement et les journaux d&apos;audit.
           </li>
         </ul>
         <p>
           Nous ne collectons jamais votre numéro de carte bancaire ni votre cryptogramme visuel
-          (CVV) : le paiement par carte est traité directement par ChariPay sur sa propre page de
-          paiement sécurisée.
+          (CVV) : la saisie des données de carte intervient sur la page de paiement hébergée par
+          ChariPay.
         </p>
       </Section>
 
-      <Section heading="3. Pourquoi nous les utilisons">
+      <Section heading="3. Finalités">
         <ul>
           <li>créer et sécuriser votre compte ;</li>
           <li>traiter votre commande et générer vos billets ;</li>
-          <li>vous envoyer les emails liés à votre commande (confirmation, billet, remboursement) ;</li>
+          <li>vous envoyer les communications transactionnelles liées à votre commande ;</li>
           <li>contrôler la validité de votre billet à l&apos;entrée de l&apos;événement ;</li>
+          <li>détecter et prévenir la fraude et les utilisations abusives du service ;</li>
           <li>
-            détecter et prévenir la fraude (par exemple, un billet déjà scanné) ;
-          </li>
-          <li>
-            <ToFill>toute autre finalité de traitement à confirmer (marketing, statistiques, etc.)</ToFill>
+            <ToFill>
+              confirmer toute finalité supplémentaire envisagée, notamment marketing ou
+              statistiques, avant de collecter ou réutiliser les données à cette fin
+            </ToFill>
           </li>
         </ul>
       </Section>
 
-      <Section heading="4. Avec qui nous les partageons">
+      <Section heading="4. Destinataires et prestataires">
         <p>
-          Nous partageons certaines données avec des prestataires strictement nécessaires au
+          Certaines données sont communiquées aux prestataires nécessaires au fonctionnement du
           service :
         </p>
         <ul>
-          <li>ChariPay (traitement du paiement) ;</li>
-          <li>Resend (envoi des emails transactionnels) ;</li>
+          <li>ChariPay, pour le traitement des paiements ;</li>
+          <li>Resend, pour l&apos;envoi des emails transactionnels ;</li>
+          <li>Vercel, pour l&apos;hébergement de l&apos;application ;</li>
           <li>
-            Vercel (hébergement de l&apos;application) et notre hébergeur de base de données ;{" "}
-            <ToFill>confirmer l&apos;hébergeur de base de données réellement utilisé en
-            production au moment de la mise en ligne</ToFill>
+            Neon, pour l&apos;hébergement de la base de données de production (région AWS
+            us-east-1, États-Unis) ;
           </li>
-          <li>le personnel OnlyLive habilité au contrôle d&apos;accès, lors d&apos;un événement.</li>
+          <li>le personnel OnlyLive habilité au contrôle d&apos;accès lors des événements.</li>
         </ul>
         <p>
           <ToFill>
-            confirmer la position officielle d&apos;OnlyLive sur la vente/le partage de données
-            personnelles à des tiers en dehors des prestataires listés ci-dessus (partenaires
-            marketing, etc.) — cette page ne doit pas l&apos;affirmer sans validation
+            confirmer qu&apos;aucun autre partage n&apos;est prévu, notamment avec des partenaires
+            marketing, ou documenter précisément ces destinataires et finalités s&apos;ils existent
           </ToFill>
         </p>
       </Section>
 
-      <Section heading="5. Durée de conservation">
+      <Section heading="5. Transferts de données à l'étranger">
+        <p>
+          L&apos;hébergement ou la transmission de données personnelles vers des prestataires
+          situés à l&apos;étranger nécessite d&apos;être documenté dans le dossier CNDP applicable.
+        </p>
         <p>
           <ToFill>
-            durées de conservation précises par type de donnée (compte, commande, journal de scan),
-            à définir avec l&apos;expert-comptable au regard des obligations comptables et fiscales
-            marocaines
+            après choix définitif de l&apos;infrastructure de production, renseigner les
+            prestataires, pays destinataires et références CNDP du traitement de base et du ou des
+            transferts à l&apos;étranger
           </ToFill>
         </p>
       </Section>
 
-      <Section heading="6. Vos droits">
+      <Section heading="6. Durée de conservation">
         <p>
           <ToFill>
-            liste des droits applicables (accès, rectification, suppression, opposition) et
-            procédure pour les exercer, à confirmer au regard de la loi marocaine 09-08 relative à
-            la protection des données à caractère personnel et des exigences de la CNDP
-          </ToFill>
-        </p>
-        <p>
-          <ToFill>
-            déterminer si une déclaration ou une autorisation auprès de la CNDP est requise pour
-            ces traitements et, le cas échéant, en renseigner la référence
+            définir les durées de conservation par catégorie de données (compte, commandes,
+            justificatifs comptables, paiements, journaux de sécurité, scans et audit) avec
+            l&apos;avocat et l&apos;expert-comptable ; ne pas appliquer une durée unique à toutes
+            les données
           </ToFill>
         </p>
       </Section>
 
-      <Section heading="7. Sécurité">
+      <Section heading="7. Vos droits">
+        <p>
+          Conformément à la loi marocaine n° 09-08, les personnes concernées disposent notamment
+          d&apos;un droit d&apos;accès et de rectification des données les concernant ainsi que,
+          pour des motifs légitimes, d&apos;un droit d&apos;opposition au traitement.
+        </p>
+        <p>
+          Pour exercer ces droits :{" "}
+          <ToFill>adresse email ou service dédié aux demandes relatives aux données personnelles</ToFill>
+        </p>
+        <p>
+          <ToFill>
+            renseigner le numéro du récépissé de déclaration / de l&apos;autorisation délivré par
+            la CNDP une fois la formalité accomplie
+          </ToFill>
+        </p>
+      </Section>
+
+      <Section heading="8. Formalités CNDP">
+        <p>
+          Au regard des traitements actuellement prévus dans l&apos;application et sous réserve
+          qu&apos;aucune donnée sensible, numéro de CIN ou traitement soumis à autorisation ne soit
+          ajouté, les lignes directrices de la CNDP orientent vers une déclaration préalable du
+          traitement. L&apos;hébergement ou la transmission de données à l&apos;étranger nécessite
+          en outre la formalité de transfert correspondante.
+        </p>
+        <p>
+          <ToFill>
+            faire déposer et valider les formalités CNDP avant mise en production, puis reporter
+            leurs références dans les mentions de collecte et cette politique
+          </ToFill>
+        </p>
+      </Section>
+
+      <Section heading="9. Sécurité">
         <p>
           Les mots de passe sont stockés sous forme hachée et ne sont jamais consultables en clair.
           Les billets contiennent un jeton de validation imprévisible et aucune donnée personnelle
-          ni identifiant de base de données séquentiel.
+          directement lisible dans leur code QR.
         </p>
       </Section>
 
-      <Section heading="8. Contact">
+      <Section heading="10. Contact">
         <p>
-          Pour toute question relative à vos données personnelles :{" "}
+          Pour toute question relative aux données personnelles :{" "}
           <ToFill>adresse email dédiée aux demandes de confidentialité</ToFill>
         </p>
       </Section>
