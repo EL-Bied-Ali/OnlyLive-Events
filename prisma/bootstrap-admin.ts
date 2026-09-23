@@ -33,17 +33,29 @@ async function main() {
     );
   }
 
+  const existing = await prisma.adminUser.findUnique({ where: { email: parsed.data.email } });
+  if (existing && (existing.role !== "super_admin" || !existing.isActive)) {
+    throw new Error(
+      `An AdminUser already exists for ${parsed.data.email} with role=${existing.role}, ` +
+        `isActive=${existing.isActive}. Refusing to silently change its role or reactivate it — ` +
+        "this script only rotates the password of an already-active super_admin, or creates a " +
+        "new one. Use a distinct email, or change the role/active status deliberately first.",
+    );
+  }
+
   const passwordHash = await hashPassword(parsed.data.password);
-  await prisma.adminUser.upsert({
-    where: { email: parsed.data.email },
-    update: { passwordHash },
-    create: {
-      email: parsed.data.email,
-      passwordHash,
-      name: "OnlyLive Admin",
-      role: "super_admin",
-    },
-  });
+  if (existing) {
+    await prisma.adminUser.update({ where: { email: parsed.data.email }, data: { passwordHash } });
+  } else {
+    await prisma.adminUser.create({
+      data: {
+        email: parsed.data.email,
+        passwordHash,
+        name: "OnlyLive Admin",
+        role: "super_admin",
+      },
+    });
+  }
   console.log(`Admin user ensured (${parsed.data.email}). Credentials are not printed.`);
 }
 

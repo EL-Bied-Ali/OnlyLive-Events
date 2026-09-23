@@ -98,8 +98,16 @@ leaked to the client.
 No default admin account is ever created silently. Both bootstrap paths
 below only create/update a `super_admin` when **both** `ADMIN_SEED_EMAIL`
 and `ADMIN_SEED_PASSWORD` are set in the environment (password: 16+
-characters, validated with zod); if either is missing, they skip admin
-creation entirely and say so. Neither script ever prints credentials.
+characters, validated with zod); if either is missing, they fail closed —
+`prisma/bootstrap-admin.ts` throws and exits non-zero rather than silently
+skipping. Neither script ever prints credentials.
+`prisma/bootstrap-admin.ts` also refuses to touch an email that already
+exists with a role other than `super_admin` or with `isActive: false`,
+rather than silently changing its role or reactivating it — the intent is
+to rotate the password of an already-active super_admin, or create a new
+one, never to escalate/reactivate an existing account implicitly. (Found
+and fixed 2026-09-23, second independent GPT audit pass on the new
+script.)
 
 **Two different scripts exist — use the right one:**
 
@@ -135,11 +143,16 @@ creation entirely and say so. Neither script ever prints credentials.
 
 **Rotation procedure**: re-run `npm run bootstrap-admin` (or `npm run
 seed` in a demo environment) with the same `ADMIN_SEED_EMAIL` and a new
-`ADMIN_SEED_PASSWORD` — the upsert updates `passwordHash` for an existing
-admin. The current catalogue interface does not manage staff credentials,
-so password rotation remains a re-seed operation. A future self-service
-password change must require the current password and invalidate the
-administrator's existing sessions.
+`ADMIN_SEED_PASSWORD` for an account that is already an active
+`super_admin` — this updates only `passwordHash`. The current catalogue
+interface does not manage staff credentials, so password rotation remains
+a re-seed operation. **This does not revoke existing `AdminSession` rows**
+— a session issued before rotation remains usable until its normal
+expiry (12 hours). This is not yet a complete emergency
+credential-revocation procedure; if a session itself may be compromised
+(not just the password), also delete the relevant `AdminSession` row(s)
+directly. A future self-service password change must require the current
+password and invalidate the administrator's existing sessions.
 
 ## Privacy
 
