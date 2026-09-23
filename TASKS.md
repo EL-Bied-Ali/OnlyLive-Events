@@ -1388,8 +1388,13 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    full smoke test now passes end-to-end against real Production.**
    `app/api/pay/fake/[paymentId]/simulate/route.ts` sends the bypass
    header (via `lib/payments/fakeWebhookForwarding.ts`, kept out of the
-   Route Handler file itself per a second GPT review — `route.ts` only
-   validates HTTP-method/segment-config exports) and resolves the
+   Route Handler file itself as a precaution per a second GPT review —
+   Next.js's documented convention is that `route.ts` only exports HTTP
+   methods and segment config, though this project's own local `next
+   build` (Turbopack, Next 16.3.5) had actually succeeded either way,
+   with the extra export present and un-warned-about; moving it out
+   removes the risk on a payment file regardless of whether it would
+   have failed) and resolves the
    self-call target from `NEXTAUTH_URL` (`lib/appUrl.ts`'s
    `absoluteAppUrl()`), not `request.url`, since a real secret is now
    attached to that request. The Protection Bypass for Automation secret
