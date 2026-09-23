@@ -1402,11 +1402,11 @@ get its own fresh audit rather than reusing this one.
    diagnosed). Not a codebase defect; a local test-environment hygiene gap
    (this repo's own test database is otherwise treated as ephemeral/CI-only
    and normally never accumulates a real backlog). No code change made.
-   Worth a follow-up at some point: either `claimNextExpiredCheckoutPayment`
-   could scope more defensively, or (simpler) local dev docs should note
-   that a long-lived local Postgres for this suite should be truncated
-   periodically — genuinely low priority, since CI's disposable database
-   never has this problem.
+   Follow-up closed 2026-09-23: README now explicitly documents that
+   `TEST_DATABASE_URL` should be disposable and that a deliberately
+   long-lived local Postgres test database must have its application data
+   reset periodically. No reconciliation-code change is warranted for a
+   local-fixture hygiene problem that CI's fresh databases do not exhibit.
 1. Finish validating PR #13 against the real ChariPay sandbox account: the
    webhook endpoint is registered, a synthetic event was captured, and a
    real successful hosted checkout's `payment.succeeded` webhook is now
@@ -1827,9 +1827,13 @@ get its own fresh audit rather than reusing this one.
    checkout has the identical redirect-then-wait shape as a real hosted
    checkout, so it isn't exempt from the race by construction, but
    `paid_but_unfulfillable`/`reconciliation_required` already degrade it to
-   a flagged order rather than an oversold ticket. Whether that's an
-   acceptable interim posture for `main` pending PR #13, or worth its own
-   narrow follow-up PR, is still open — not yet discussed with GPT.
+   a flagged order rather than an oversold ticket. Decision after GPT review
+   (2026-09-23): **do not backport the exclusion alone.** This branch couples
+   it with checkout/provider reconciliation that eventually releases
+   order-linked expired holds after provider resolution; `main` lacks that
+   lifecycle, so copying only `order_id IS NULL` could strand abandoned fake
+   checkouts as reserved inventory indefinitely. Keep `main`'s bounded
+   expiry behavior until PR #13 brings the complete reconciliation lifecycle.
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
