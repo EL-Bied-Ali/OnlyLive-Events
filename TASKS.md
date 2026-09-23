@@ -692,14 +692,27 @@ separately in commit `dad10c6`.
    existing customer add a phone number. Needs a small "complete your
    phone" flow, ideally surfaced at the start of checkout. Not a blocker if
    production has no real historical customers yet by go-live.
-9. Low-priority maintenance (flagged by GPT's final #48 review, 2026-09-22):
-   `.github/workflows/dispatch-emails-cron.yml` pins `actions/github-script`
-   to `60a0d83…` (v7.0.1, the exact commit GPT's original audit vetted).
-   GitHub Actions now emits a Node.js 20 deprecation warning for it (forced
-   onto Node 24 at runtime) — it still works today, including OIDC token
-   generation, but the current released version is v9.0.0. Since this
-   action runs with `id-token: write`, don't bump it casually; audit a
-   newer immutable SHA against the same OIDC-minting usage before updating.
+9. **AUDIT DONE (2026-09-23) — runtime verification pending:**
+   `actions/github-script` bumped from `60a0d83…` (v7.0.1) to `3a2844b…`
+   (v9.0.0) in `.github/workflows/dispatch-emails-cron.yml`, following an
+   independent GPT audit rather than bumping casually (this action runs
+   with `id-token: write`, so a supply-chain regression here is
+   high-stakes). Audit found: the workflow only calls
+   `core.getIDToken()`/`setSecret()`/`setOutput()`, never Octokit or
+   `@actions/github`, so v9's Octokit-related breaking changes don't apply;
+   v7.0.1 and v9.0.0 lock the exact same `@actions/core` 1.10.1 tarball
+   (same npm integrity hash), so the OIDC code path itself is
+   byte-identical between versions; the runner (2.337.0) exceeds v8+'s
+   minimum (2.327.1); and the upstream repo's own `check-dist` step
+   rebuilds `dist/` from source and fails the bundle if it doesn't match —
+   this audit read the source/locked dependencies but did not
+   independently byte-diff the full built v9 bundle itself. Resolves the
+   Node 20 deprecation warning the pinned v7.0.1 was emitting.
+   **Still needed before fully closing this item:** a real
+   `workflow_dispatch` run against this exact SHA, confirming it still
+   mints the OIDC token, passes Vercel's Trusted Sources check, and the
+   dispatcher receives a real response — GPT's own recommended final gate,
+   not yet executed.
 10. Decide whether `feat/charipay-integration`'s `order_id IS NULL`
     in-flight-checkout exclusion (excluding order-linked reservations from
     lazy release/expiry-counting, so a real hosted-checkout redirect can't
