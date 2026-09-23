@@ -556,14 +556,26 @@ over as a clean, email-only slice, deliberately without any ChariPay code:
   `tests/integration/dispatch-emails-route.test.ts`,
   `tests/integration/emailDispatchConcurrency.test.ts`,
   `tests/unit/email/eagerDispatch.test.ts`,
-  `tests/unit/email/resendProvider.test.ts`. Full suite: 245/245 passing,
+  `tests/unit/email/resendProvider.test.ts`, plus
+  `tests/integration/sweep-expired-holds-route.test.ts` (added for the
+  auth-surface change below). Full suite: 249/249 passing,
   `tsc --noEmit`/`eslint`/`next build` all clean.
 - Deliberately not ported: the CI Postgres-TimeZone regression guard in
   `tests/setup.ts` that enforces the `now()`-vs-naive-timestamp fix stays
   caught (would require also updating `.github/workflows/ci.yml`'s
-  Postgres service `TZ`, which `main`'s CI doesn't currently set) — the
-  application-code fix itself is included either way; only the extra CI
-  safety net is deferred as a smaller follow-up.
+  Postgres service `TZ`, which `main`'s CI doesn't currently set). Only
+  the email/outbox and `payment_events.received_at` timestamp fixes are
+  included by this port — **not** `lib/inventory.ts`'s identical bug
+  class, which remains genuinely present on `main` (see item 10 below);
+  the extra CI safety net is a smaller follow-up once that's addressed
+  too.
+- `sweep-expired-holds` now shares `dispatch-emails`'s
+  `isInternalRequestAuthorized` (`X-Internal-Secret` or Vercel Cron's
+  `Authorization: Bearer <CRON_SECRET>`) and exposes `GET` alongside
+  `POST`, matching its own doc comment's claim (GPT catch — this route
+  had been left on the old raw-secret-only, POST-only check while the
+  ported `dispatch-emails` comment already described both routes as
+  sharing the same pattern); covered by the new test file above.
 - `.env.example` and `docs/ARCHITECTURE.md` updated to describe Resend/
   eager-dispatch/Cron-auth instead of the stale "console only, no real
   provider" description; `TASKS.md`'s own pre-existing self-contradiction
