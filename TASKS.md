@@ -582,7 +582,7 @@ over as a clean, email-only slice, deliberately without any ChariPay code:
    reconciliation from that provider's real lifecycle and revisit holding a
    database row lock across the real network refund call.
 2. ~~Select a real email provider~~ — done: Resend is selected and
-   integrated (`lib/email/resendProvider.ts`, PR TBD — ported from
+   integrated (`lib/email/resendProvider.ts`, PR #81 — ported from
    `feat/charipay-integration`, where it was already implemented,
    audited, and verified end-to-end via a real unattended purchase on
    Preview). This wording was previously inaccurate on `main`: the
@@ -618,6 +618,29 @@ over as a clean, email-only slice, deliberately without any ChariPay code:
    generation, but the current released version is v9.0.0. Since this
    action runs with `id-token: write`, don't bump it casually; audit a
    newer immutable SHA against the same OIDC-minting usage before updating.
+10. **`main`'s `lib/inventory.ts` still has the naive-timestamp-vs-`now()`
+    bug** (found by GPT auditing PR #81; three raw-SQL comparisons —
+    `releaseExpiredAndLock`, the per-user purchase-limit count in
+    `createHold`, and `sweepExpiredHolds` — compare the naive `expires_at`
+    timestamp column against a bare `now()`, which implicitly casts through
+    the session's `TimeZone` GUC before comparing, silently skewing every
+    hold's effective lifetime whenever Postgres isn't running with
+    `TimeZone=UTC`). This is the exact same bug class already fixed in
+    `lib/email/dispatcher.ts` and (via PR #81) the fake webhook's
+    `payment_events.received_at` insert, but affects the core
+    oversell-prevention hold-expiry mechanism specifically, not just email
+    scheduling. **Deliberately not fixed as part of PR #81** (an email-only
+    backport): `feat/charipay-integration`'s version of this fix is heavily
+    entangled with unrelated in-flight-checkout behavior added for ChariPay
+    (excluding order-linked reservations — `order_id IS NULL` — from lazy
+    release/expiry-counting, since a hosted-checkout redirect can leave a
+    reservation "expired" locally while a real async payment is still in
+    flight). Needs its own careful review: on `main`, decide whether the
+    same order-linked-exclusion behavior is independently correct
+    regardless of provider (the fake provider's checkout page can also sit
+    open past a hold's expiry) or whether just the narrow
+    `now()` → `(now() AT TIME ZONE 'UTC')` comparison fix can land alone
+    without also changing lazy-release semantics for in-flight checkouts.
 
 ## Blocked
 
