@@ -1377,13 +1377,47 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    `fetch()` send `x-vercel-protection-bypass` from
    `VERCEL_AUTOMATION_BYPASS_SECRET` when that env var is set, preserving
    the full path (simulate route → real HTTP call → webhook route →
-   signature check → DB transaction → ticket). Scanner validation is
-   still blocked on this, since it requires a real paid ticket to scan.
-   Before real customer traffic: connect the real custom domain, register
-   ChariPay's webhook against it (e.g. `<domain>/api/payments/webhook/charipay`),
-   run one real synthetic ChariPay webhook end-to-end against that domain
-   and confirm a real `2xx`, and keep the `.vercel.app` URLs protected
+   signature check → DB transaction → ticket). Before real customer
+   traffic: connect the real custom domain, register ChariPay's webhook
+   against it (e.g. `<domain>/api/payments/webhook/charipay`), run one
+   real synthetic ChariPay webhook end-to-end against that domain and
+   confirm a real `2xx`, and keep the `.vercel.app` URLs protected
    permanently.
+
+   **Update, 2026-09-23 — implemented (PR #79, merged to `main`) and the
+   full smoke test now passes end-to-end against real Production.**
+   `app/api/pay/fake/[paymentId]/simulate/route.ts` sends the bypass
+   header (via `lib/payments/fakeWebhookForwarding.ts`, kept out of the
+   Route Handler file itself per a second GPT review — `route.ts` only
+   validates HTTP-method/segment-config exports) and resolves the
+   self-call target from `NEXTAUTH_URL` (`lib/appUrl.ts`'s
+   `absoluteAppUrl()`), not `request.url`, since a real secret is now
+   attached to that request. The Protection Bypass for Automation secret
+   turned out to already exist on this project (added 2026-09-14, visible
+   as a "System Environment Variable" in the dashboard's Deployment
+   Protection settings — it does not appear in the project-envs API
+   listing this session otherwise relied on, since system env vars are a
+   distinct category). Vercel auto-deployed `main` on the PR #79 merge
+   (`dpl_8tujtYmsCZXsXcP3wAf9nFAaNtTU`); `get_runtime_errors` showed zero
+   errors afterward.
+
+   Re-ran "Simuler un paiement réussi" on the same held reservation from
+   the earlier attempt: **succeeded**, redirected to the real order page.
+   Verified via a read-only Neon query, not just the redirect: `orders`
+   row `status = paid`, its `payments` row `status = paid`, and a real
+   `tickets` row (`status = valid`) with a generated validation token.
+   Scanner test: logged into `/scanner` with the existing admin session
+   (`super_admin` is an allowed scanner role per `lib/auth/admin.ts`),
+   manually entered the ticket's validation token — **first scan: green
+   "Entrée acceptée"; immediate re-scan of the same token: orange "Déjà
+   scanné"**, both recorded with timestamps in the scan history panel.
+   This is the full admin/catalogue/checkout/payment/ticket/scanner
+   smoke test item 6 has tracked, now passing end-to-end against the
+   real `onlylive-production` deployment. Scanner-side concurrent-scan
+   atomicity (two scanners racing the same ticket) was not separately
+   re-verified here — already covered by this project's existing
+   automated test suite, not something this manual smoke test needed to
+   repeat.
 
 ## Blocked
 
