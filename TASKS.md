@@ -1133,18 +1133,107 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    payment invariants after restore; CI executes it on a freshly migrated
    empty test database to catch schema/SQL drift, and `.gitignore` blocks
    common dump artifacts.
-   Still required before go-live: provision the separate production Neon
-   project, choose/verify its region against Vercel, configure paid recovery
-   retention + independent backup storage, and then perform a timed
-   recovery drill using a real production backup/PITR recovery into a
-   disposable, isolated restore target (never the live production
-   database itself), followed by the invariant check and application
-   smoke tests. The local-cluster run above proves the scripts' mechanics,
-   not a production drill — it used a throwaway, non-application cluster
-   and a stripped-down test schema.
+   **Update, 2026-09-23 — the real production Neon project now exists and
+   Vercel Production is live and functional.** Created `onlylive-production`
+   (Neon project id `delicate-flower-79359696`), region `aws-us-east-1` —
+   deliberately not the sandbox's `aws-us-east-2`, chosen by actually reading
+   a real Vercel build log's region (`iad1`, Washington D.C.) rather than
+   copying the sandbox by assumption, per this file's own long-standing
+   instruction above. Ran `prisma migrate deploy` against it for real (9
+   migrations applied cleanly) and `scripts/recovery-smoke.sql` for real (0
+   violations on every invariant). `DATABASE_URL` (Neon's pooled connection —
+   confirmed locally that `prisma migrate deploy` works through Neon's
+   pooler without issue, so a single connection string safely covers both
+   migrations and runtime here) is now set in Vercel Production.
+
+   Getting an actual successful Production deployment exposed a real,
+   pre-existing gap: **every Production environment variable this project
+   had ever documented was still an empty, never-filled Vercel scaffold
+   placeholder** (`NEXTAUTH_URL`, `NEXTAUTH_SECRET`, `ADMIN_SESSION_SECRET`,
+   `PAYMENT_PROVIDER`, `RATE_LIMIT_KEY_SECRET`, `INTERNAL_API_SECRET`,
+   `FAKE_PSP_WEBHOOK_SECRET`, `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION` — Production
+   had literally never been deployed successfully before). Fixed, with
+   GPT's explicit sign-off sought before touching anything security-relevant:
+   - the five random secrets: generated fresh (`openssl rand -base64 32`,
+     distinct from Preview's values, never pasted into chat/logs/Git);
+   - `NEXTAUTH_URL`: the user confirmed the default Vercel URL
+     (`https://onlylive-events-el-bied-alis-projects.vercel.app`) since no
+     custom domain is connected yet;
+   - `PAYMENT_PROVIDER=fake` + `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION=true`:
+     GPT's sign-off was explicitly conditional on this Production deployment
+     being access-protected with no real customer traffic — confirmed via
+     Vercel's own project settings (`ssoProtection.enabled: true,
+     deploymentType: "all_except_custom_domains"`) that the default
+     `.vercel.app` URL genuinely requires Vercel team SSO to reach; **this
+     must be revisited (remove the fake-payment override, add real ChariPay
+     credentials) before any real customer traffic.**
+
+   A green Vercel "READY" status then turned out to be insufficient by
+   itself: querying Vercel's own runtime-error aggregation caught a real
+   crash — `Unknown EMAIL_PROVIDER: resend. Only "console" is implemented so
+   far.` Root cause, confirmed by reading the actual deployed code: **this
+   Vercel Production deployment builds from `main`, not
+   `feat/charipay-integration`** — `main`'s `lib/email/index.ts` genuinely
+   only implements `ConsoleEmailProvider`; every Resend/ChariPay adapter
+   lives exclusively on `feat/charipay-integration`, matching this project's
+   own branch strategy (ChariPay/Resend stay draft-gated pending the
+   independent audit below and KYB approval, and must not reach `main`
+   before that). Setting `EMAIL_PROVIDER=resend` in Production was therefore
+   a mistake — corrected to `EMAIL_PROVIDER=console` +
+   `ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=true`, the exact non-production-traffic
+   allowance already coded for this. Re-verified: deployment `READY`, and the
+   user independently confirmed the real homepage renders correctly through
+   the SSO wall.
+
+   **Correction, 2026-09-23 (GPT catch on PR #77):** the original "zero
+   runtime errors afterward" claim above was inaccurate — Vercel's own
+   runtime-error aggregation still showed a real
+   `SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are
+   treated as aliases for 'verify-full'` warning from the `pg` driver,
+   because `main`'s `lib/db.ts` lacks the code-level `sslmode` normalization
+   that only exists on `feat/charipay-integration` (PR #76). Fixed by setting
+   `sslmode=verify-full` explicitly in the `DATABASE_URL` connection string
+   itself (Vercel env var, not code) and triggering a fresh redeploy.
+   Verified by ordering, not assumption: the `DATABASE_URL` edit timestamp
+   (`1790123522448`) precedes the current live Production deployment's
+   creation (`dpl_DQ6x7KW8tcNARMaB1xSUy4peMnXg`, created `1790129513633`,
+   `READY`, aliased to production) — so that deployment's Lambda runtime
+   only ever read the corrected connection string. Re-querying
+   `get_runtime_errors` confirms zero errors of any kind (including the SSL
+   warning) attributed to `dpl_DQ6x7KW8tcNARMaB1xSUy4peMnXg` specifically;
+   the SSL warning remains visible in Vercel's history but only against the
+   prior deployment (`dpl_9hYPRgAXBYGCrQXKmCqKkJfmKxw2`), which predates the
+   fix. A direct authenticated request against the SSO-protected alias was
+   not exercised as part of this check.
+   `RESEND_API_KEY`/`RESEND_FROM_EMAIL` were left set in Production during
+   this pass but are dormant — `main` cannot read them — and per GPT's
+   review should be removed for now (an unused live secret is unnecessary
+   exposure, and leaving it risks a future branch-merge/config mistake
+   silently activating real email instead of failing loudly); re-add both,
+   deliberately, only once `feat/charipay-integration` actually reaches
+   `main`.
+
+   **This still is not the real production restore drill this gate
+   requires.** Still needed before go-live: configure paid recovery
+   retention (current project is on Neon's free tier — 6-hour PITR window,
+   not the >=7-day target) + independent backup storage, then perform a
+   timed recovery drill using a real production backup/PITR recovery into a
+   disposable, isolated restore target (never the live production database
+   itself), followed by the invariant check and the application smoke
+   tests below.
    Do not infer the current Vercel Preview database from the connected Neon
    project named for the sandbox: read-only inspection on 2026-09-19 found
    that project contains no application tables.
+
+   **Also clarified, 2026-09-23:** CLAUDE.md's "triage an independent
+   audit" gate for ChariPay/PR #13 does not name who performs it. The user
+   explicitly confirmed the Claude/GPT cross-audit pattern already used
+   throughout this project (every substantive PR reviewed by whichever of
+   the two didn't write it, before merge — see this file's own history) is
+   sufficient for PR #13 too, rather than requiring a separate external or
+   professional security review. (Attempted to record this directly in
+   CLAUDE.md; blocked by this environment's own guard against an agent
+   editing its own instructions file — recorded here instead.)
 4. **Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
    structural placeholders now published, real legal review still required.**
    Added four draft pages (`/legal/mentions-legales`,
@@ -1199,6 +1288,33 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    real traffic, then tune/enforce without replacing account-level limiting.
 6. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
+   **Update, 2026-09-23:** now actually attemptable — Vercel Production was
+   previously never in a working state at all (see item 3's update above).
+
+   **Correction, 2026-09-23 (GPT catch on PR #77):** the original plan here
+   ("seed an admin account") implicitly meant running `npm run seed`, which
+   is unsafe against a real production database — `prisma/seed.ts`
+   unconditionally creates the full demo catalogue (the real Tiakola/
+   Casablanca venue, event marked `on_sale`, three ticket categories,
+   inventory, two sales phases each) regardless of whether admin credentials
+   are supplied, which would create a real-looking on-sale event in
+   `onlylive-production`. Fixed by adding `prisma/bootstrap-admin.ts`
+   (`npm run bootstrap-admin`), a narrowly-scoped script that upserts
+   exactly one `super_admin` `AdminUser` row from `ADMIN_SEED_EMAIL`/
+   `ADMIN_SEED_PASSWORD` and touches nothing else — verified locally against
+   a throwaway Postgres cluster (admin_users count 1→2; events/venues/
+   ticket_categories/inventory/sales_phases counts unchanged at
+   1/1/3/3/6). `docs/SECURITY.md`'s admin-bootstrap section now documents
+   the split: `npm run seed` for fresh dev/demo databases only, `npm run
+   bootstrap-admin` for any existing/production database.
+
+   Still needed: run `npm run bootstrap-admin` for real against
+   `onlylive-production` with a freshly generated password (never pasted
+   into chat/Git/logs), then create the smoke-test venue/event/category
+   through the real Production admin UI itself — not via seed script, since
+   catalogue creation is itself one of the things being tested — then the
+   actual admin login/logout, catalogue-mutation, and scanner-validation
+   walkthrough against the live deployment.
 
 ## Blocked
 
