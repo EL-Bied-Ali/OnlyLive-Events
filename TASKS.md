@@ -1308,13 +1308,82 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    the split: `npm run seed` for fresh dev/demo databases only, `npm run
    bootstrap-admin` for any existing/production database.
 
-   Still needed: run `npm run bootstrap-admin` for real against
-   `onlylive-production` with a freshly generated password (never pasted
-   into chat/Git/logs), then create the smoke-test venue/event/category
-   through the real Production admin UI itself — not via seed script, since
-   catalogue creation is itself one of the things being tested — then the
-   actual admin login/logout, catalogue-mutation, and scanner-validation
-   walkthrough against the live deployment.
+   **Update, 2026-09-23 — smoke test actually run against real Production.**
+   `npm run bootstrap-admin` run for real against `onlylive-production`
+   (verified via read-only query: exactly one active `super_admin`,
+   `ali.el.bied9898@gmail.com`; catalogue tables still all zero
+   immediately before/after). Admin login/logout: **passed** — real
+   dashboard renders, correct empty-state counts. Catalogue mutation:
+   **passed** — created a clearly-labeled `SMOKE TEST` venue, event
+   (`draft`, then `on_sale`), ticket category (capacity 5) and an active
+   sales phase (100 MAD) through the real admin UI; each step verified via
+   a read-only Neon query, not just the UI. Customer checkout/hold:
+   **passed** — reservation created with the expected 15-minute expiry
+   countdown.
+
+   **Payment confirmation: failed, and found a real production-readiness
+   gap, not a test-setup mistake.** Clicking "Simuler un paiement réussi"
+   on `/pay/fake/[paymentId]` returns a 401 every time. Root-caused by
+   inspecting the actual response shape (not just the status code): the
+   outer `POST /api/pay/fake/[paymentId]/simulate` route runs
+   successfully to completion (session, payment ownership, and signature
+   generation all fine) and reaches its final step, an internal
+   server-to-server `fetch()` call to this same deployment's own public
+   URL at `/api/payments/webhook/fake`. That inner call is the one
+   receiving the 401 — confirmed via Vercel's `get_runtime_logs`, which
+   shows **zero invocations of the webhook route** across multiple
+   attempts, meaning the request never reached our Next.js code at all.
+   **Correction (GPT catch):** the fake and real ChariPay webhooks are
+   different routes (`/webhook/fake` vs `/webhook/charipay`), not the same
+   application code path — what they share, and what's actually the
+   problem, is the same Vercel ingress + Deployment Protection layer
+   sitting in front of both.
+
+   The cause: this Vercel project has `ssoProtection.enabled: true` with
+   `deploymentType: "all_except_custom_domains"`, and **no custom domain
+   is connected yet** — so every current URL, including this internal
+   self-call, is behind the Vercel SSO wall. Vercel's own protection layer
+   is intercepting the request before Next.js ever sees it.
+
+   **This is a real production-launch blocker, not just a test artifact:**
+   once ChariPay is live, its real webhook deliveries will hit a
+   `.vercel.app`-hosted URL from outside Vercel's network with no SSO
+   session, and would be blocked identically today. **Correction (GPT
+   catch):** the original claim that ChariPay has "no way" to send a
+   Vercel bypass header was wrong — ChariPay's webhook config supports
+   static custom headers (its documented restrictions only forbid
+   overriding `Host`, `Authorization`, `Cookie`, `Chari-*`, `X-CHARI-*`),
+   so `x-vercel-protection-bypass` is a real provider-side option, and
+   Vercel also documents a query-parameter form of the same bypass for
+   providers that can't set custom headers at all. Launch must still not
+   happen against an SSO-protected `.vercel.app` URL, but the fix is a
+   choice, not a hard blocker with only one option: (a) connect a real
+   custom domain before go-live — Vercel's own `deploymentType` setting
+   already exempts custom domains from SSO protection, so this is the
+   normal, recommended path (preview URLs stay protected, the production
+   domain is public, webhook security then rests on ChariPay's signature/
+   payload validation and app rate limits, not Vercel SSO); or (b)
+   configure Vercel's "Protection Bypass for Automation" and register that
+   header in ChariPay's webhook config — technically workable per the
+   above, but couples the PSP to a Vercel-specific secret that must be
+   stored/rotated/kept in sync on ChariPay's side, so it's a reasonable
+   fallback/test aid, not the final architecture.
+
+   **Smoke-test unblock (GPT's recommendation):** don't rewrite the
+   simulate route to process the webhook in-process — that would remove
+   exactly the part of the test worth having (the real HTTP call through
+   the real webhook route). Instead, enable Vercel's Protection Bypass for
+   Automation for this project and have the simulate route's internal
+   `fetch()` send `x-vercel-protection-bypass` from
+   `VERCEL_AUTOMATION_BYPASS_SECRET` when that env var is set, preserving
+   the full path (simulate route → real HTTP call → webhook route →
+   signature check → DB transaction → ticket). Scanner validation is
+   still blocked on this, since it requires a real paid ticket to scan.
+   Before real customer traffic: connect the real custom domain, register
+   ChariPay's webhook against it (e.g. `<domain>/api/payments/webhook/charipay`),
+   run one real synthetic ChariPay webhook end-to-end against that domain
+   and confirm a real `2xx`, and keep the `.vercel.app` URLs protected
+   permanently.
 
 ## Blocked
 
