@@ -5,11 +5,23 @@ declare global {
   var __prisma: PrismaClient | undefined;
 }
 
+export function normalizeDatabaseConnectionString(connectionString: string): string {
+  // pg 8.x currently treats prefer/require/verify-ca as verify-full, but
+  // pg 9 will switch those names to libpq's weaker semantics. Make the
+  // security level we rely on explicit now so an eventual dependency
+  // upgrade cannot silently weaken certificate verification.
+  return connectionString.replace(
+    /([?&]sslmode=)(prefer|require|verify-ca)(?=(&|$))/gi,
+    "$1verify-full",
+  );
+}
+
 function createPrismaClient(): PrismaClient {
-  const connectionString = process.env.DATABASE_URL;
-  if (!connectionString) {
+  const configuredConnectionString = process.env.DATABASE_URL;
+  if (!configuredConnectionString) {
     throw new Error("DATABASE_URL is not set");
   }
+  const connectionString = normalizeDatabaseConnectionString(configuredConnectionString);
   const adapter = new PrismaPg({ connectionString });
   return new PrismaClient({ adapter });
 }

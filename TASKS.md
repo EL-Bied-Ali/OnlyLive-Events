@@ -627,6 +627,143 @@ running this migration — not a concern for the app's current state.
   failed, lookup outages/pending state fail closed, and exact duplicates do
   not consume an extra provider lookup.
 
+## Completed (email dispatch scheduling — issue #48, PRs #52/#53/#54)
+
+Real ChariPay sandbox purchases and Resend delivery already worked before
+this; the outstanding gap was that nothing reliably called
+`dispatchPendingEmails()` at all outside of manual testing (Vercel Hobby's
+native cron only runs once/day — too infrequent for order-confirmation
+email).
+
+- **PR #52 — eager dispatch trigger.** `lib/email/eagerDispatch.ts` wraps
+  `after()` (from `next/server`) around `dispatchPendingEmails()`, called
+  from the 5 places that enqueue a customer-facing email: both webhook
+  handlers, the expired-holds sweep, admin manual fulfillment, and the
+  customer's own payment-reconciliation poll route (gated —
+  `if (result.reconciled)` only — so routine ~5s poll traffic never
+  triggers a dispatch scan). `after()` throws synchronously outside a real
+  Next.js request scope; the wrapper swallows that and logs only a fixed
+  safe code, never the raw exception (a privacy regression GPT's audit
+  caught and had fixed before merge). This is the near-real-time delivery
+  path; the scheduler below is the backstop for whatever it misses.
+- **PR #53 → #54 — GitHub Actions scheduler, `main`'s
+  `.github/workflows/dispatch-emails-cron.yml`.** Runs every 5 minutes
+  (GitHub's documented minimum interval; best-effort, not guaranteed),
+  calling `/api/internal/dispatch-emails` and failing the run (red X) on
+  any `permanentlyFailed` row or a response that doesn't validate as
+  `{claimed,sent,retried,permanentlyFailed,skipped}` all non-negative
+  integers.
+  - **PR #53's real-world failure, found only by an actual
+    `workflow_dispatch` run, not by review:** Vercel's own Deployment
+    Protection (SSO wall) 302-redirects any unauthenticated caller to
+    `vercel.com/sso-api` *before* the request ever reaches the app's own
+    `X-Internal-Secret` check — a platform-level auth layer, completely
+    separate from and in front of the app's. An earlier claim of having
+    "verified" the endpoint was invalid: that test ran through an
+    authenticated browser session carrying a Vercel SSO cookie, which a
+    bare `curl` (what GitHub Actions actually sends) does not have.
+  - **PR #54's fix:** GitHub Actions OIDC (`actions/github-script`'s
+    `core.getIDToken()`, `permissions: id-token: write`) sent as
+    `x-vercel-trusted-oidc-idp-token`, verified by Vercel's "Trusted
+    Sources" feature (Project Settings → Deployment Protection → Trusted
+    Sources → GitHub Actions, scoped to this repo, branch `main`,
+    environment Preview) — chosen over a second static
+    "Protection Bypass for Automation" secret since it needs no long-lived
+    credential. Pinned to the exact `actions/github-script` commit SHA
+    GPT's audit specifically vetted (`60a0d83…`, v7.0.1) rather than
+    whatever the mutable `v7` tag currently points at (confirmed
+    `dist/index.js`/`src/main.ts` genuinely differ from v7.1.0 — "pinned
+    to an immutable SHA" and "pinned to the SHA someone actually audited"
+    are not the same guarantee).
+  - **Real end-to-end verification, not just green CI:** a
+    `workflow_dispatch` run against `main` post-merge returned genuine
+    dispatcher JSON (`{"claimed":0,"sent":0,"retried":0,
+    "permanentlyFailed":0,"skipped":0}`), confirmed by reading the actual
+    run log, not just its pass/fail status. A no-OIDC-token baseline run
+    (the pre-merge workflow) still hit the SSO wall's `"Redirecting..."`,
+    confirming Trusted Sources doesn't open the door for non-OIDC
+    requests either.
+  - **A self-inflicted false alarm during testing, worth recording:**
+    dispatching the OIDC-enabled workflow against the PR's own feature
+    branch (to avoid touching `main` pre-merge) also hit the SSO wall —
+    not a Vercel bug, but because Trusted Sources exactly matches every
+    configured claim including the branch, and the rule is (correctly)
+    scoped to `main` only, since GitHub only ever evaluates `schedule`
+    triggers from the default branch anyway.
+  - Also caught in GPT's audit before merge: a temporary debug step added
+    during troubleshooting called the real `dispatch-emails` endpoint a
+    second time per run (the production step ran again right after),
+    double-invoking a stateful, side-effecting endpoint — removed before
+    merge (verified the merged file is byte-identical to the previously
+    audited commit).
+  - Note on process, not substance: GPT cannot submit a formal GitHub
+    "Approved" review on this repo — its connected GitHub identity is the
+    same account as the PR author, and GitHub blocks self-approval/
+    self-request-changes. Its audits are recorded as `COMMENTED` reviews
+    with explicit pass/fail findings instead; treat those, not the GitHub
+    review-decision field, as the real audit record here.
+- **PR #56 — real GitHub-side schedule-registration bug, found only by
+  actually watching the run history, not by review.** After #54 merged,
+  the `schedule` trigger fired **zero times in 2.5+ hours** (~31 missed
+  5-minute windows), despite the workflow reporting `active`, the repo
+  being public/non-fork/non-archived, Actions permissions allowing all,
+  and the correct `schedule:` block being present on `main`'s HEAD.
+  Independently confirmed by a second GPT session directly querying
+  `repos/.../actions/runs?event=schedule` (`total_count: 0`) — matching
+  the exact signature of real 2026 GitHub Community reports of a
+  scheduler-registration bug (manual dispatch works, valid cron, GitHub
+  simply never emits the `schedule` event). Fix: changed the cron from
+  `*/5 * * * *` to `2-59/5 * * * *` — same 5-minute cadence, offset off
+  the round `:00/:05/:10...` boundaries. This is *not* a documented
+  guarantee (GitHub's docs only promise cron-expression changes reactivate
+  a formally *deactivated* workflow, and this one reported as merely
+  `active`), only a reasonable attempt at the actual observed fault — a
+  wording overclaim GPT's audit caught and had corrected before merge.
+  It worked: the schedule trigger began firing within the next few
+  windows.
+- **Real end-to-end confirmation, both open items closed:**
+  - A genuine unattended purchase (real ChariPay sandbox card, real
+    signed webhook, `POST /api/payments/webhook/charipay 200`) delivered
+    its confirmation email via the eager `after()` trigger alone, with
+    zero manual `/api/internal/dispatch-emails` calls at any point.
+  - As of 2026-09-22, 13 genuine `event: schedule` runs have completed
+    successfully since the PR #56 fix, the most recent returning real
+    dispatcher JSON (`{"claimed":0,"sent":0,"retried":0,
+    "permanentlyFailed":0,"skipped":0}`), confirmed from the actual run
+    log.
+  - **Observed cadence caveat, worth recording honestly:** the 13 runs
+    are spaced roughly 2–5 hours apart, not every 5 minutes as
+    configured — GitHub is evidently still dropping the large majority of
+    windows for reasons not exposed by GitHub (the missed runs are
+    proven; the specific cause is not — don't overclaim a specific
+    load/tier explanation we can't actually verify).
+    This matches the workflow's own documented caveat ("best-effort, can
+    be delayed or silently dropped") taken to a further extreme than
+    expected. Not re-chased further: the eager `after()` trigger (PR #52)
+    remains the actual near-real-time delivery path in every normal case;
+    this scheduler is strictly the backstop for whatever that path
+    misses, and firing every few hours instead of every 5 minutes still
+    closes that gap far better than the zero-runs status quo it replaced.
+    If this ever matters more (e.g. once real production volume makes a
+    multi-hour stuck-email window unacceptable), the next step is a
+    GitHub Support ticket referencing workflow ID `362547657`, not
+    further changes to this app's own code. Do not describe this
+    scheduler elsewhere as a "5-minute recovery guarantee" — if eager
+    dispatch ever fails with no subsequent purchase to trigger another
+    global dispatch, an affected email can genuinely sit for hours before
+    this backstop runs. Defensible for the current MVP given the
+    architecture chosen, but a real characteristic to keep accurate.
+  - Case not independently live-tested: OIDC-token-present-but-
+    `X-Internal-Secret`-absent returning an app-level 401. Not pursued
+    further — this is guaranteed by existing, already-tested application
+    code (the app's own secret check is unrelated to and unaware of the
+    Vercel-layer OIDC header), and adding another live probe here would
+    mean either a temporary workflow step invoking real production
+    endpoints again (the exact side-effect risk PR #56's own debug-step
+    incident already illustrated) or weakening this app's own auth for a
+    test, neither of which was judged worth it for an already-covered
+    code path.
+- Issue #48 closed 2026-09-22 with this evidence.
 
 ## In progress
 
@@ -1020,6 +1157,227 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
   schema and smoke tests, none of which a throwaway local cluster with a
   stripped-down test schema can stand in for.
 
+## Completed (production Resend email backport — branch feat/production-resend-email-backport)
+
+`main`'s email stack was missing several reliability fixes and the real
+Resend provider that only existed on `feat/charipay-integration` — brought
+over as a clean, email-only slice, deliberately without any ChariPay code:
+
+- New: `lib/email/resendProvider.ts` (`ResendEmailProvider`, real Resend
+  REST API delivery, idempotency-key forwarding, retryable-vs-permanent
+  error classification), `lib/email/runtime.ts`
+  (`isResendTestRecipientAllowed`), `lib/email/eagerDispatch.ts`
+  (`scheduleEagerEmailDispatch`, a best-effort immediate post-request
+  drain via Next.js `after()` — swallows the synchronous throw `after()`
+  raises outside a real request scope, e.g. every existing test that
+  calls a route handler directly, so it's always safe to call
+  unconditionally), and `lib/http/internalAuth.ts`
+  (`isInternalRequestAuthorized` — accepts either the existing
+  `X-Internal-Secret` or Vercel Cron's own `Authorization: Bearer
+  <CRON_SECRET>`, needed by the dispatch-emails route this port also
+  brought over unchanged).
+- Updated: `lib/email/dispatcher.ts`, `lib/email/index.ts`,
+  `lib/email/notifications.ts`, `lib/email/provider.ts`, and
+  `app/api/internal/dispatch-emails/route.ts` replaced wholesale with
+  `feat/charipay-integration`'s versions (confirmed zero ChariPay
+  references in any of them beforehand) — includes the privacy-safe
+  sanitized `EmailProviderError` codes, retryable/non-retryable
+  classification, and the naive-timestamp-vs-`now()` fix
+  (`next_attempt_at <= (now() AT TIME ZONE 'UTC')`, not a bare `now()`).
+- Hand-patched (not wholesale-copied, since the source files also carried
+  unrelated ChariPay-specific changes): `scheduleEagerEmailDispatch()`
+  wired into `app/api/payments/webhook/fake/route.ts` (which also picked
+  up the same `now()`-vs-naive-timestamp fix for its own
+  `payment_events.received_at` insert),
+  `app/api/internal/sweep-expired-holds/route.ts`, and
+  `app/(admin)/admin/orders/[orderId]/actions.ts`'s refund action —
+  skipped porting `getPaymentProviderByName`'s multi-provider refactor
+  (unneeded while `main` only has the `fake` provider) and the ChariPay
+  two-phase-refund `"processing"` state branch.
+- Test files replaced/added to match:
+  `tests/integration/notifications.test.ts`,
+  `tests/unit/email/fakeProvider.test.ts` (both had grown substantially
+  on the feature branch and would otherwise assert the old unsanitized
+  error-message behavior), plus the new
+  `tests/integration/dispatch-emails-route.test.ts`,
+  `tests/integration/emailDispatchConcurrency.test.ts`,
+  `tests/unit/email/eagerDispatch.test.ts`,
+  `tests/unit/email/resendProvider.test.ts`, plus
+  `tests/integration/sweep-expired-holds-route.test.ts` (added for the
+  auth-surface change below). Full suite: 249/249 passing,
+  `tsc --noEmit`/`eslint`/`next build` all clean.
+- Deliberately not ported: the CI Postgres-TimeZone regression guard in
+  `tests/setup.ts` that enforces the `now()`-vs-naive-timestamp fix stays
+  caught (would require also updating `.github/workflows/ci.yml`'s
+  Postgres service `TZ`, which `main`'s CI doesn't currently set). Only
+  the email/outbox and `payment_events.received_at` timestamp fixes are
+  included by this port — **not** `lib/inventory.ts`'s identical bug
+  class, which remains genuinely present on `main` (see item 10 below);
+  the extra CI safety net is a smaller follow-up once that's addressed
+  too.
+- `sweep-expired-holds` now shares `dispatch-emails`'s
+  `isInternalRequestAuthorized` (`X-Internal-Secret` or Vercel Cron's
+  `Authorization: Bearer <CRON_SECRET>`) and exposes `GET` alongside
+  `POST`, matching its own doc comment's claim (GPT catch — this route
+  had been left on the old raw-secret-only, POST-only check while the
+  ported `dispatch-emails` comment already described both routes as
+  sharing the same pattern); covered by the new test file above.
+- `.env.example` and `docs/ARCHITECTURE.md` updated to describe Resend/
+  eager-dispatch/Cron-auth instead of the stale "console only, no real
+  provider" description; `TASKS.md`'s own pre-existing self-contradiction
+  (item 2 below already claimed Resend was "done" while `## Blocked`
+  simultaneously listed email delivery as blocked on provider selection —
+  neither was accurate on `main` until this port) corrected.
+- Still needed before real customer traffic: set Production's actual
+  `EMAIL_PROVIDER=resend`/`RESEND_FROM_EMAIL`/a production-scoped
+  `RESEND_API_KEY` (currently `console`), redeploy, and run one real
+  application-originated delivery smoke test — see item 2 below.
+
+## Completed (naive-timestamp-vs-`now()` fix — PR #82)
+
+`main`'s naive-timestamp-vs-`now()` bug, squash-merged as commit
+`f010face`, 2026-09-23 (found by GPT auditing PR #81; three raw-SQL
+comparisons — `releaseExpiredAndLock`, the per-user purchase-limit count
+in `createHold`, and `sweepExpiredHolds` — compared the naive `expires_at`
+timestamp column against a bare `now()`, which implicitly casts through
+the session's `TimeZone` GUC before comparing, silently skewing every
+hold's effective lifetime whenever Postgres isn't running with
+`TimeZone=UTC`). Same bug class already fixed in `lib/email/dispatcher.ts`
+and (via PR #81) the fake webhook's `payment_events.received_at` insert,
+but this one affected the core oversell-prevention hold-expiry mechanism
+specifically, not just email scheduling.
+
+PR #82 fixed only the narrow `now()` → `(now() AT TIME ZONE 'UTC')`
+comparison in all three spots. It deliberately did **not** port
+`feat/charipay-integration`'s additional `order_id IS NULL` exclusion of
+order-linked reservations from lazy release/expiry-counting — that
+behavior exists there to stop a ChariPay hosted-checkout redirect from
+looking "expired" locally while a real async payment is still in flight,
+and is a separate behavioral hardening question, not a
+timezone-correctness one.
+
+**Correction (GPT's review of PR #82 caught a factual error in an
+earlier version of this note):** this doc previously justified leaving
+`order_id IS NULL` out by claiming `main`'s fake-provider checkout is
+"synchronous, no redirect-then-wait window" — that is false.
+`FakeProvider.createPayment()` (`lib/payments/fakeProvider.ts`) returns
+`redirectUrl: /pay/fake/${paymentId}`, architecturally identical to a
+real hosted-checkout redirect: the customer can sit on that page
+indefinitely before clicking "simulate," exactly the same
+redirect-then-wait window ChariPay has. So `main` is **not** exempt from
+this race by construction; the real reasons PR #82 still left
+`order_id IS NULL` out are narrower ones: `releaseHold` already refuses
+to release a reservation once `orderId` is set (`CHECKOUT_IN_PROGRESS`),
+and `confirmOrderPayment`'s `paid_but_unfulfillable`/
+`reconciliation_required` states already exist specifically to catch
+payment-success-after-reservation-expiry without allowing
+double-ticketing — so the race PR #82 leaves unaddressed degrades to a
+reconciliation-flagged order, not an oversold ticket. **Whether that's an
+acceptable interim posture for `main`, or whether the `order_id IS NULL`
+exclusion should be ported independently of ChariPay in its own PR, is
+still an open question — not yet resolved.** Tracked as a follow-up in
+`## Next` below.
+
+PR #82 also ported the CI-only non-UTC TimeZone regression guard from
+`feat/charipay-integration` (`.github/workflows/ci.yml`'s postgres
+service `TZ: Asia/Kolkata`, `tests/setup.ts`'s CI-only assertion) so this
+bug class stays caught in CI going forward, not just this once.
+
+**The new CI guard immediately proved its worth**: it surfaced two more
+instances of the exact same bug, outside `lib/inventory.ts` —
+`lib/admin/catalog.ts`'s `updateEvent` (per-user committed-quantity check
+before lowering `maxTicketsPerUser`) and `updateSalesPhase`
+(committed-quantity check before lowering `phaseQuantityLimit`) both
+compared `expires_at` against a bare `now()`. Reproduced locally against
+a session TimeZone matching CI (`Asia/Kolkata`): 3 real failures in
+`admin-catalog.test.ts` (limit-decrease guards silently resolving
+instead of rejecting, since the implicit positive-offset cast made
+already-committed active reservations look expired). Fixed in the same
+PR with the identical `(now() AT TIME ZONE 'UTC')` cast; all 13
+admin-catalog tests and the full 249/249 suite passed under both a UTC
+and non-UTC session. Grepped the rest of `lib/` for any remaining bare
+`now()`-vs-naive-timestamp comparisons — none found.
+`lib/orders/checkout.ts`'s `provider_init_at` comparison was checked and
+is NOT this bug: that column is written via DB-side `now()`, not a JS
+`Date`, so both sides of its comparison already share the same session's
+`now()` with no cross-source skew — a different issue, already fixed
+separately in commit `dad10c6`.
+
+## Completed (sync `main` into `feat/charipay-integration` — branch chore/sync-main-into-charipay)
+
+`main` had drifted 10 commits ahead of this branch (PRs #52-58's email-
+dispatch-scheduling work, PR #79's Vercel bypass-header fix, PR #81's
+Resend backport, PR #82's naive-timestamp fix) since this branch was last
+resynced. Merged `origin/main` into a dedicated sync branch off this
+one's tip and resolved 9 conflicted files by hand rather than trusting
+either side blindly:
+
+- `lib/inventory.ts`, `lib/email/notifications.ts`,
+  `app/(admin)/admin/orders/[orderId]/actions.ts`,
+  `app/api/internal/sweep-expired-holds/route.ts`,
+  `app/api/payments/webhook/fake/route.ts` — this branch's own versions
+  were already more advanced (the `order_id IS NULL` in-flight-checkout
+  exclusion, real ChariPay reconciliation calls in the housekeeping route,
+  the `processing`-state refund-action branch), so kept this branch's
+  content; `main`'s versions of the same fixes had already converged
+  independently or were narrower subsets.
+- `.env.example`, `.github/workflows/ci.yml`,
+  `docs/ARCHITECTURE.md` — comment/prose-only conflicts; merged for
+  accuracy rather than picking one side wholesale (e.g. `ARCHITECTURE.md`'s
+  email-trigger description needed `main`'s newer GitHub Actions cron
+  backstop content, since `.github/workflows/dispatch-emails-cron.yml`
+  itself only existed on `main` before this merge and is a genuinely new
+  file on this branch now).
+- `TASKS.md` — both sides had added independent, non-overlapping
+  "Completed"/"Next"/"Blocked" entries; concatenated the two "Completed"
+  sections in full (no information lost), but for "Next"/"Blocked"
+  specifically, `main`'s shorter list was almost entirely superseded by
+  this branch's own more advanced entries for the same items (PSP
+  selection, email provider, Postgres/backup provider, legal documents,
+  CSV export pagination, customer phone-completion — all already done or
+  much further along on this branch) — kept this branch's list and
+  appended only the two genuinely new `main`-only items (the
+  `actions/github-script` version-pin maintenance note, and the still-open
+  question of whether `main` needs its own narrow `order_id IS NULL` port
+  independent of this branch).
+
+Verified post-merge, not assumed: `npm run typecheck`/`npx eslint .` both
+clean, full suite **440/440 passing** (up from 249 pre-merge, reflecting
+this branch's much larger ChariPay-specific test coverage) against the
+local dev cluster's non-UTC `Africa/Casablanca` session, and `npm run
+build` clean with the full merged route list (ChariPay webhook,
+reconcile-payment, legal pages, customer phone endpoint all present
+alongside everything from `main`).
+
+## Completed (`actions/github-script` v9.0.0 bump — PR #84, synced via PR #86)
+
+`.github/workflows/dispatch-emails-cron.yml`'s `actions/github-script` pin
+bumped from `60a0d83…` (v7.0.1) to `3a2844b…` (v9.0.0) on `main` (PR #84),
+following an independent GPT audit rather than bumping casually (this
+action runs with `id-token: write`, so a supply-chain regression here is
+high-stakes). Audit found: the workflow only calls
+`core.getIDToken()`/`setSecret()`/`setOutput()`, never Octokit or
+`@actions/github`, so v9's Octokit-related breaking changes don't apply;
+v7.0.1 and v9.0.0 lock the exact same `@actions/core` 1.10.1 tarball (same
+npm integrity hash), so the OIDC code path itself is byte-identical
+between versions; the runner (2.337.0) exceeds v8+'s minimum (2.327.1);
+and the upstream repo's own `check-dist` step rebuilds `dist/` from
+source and fails the bundle if it doesn't match — this audit read the
+source/locked dependencies but did not independently byte-diff the full
+built v9 bundle itself. Resolves the Node 20 deprecation warning the
+pinned v7.0.1 was emitting.
+
+**Runtime verification completed (2026-09-23):** GPT triggered a real
+`workflow_dispatch` run against `main` on the merged SHA (run
+`35903586420`), confirming the bumped action still mints the OIDC token,
+passes Vercel's Trusted Sources check, and the dispatcher responds with
+real JSON: `{"claimed":0,"sent":0,"retried":0,"permanentlyFailed":0,
+"skipped":0}` (zero across the board reflects no email backlog at that
+moment, not a failure — the call completing end-to-end with a valid
+typed response is the actual proof). This closes the item; no further
+action needed unless the pin is bumped again in the future, which should
+get its own fresh audit rather than reusing this one.
+
 ## Next
 
 0. **Resolved, was never a code bug**: an earlier draft of this file
@@ -1088,22 +1446,31 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    The refund half of this item is separately blocked: `POST /v1/refunds`
    is accepted at the HTTP layer (`202`) but returns a synchronous
    body-level `FAILED` result whose `failureMessage` reports a downstream
-   Chari `403` because the sandbox API key lacks the `operations:refund`
-   scope — needs the account holder to grant/regenerate that scope in the
-   ChariPay merchant portal before a real refund lifecycle can be captured
+   Chari `403` for missing `operations:refund`. The active merchant key
+   already has the portal-exposed `refund:create` and `refund:read`
+   permissions, and the complete editable portal list has no
+   `operations:refund` option. This is therefore a provider-side sandbox
+   enablement/support issue, not a self-service key edit. Escalate the exact
+   error plus correlation id `46965bf5-7d91-4655-9e71-7d909e5a11b0` to
+   ChariPay support; do not rotate/broaden the key speculatively
    (see `docs/CHARIPAY.md`).
-2. **Delivery pipeline now proven end-to-end on Preview (2026-09-19/20, see
-   "Completed" above); production sending domain still open.** The full
+2. **Delivery pipeline now proven end-to-end on Preview (2026-09-19/20);
+   production sending domain verified on 2026-09-22.** The full
    EmailOutbox → dispatcher → Resend chain was exercised with a real paid
    order and confirmed delivered/idempotent. #48 is closed: the scheduled
    `dispatch-emails` trigger has real observed scheduled runs and is now a
    working backstop (GitHub's `schedule` trigger has no 5-minute recovery
    guarantee, so the eager `after()` dispatch remains the primary path —
-   see the "eager email dispatch trigger" entry above). What remains: verify
-   a real `RESEND_FROM_EMAIL` sending domain for production (today's test
-   used the shared `onboarding@resend.dev` address +
-   `RESEND_TEST_RECIPIENT` override, not a production-ready sender), and add
-   production `RESEND_API_KEY`.
+   see the "eager email dispatch trigger" entry above). Resend now reports
+   `mail.medinabelgique.com` verified after Cloudflare DNS setup; the
+   intended temporary sender is
+   `tickets@mail.medinabelgique.com` (the adapter adds the `OnlyLive` display name itself). This domain is for
+   pre-production/testing and can be replaced later with the final OnlyLive
+   domain without a code change. What remains for production runtime is to
+   configure/verify `EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL`, and a
+   production-scoped `RESEND_API_KEY` in Vercel, with no
+   `RESEND_TEST_RECIPIENT` override in Production, then redeploy and send
+   a real application-originated smoke email.
 3. **Production database recovery — scripts now exist and are locally
    proven; production provisioning drill still open.** Neon is the selected
    production Postgres target and `docs/DATABASE_RECOVERY.md` defines
@@ -1124,18 +1491,107 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    payment invariants after restore; CI executes it on a freshly migrated
    empty test database to catch schema/SQL drift, and `.gitignore` blocks
    common dump artifacts.
-   Still required before go-live: provision the separate production Neon
-   project, choose/verify its region against Vercel, configure paid recovery
-   retention + independent backup storage, and then perform a timed
-   recovery drill using a real production backup/PITR recovery into a
-   disposable, isolated restore target (never the live production
-   database itself), followed by the invariant check and application
-   smoke tests. The local-cluster run above proves the scripts' mechanics,
-   not a production drill — it used a throwaway, non-application cluster
-   and a stripped-down test schema.
+   **Update, 2026-09-23 — the real production Neon project now exists and
+   Vercel Production is live and functional.** Created `onlylive-production`
+   (Neon project id `delicate-flower-79359696`), region `aws-us-east-1` —
+   deliberately not the sandbox's `aws-us-east-2`, chosen by actually reading
+   a real Vercel build log's region (`iad1`, Washington D.C.) rather than
+   copying the sandbox by assumption, per this file's own long-standing
+   instruction above. Ran `prisma migrate deploy` against it for real (9
+   migrations applied cleanly) and `scripts/recovery-smoke.sql` for real (0
+   violations on every invariant). `DATABASE_URL` (Neon's pooled connection —
+   confirmed locally that `prisma migrate deploy` works through Neon's
+   pooler without issue, so a single connection string safely covers both
+   migrations and runtime here) is now set in Vercel Production.
+
+   Getting an actual successful Production deployment exposed a real,
+   pre-existing gap: **every Production environment variable this project
+   had ever documented was still an empty, never-filled Vercel scaffold
+   placeholder** (`NEXTAUTH_URL`, `NEXTAUTH_SECRET`, `ADMIN_SESSION_SECRET`,
+   `PAYMENT_PROVIDER`, `RATE_LIMIT_KEY_SECRET`, `INTERNAL_API_SECRET`,
+   `FAKE_PSP_WEBHOOK_SECRET`, `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION` — Production
+   had literally never been deployed successfully before). Fixed, with
+   GPT's explicit sign-off sought before touching anything security-relevant:
+   - the five random secrets: generated fresh (`openssl rand -base64 32`,
+     distinct from Preview's values, never pasted into chat/logs/Git);
+   - `NEXTAUTH_URL`: the user confirmed the default Vercel URL
+     (`https://onlylive-events-el-bied-alis-projects.vercel.app`) since no
+     custom domain is connected yet;
+   - `PAYMENT_PROVIDER=fake` + `ALLOW_FAKE_PAYMENTS_IN_PRODUCTION=true`:
+     GPT's sign-off was explicitly conditional on this Production deployment
+     being access-protected with no real customer traffic — confirmed via
+     Vercel's own project settings (`ssoProtection.enabled: true,
+     deploymentType: "all_except_custom_domains"`) that the default
+     `.vercel.app` URL genuinely requires Vercel team SSO to reach; **this
+     must be revisited (remove the fake-payment override, add real ChariPay
+     credentials) before any real customer traffic.**
+
+   A green Vercel "READY" status then turned out to be insufficient by
+   itself: querying Vercel's own runtime-error aggregation caught a real
+   crash — `Unknown EMAIL_PROVIDER: resend. Only "console" is implemented so
+   far.` Root cause, confirmed by reading the actual deployed code: **this
+   Vercel Production deployment builds from `main`, not
+   `feat/charipay-integration`** — `main`'s `lib/email/index.ts` genuinely
+   only implements `ConsoleEmailProvider`; every Resend/ChariPay adapter
+   lives exclusively on `feat/charipay-integration`, matching this project's
+   own branch strategy (ChariPay/Resend stay draft-gated pending the
+   independent audit below and KYB approval, and must not reach `main`
+   before that). Setting `EMAIL_PROVIDER=resend` in Production was therefore
+   a mistake — corrected to `EMAIL_PROVIDER=console` +
+   `ALLOW_CONSOLE_EMAIL_IN_PRODUCTION=true`, the exact non-production-traffic
+   allowance already coded for this. Re-verified: deployment `READY`, and the
+   user independently confirmed the real homepage renders correctly through
+   the SSO wall.
+
+   **Correction, 2026-09-23 (GPT catch on PR #77):** the original "zero
+   runtime errors afterward" claim above was inaccurate — Vercel's own
+   runtime-error aggregation still showed a real
+   `SECURITY WARNING: The SSL modes 'prefer', 'require', and 'verify-ca' are
+   treated as aliases for 'verify-full'` warning from the `pg` driver,
+   because `main`'s `lib/db.ts` lacks the code-level `sslmode` normalization
+   that only exists on `feat/charipay-integration` (PR #76). Fixed by setting
+   `sslmode=verify-full` explicitly in the `DATABASE_URL` connection string
+   itself (Vercel env var, not code) and triggering a fresh redeploy.
+   Verified by ordering, not assumption: the `DATABASE_URL` edit timestamp
+   (`1790123522448`) precedes the current live Production deployment's
+   creation (`dpl_DQ6x7KW8tcNARMaB1xSUy4peMnXg`, created `1790129513633`,
+   `READY`, aliased to production) — so that deployment's Lambda runtime
+   only ever read the corrected connection string. Re-querying
+   `get_runtime_errors` confirms zero errors of any kind (including the SSL
+   warning) attributed to `dpl_DQ6x7KW8tcNARMaB1xSUy4peMnXg` specifically;
+   the SSL warning remains visible in Vercel's history but only against the
+   prior deployment (`dpl_9hYPRgAXBYGCrQXKmCqKkJfmKxw2`), which predates the
+   fix. A direct authenticated request against the SSO-protected alias was
+   not exercised as part of this check.
+   `RESEND_API_KEY`/`RESEND_FROM_EMAIL` were left set in Production during
+   this pass but are dormant — `main` cannot read them — and per GPT's
+   review should be removed for now (an unused live secret is unnecessary
+   exposure, and leaving it risks a future branch-merge/config mistake
+   silently activating real email instead of failing loudly); re-add both,
+   deliberately, only once `feat/charipay-integration` actually reaches
+   `main`.
+
+   **This still is not the real production restore drill this gate
+   requires.** Still needed before go-live: configure paid recovery
+   retention (current project is on Neon's free tier — 6-hour PITR window,
+   not the >=7-day target) + independent backup storage, then perform a
+   timed recovery drill using a real production backup/PITR recovery into a
+   disposable, isolated restore target (never the live production database
+   itself), followed by the invariant check and the application smoke
+   tests below.
    Do not infer the current Vercel Preview database from the connected Neon
    project named for the sandbox: read-only inspection on 2026-09-19 found
    that project contains no application tables.
+
+   **Also clarified, 2026-09-23:** CLAUDE.md's "triage an independent
+   audit" gate for ChariPay/PR #13 does not name who performs it. The user
+   explicitly confirmed the Claude/GPT cross-audit pattern already used
+   throughout this project (every substantive PR reviewed by whichever of
+   the two didn't write it, before merge — see this file's own history) is
+   sufficient for PR #13 too, rather than requiring a separate external or
+   professional security review. (Attempted to record this directly in
+   CLAUDE.md; blocked by this environment's own guard against an agent
+   editing its own instructions file — recorded here instead.)
 4. **Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
    structural placeholders now published, real legal review still required.**
    Added four draft pages (`/legal/mentions-legales`,
@@ -1190,6 +1646,141 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
    real traffic, then tune/enforce without replacing account-level limiting.
 6. Before production rollout, smoke-test admin login/logout, catalogue
    mutation and scanner validation on the real Vercel preview/custom domain.
+   **Update, 2026-09-23:** now actually attemptable — Vercel Production was
+   previously never in a working state at all (see item 3's update above).
+
+   **Correction, 2026-09-23 (GPT catch on PR #77):** the original plan here
+   ("seed an admin account") implicitly meant running `npm run seed`, which
+   is unsafe against a real production database — `prisma/seed.ts`
+   unconditionally creates the full demo catalogue (the real Tiakola/
+   Casablanca venue, event marked `on_sale`, three ticket categories,
+   inventory, two sales phases each) regardless of whether admin credentials
+   are supplied, which would create a real-looking on-sale event in
+   `onlylive-production`. Fixed by adding `prisma/bootstrap-admin.ts`
+   (`npm run bootstrap-admin`), a narrowly-scoped script that upserts
+   exactly one `super_admin` `AdminUser` row from `ADMIN_SEED_EMAIL`/
+   `ADMIN_SEED_PASSWORD` and touches nothing else — verified locally against
+   a throwaway Postgres cluster (admin_users count 1→2; events/venues/
+   ticket_categories/inventory/sales_phases counts unchanged at
+   1/1/3/3/6). `docs/SECURITY.md`'s admin-bootstrap section now documents
+   the split: `npm run seed` for fresh dev/demo databases only, `npm run
+   bootstrap-admin` for any existing/production database.
+
+   **Update, 2026-09-23 — smoke test actually run against real Production.**
+   `npm run bootstrap-admin` run for real against `onlylive-production`
+   (verified via read-only query: exactly one active `super_admin`,
+   `ali.el.bied9898@gmail.com`; catalogue tables still all zero
+   immediately before/after). Admin login/logout: **passed** — real
+   dashboard renders, correct empty-state counts. Catalogue mutation:
+   **passed** — created a clearly-labeled `SMOKE TEST` venue, event
+   (`draft`, then `on_sale`), ticket category (capacity 5) and an active
+   sales phase (100 MAD) through the real admin UI; each step verified via
+   a read-only Neon query, not just the UI. Customer checkout/hold:
+   **passed** — reservation created with the expected 15-minute expiry
+   countdown.
+
+   **Payment confirmation: failed, and found a real production-readiness
+   gap, not a test-setup mistake.** Clicking "Simuler un paiement réussi"
+   on `/pay/fake/[paymentId]` returns a 401 every time. Root-caused by
+   inspecting the actual response shape (not just the status code): the
+   outer `POST /api/pay/fake/[paymentId]/simulate` route runs
+   successfully to completion (session, payment ownership, and signature
+   generation all fine) and reaches its final step, an internal
+   server-to-server `fetch()` call to this same deployment's own public
+   URL at `/api/payments/webhook/fake`. That inner call is the one
+   receiving the 401 — confirmed via Vercel's `get_runtime_logs`, which
+   shows **zero invocations of the webhook route** across multiple
+   attempts, meaning the request never reached our Next.js code at all.
+   **Correction (GPT catch):** the fake and real ChariPay webhooks are
+   different routes (`/webhook/fake` vs `/webhook/charipay`), not the same
+   application code path — what they share, and what's actually the
+   problem, is the same Vercel ingress + Deployment Protection layer
+   sitting in front of both.
+
+   The cause: this Vercel project has `ssoProtection.enabled: true` with
+   `deploymentType: "all_except_custom_domains"`, and **no custom domain
+   is connected yet** — so every current URL, including this internal
+   self-call, is behind the Vercel SSO wall. Vercel's own protection layer
+   is intercepting the request before Next.js ever sees it.
+
+   **This is a real production-launch blocker, not just a test artifact:**
+   once ChariPay is live, its real webhook deliveries will hit a
+   `.vercel.app`-hosted URL from outside Vercel's network with no SSO
+   session, and would be blocked identically today. **Correction (GPT
+   catch):** the original claim that ChariPay has "no way" to send a
+   Vercel bypass header was wrong — ChariPay's webhook config supports
+   static custom headers (its documented restrictions only forbid
+   overriding `Host`, `Authorization`, `Cookie`, `Chari-*`, `X-CHARI-*`),
+   so `x-vercel-protection-bypass` is a real provider-side option, and
+   Vercel also documents a query-parameter form of the same bypass for
+   providers that can't set custom headers at all. Launch must still not
+   happen against an SSO-protected `.vercel.app` URL, but the fix is a
+   choice, not a hard blocker with only one option: (a) connect a real
+   custom domain before go-live — Vercel's own `deploymentType` setting
+   already exempts custom domains from SSO protection, so this is the
+   normal, recommended path (preview URLs stay protected, the production
+   domain is public, webhook security then rests on ChariPay's signature/
+   payload validation and app rate limits, not Vercel SSO); or (b)
+   configure Vercel's "Protection Bypass for Automation" and register that
+   header in ChariPay's webhook config — technically workable per the
+   above, but couples the PSP to a Vercel-specific secret that must be
+   stored/rotated/kept in sync on ChariPay's side, so it's a reasonable
+   fallback/test aid, not the final architecture.
+
+   **Smoke-test unblock (GPT's recommendation):** don't rewrite the
+   simulate route to process the webhook in-process — that would remove
+   exactly the part of the test worth having (the real HTTP call through
+   the real webhook route). Instead, enable Vercel's Protection Bypass for
+   Automation for this project and have the simulate route's internal
+   `fetch()` send `x-vercel-protection-bypass` from
+   `VERCEL_AUTOMATION_BYPASS_SECRET` when that env var is set, preserving
+   the full path (simulate route → real HTTP call → webhook route →
+   signature check → DB transaction → ticket). Before real customer
+   traffic: connect the real custom domain, register ChariPay's webhook
+   against it (e.g. `<domain>/api/payments/webhook/charipay`), run one
+   real synthetic ChariPay webhook end-to-end against that domain and
+   confirm a real `2xx`, and keep the `.vercel.app` URLs protected
+   permanently.
+
+   **Update, 2026-09-23 — implemented (PR #79, merged to `main`) and the
+   full smoke test now passes end-to-end against real Production.**
+   `app/api/pay/fake/[paymentId]/simulate/route.ts` sends the bypass
+   header (via `lib/payments/fakeWebhookForwarding.ts`, kept out of the
+   Route Handler file itself as a precaution per a second GPT review —
+   Next.js's documented convention is that `route.ts` only exports HTTP
+   methods and segment config, though this project's own local `next
+   build` (Turbopack, Next 16.3.5) had actually succeeded either way,
+   with the extra export present and un-warned-about; moving it out
+   removes the risk on a payment file regardless of whether it would
+   have failed) and resolves the
+   self-call target from `NEXTAUTH_URL` (`lib/appUrl.ts`'s
+   `absoluteAppUrl()`), not `request.url`, since a real secret is now
+   attached to that request. The Protection Bypass for Automation secret
+   turned out to already exist on this project (added 2026-09-14, visible
+   as a "System Environment Variable" in the dashboard's Deployment
+   Protection settings — it does not appear in the project-envs API
+   listing this session otherwise relied on, since system env vars are a
+   distinct category). Vercel auto-deployed `main` on the PR #79 merge
+   (`dpl_8tujtYmsCZXsXcP3wAf9nFAaNtTU`); `get_runtime_errors` showed zero
+   errors afterward.
+
+   Re-ran "Simuler un paiement réussi" on the same held reservation from
+   the earlier attempt: **succeeded**, redirected to the real order page.
+   Verified via a read-only Neon query, not just the redirect: `orders`
+   row `status = paid`, its `payments` row `status = paid`, and a real
+   `tickets` row (`status = valid`) with a generated validation token.
+   Scanner test: logged into `/scanner` with the existing admin session
+   (`super_admin` is an allowed scanner role per `lib/auth/admin.ts`),
+   manually entered the ticket's validation token — **first scan: green
+   "Entrée acceptée"; immediate re-scan of the same token: orange "Déjà
+   scanné"**, both recorded with timestamps in the scan history panel.
+   This is the full admin/catalogue/checkout/payment/ticket/scanner
+   smoke test item 6 has tracked, now passing end-to-end against the
+   real `onlylive-production` deployment. Scanner-side concurrent-scan
+   atomicity (two scanners racing the same ticket) was not separately
+   re-verified here — already covered by this project's existing
+   automated test suite, not something this manual smoke test needed to
+   repeat.
 
 ## Blocked
 
@@ -1209,18 +1800,36 @@ and didn't block the P1 fix, but were quick and low-risk once identified):
     real sandbox attempts (`operationId` vs `externalId`; `reason` closed
     enum vs free text — see `docs/CHARIPAY.md`'s Refund lifecycle
     section for both). With those fixed, the next real attempt exposed
-    the actual current blocker: the sandbox `CHARIPAY_API_KEY` is missing
-    the `operations:refund` scope entirely (`403 Forbidden`,
-    `failureCode: BAAS_CHARI_ERROR`) — a real new credential/permission
-    requirement, not just another exercise. Needs a ChariPay
-    merchant-portal action (grant the scope, or issue a new key that has
-    it) before a real refund can be attempted again.
+    the actual current blocker: the provider returns downstream
+    `403 Forbidden` / `BAAS_CHARI_ERROR` for missing
+    `operations:refund`. The active sandbox key already has
+    `refund:create` and `refund:read`, while the portal exposes no
+    editable `operations:refund` permission. This now requires ChariPay
+    support/provider-side sandbox enablement, using correlation id
+    `46965bf5-7d91-4655-9e71-7d909e5a11b0`; do not rotate or broaden the
+    key speculatively.
   Real production go-live additionally requires OnlyLive merchant/KYB
   approval and live credentials; no production secret should be committed
   or pasted here.
-- Real email delivery is no longer blocked at the pipeline level — proven end-to-end on Preview 2026-09-19/20 (see "Completed" above). Production delivery is still blocked on verifying a real sending domain (today's test used the shared `onboarding@resend.dev` address) and adding production `RESEND_API_KEY`/`RESEND_FROM_EMAIL`; see #48 for the still-open scheduling gap.
+- Real email delivery is no longer blocked at the pipeline or domain-verification level — proven end-to-end on Preview 2026-09-19/20, and `mail.medinabelgique.com` was verified by Resend on 2026-09-22. Production delivery still needs the Vercel Production variables (`EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL=tickets@mail.medinabelgique.com`, and a production-scoped `RESEND_API_KEY`) plus a redeploy/smoke send. Do not set `RESEND_TEST_RECIPIENT` in Production. The scheduler gap is already closed by the working GitHub Actions backstop; eager dispatch remains primary.
 - Legal document drafting is blocked on legal/accountant review and ChariPay's
   final merchant/go-live requirements.
+
+## Next (this branch, continued)
+
+7. **`main`-specific, resolved by not porting on this side of the sync:**
+   whether `main` (independently of this branch's full ChariPay merge)
+   should get a narrower version of this branch's `order_id IS NULL`
+   in-flight-checkout exclusion in `lib/inventory.ts`. This branch's own
+   `lib/inventory.ts` already has it (kept as-is by this sync — see the
+   merge-conflict resolution above). The open question was specifically
+   about `main`'s posture until PR #13 lands there: `main`'s fake-provider
+   checkout has the identical redirect-then-wait shape as a real hosted
+   checkout, so it isn't exempt from the race by construction, but
+   `paid_but_unfulfillable`/`reconciliation_required` already degrade it to
+   a flagged order rather than an oversold ticket. Whether that's an
+   acceptable interim posture for `main` pending PR #13, or worth its own
+   narrow follow-up PR, is still open — not yet discussed with GPT.
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 

@@ -1,0 +1,196 @@
+name: Dispatch pending emails
+
+# Vercel Hobby's cron jobs only run once/day, far too infrequent for
+# customer-facing order-confirmation/failure emails (see
+# app/api/internal/dispatch-emails/route.ts's own doc comment and
+# TASKS.md/docs/ARCHITECTURE.md's "eager email dispatch" entry). This
+# workflow is the recurring-scheduler half of that: an authenticated
+# external caller for /api/internal/dispatch-emails, which is otherwise
+# only invoked opportunistically by the app's own eager after() trigger.
+#
+# GitHub Actions only evaluates `schedule` from whatever is committed to
+# the repository's default branch, regardless of which branch the actual
+# application code lives on -- this file intentionally targets whichever
+# deployment ONLYLIVE_DISPATCH_BASE_URL points at (currently the
+# feat/charipay-integration Preview branch alias, since production has not
+# launched yet) rather than assuming that URL matches this workflow's own
+# branch.
+#
+# Operational caveats (per two rounds of GPT's cold audit -- an unsupported
+# 2-minute schedule, a too-short client timeout twice over, and response
+# validation that failed open on a malformed/missing body, all corrected
+# here):
+# - GitHub's documented minimum schedule interval is 5 minutes; this is a
+#   5-minute *target*, not a guarantee -- scheduled runs are explicitly
+#   best-effort and can be delayed or silently dropped under GitHub-wide
+#   load. Never rely on this alone for a hard delivery-time guarantee; the
+#   eager after() trigger (#52) remains the primary near-real-time path.
+# - GitHub automatically disables a scheduled workflow after 60 days with
+#   no repository activity at all (not just no runs of this workflow) --
+#   whoever owns this repo long-term needs to know that and re-enable it
+#   under Actions if it ever goes quiet for that long.
+# - A GitHub-hosted public repo gets free Actions minutes; this job is a
+#   single lightweight curl call every ~5 minutes, well within that.
+# - GPT's live query of this repo's Actions API (event=schedule) found
+#   total_count: 0 across 2.5+ hours / ~31 missed windows after this
+#   workflow first landed on main -- workflow state active, not a
+#   fork/archived/disabled, correct file on the default branch, GitHub
+#   Status reporting Actions fully operational. Matches the exact
+#   signature of known 2026 GitHub Community reports of a schedule-
+#   registration bug (manual dispatch works, valid cron, zero schedule
+#   events ever emitted). Offsetting the cron off the round :00/:05/:10
+#   boundaries below is a real code change (not just a comment) intended
+#   to make GitHub re-evaluate the schedule -- GitHub's docs document this
+#   specific mechanism as reactivating a *deactivated* scheduled workflow,
+#   and this one reports as active rather than deactivated, so this is a
+#   reasonable attempt, not a documented guarantee, for the fault we're
+#   actually seeing. If this still shows zero schedule-triggered runs
+#   after several expected windows, the evidence then strongly points to
+#   GitHub's scheduler rather than the application/Vercel path --
+#   escalate to GitHub Support rather than continuing to debug here.
+#
+# Secrets used (repository secrets, not committed):
+#   ONLYLIVE_DISPATCH_BASE_URL    e.g. https://onlylive-events-git-feat-charipay-ebf143-el-bied-alis-projects.vercel.app
+#   ONLYLIVE_DISPATCH_SECRET      the current INTERNAL_API_SECRET value (X-Internal-Secret auth path;
+#                                 deliberately NOT CRON_SECRET, which is also a production ChariPay guard --
+#                                 see lib/payments/index.ts -- and shouldn't be duplicated into a third-party service)
+#
+# Vercel's own Deployment Protection (SSO wall) sits in front of the app and
+# redirects any unauthenticated caller to vercel.com/sso-api BEFORE the
+# request ever reaches the X-Internal-Secret check above -- confirmed by the
+# first real scheduled/manual run of this workflow, which got back the SSO
+# wall's "Redirecting..." HTML instead of dispatchPendingEmails()'s JSON.
+# Fixed via Vercel's "Trusted Sources" feature rather than a second static
+# "Protection Bypass for Automation" secret: a short-lived GitHub Actions
+# OIDC token, verified by Vercel per-request, needs no long-lived credential
+# of its own. Requires, on the Vercel side (Project Settings -> Deployment
+# Protection -> Trusted Sources -> External Services -> GitHub Actions),
+# scoping this exact org/repo/branch to the Preview environment.
+on:
+  schedule:
+    # Deliberately offset off the round :00/:05/:10... boundaries (still a
+    # 5-minute cadence) -- both to avoid GitHub's documented "start of
+    # every hour" high-load window, and because changing the cron
+    # expression itself is intended to make GitHub re-evaluate the
+    # schedule, after it emitted zero schedule-triggered runs for 2.5+
+    # hours (see the file header comment above). Not a documented
+    # guarantee for this specific fault -- GitHub only documents this
+    # mechanism as reactivating a deactivated scheduled workflow, and
+    # this one reports as active.
+    - cron: "2-59/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    # id-token: write is the one permission this job actually needs (to mint
+    # the short-lived OIDC token Vercel's Trusted Sources verifies); every
+    # other GITHUB_TOKEN permission is explicitly denied since this job
+    # never reads or writes anything else in this repository.
+    permissions:
+      id-token: write
+    steps:
+      - name: Get a short-lived GitHub Actions OIDC token for Vercel Trusted Sources
+        id: vercel-oidc
+        # Pinned to the exact commit SHA GPT's independent audit vetted, not
+        # a newer tag/SHA nobody in this process has reviewed -- "pin to any
+        # immutable SHA" and "pin to the SHA someone actually audited" are
+        # not the same guarantee, and this action mints an OIDC token with
+        # id-token: write, so that distinction matters here. Bumped from
+        # v7.0.1 to v9.0.0 (2026-09-23) after confirming: the workflow only
+        # calls core.getIDToken()/setSecret()/setOutput(), never Octokit or
+        # @actions/github (so v9's Octokit-related breaking changes don't
+        # apply here); v7.0.1 and v9.0.0 lock the exact same @actions/core
+        # 1.10.1 tarball, same npm integrity hash, so the OIDC code path
+        # itself is byte-identical; the runner (currently 2.337.0) exceeds
+        # v8+'s minimum (2.327.1); and the upstream repo's own check-dist
+        # step rebuilds dist/ from source and fails the bundle if it
+        # doesn't match -- this audit read the source/locked dependencies
+        # but did not independently byte-diff the full built bundle itself.
+        # Re-audit before bumping again.
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const token = await core.getIDToken();
+            core.setSecret(token);
+            core.setOutput("token", token);
+
+      - name: Call /api/internal/dispatch-emails and fail on a real problem
+        run: |
+          set -euo pipefail
+
+          # lib/email/dispatcher.ts claims up to BATCH_SIZE (production
+          # default 20) rows and sends them SEQUENTIALLY, one row's
+          # provider call never running concurrently with another's. Each
+          # Resend call has its own 10s client-side timeout
+          # (lib/email/resendProvider.ts's REQUEST_TIMEOUT_MS), so a batch
+          # where every row legitimately hits that timeout can take up to
+          # ~200s, plus rendering/DB overhead -- comfortably under, but not
+          # far under, Vercel's current ~300s Hobby/Fluid Compute function
+          # duration ceiling (this route sets no maxDuration of its own, so
+          # it inherits that ceiling). 270s gives real slow-but-succeeding
+          # batches room to finish while staying under the platform limit,
+          # rather than an arbitrary short timeout cutting off legitimate
+          # work partway through with no visibility into what happened.
+          # x-vercel-trusted-oidc-idp-token clears Vercel's own Deployment
+          # Protection wall (a platform-level check, before this request
+          # reaches our app at all); x-internal-secret is the app's own,
+          # completely separate auth check. Neither substitutes for the
+          # other -- see the file header comment above. Deliberately no
+          # --location/-L: following the SSO wall's redirect would only
+          # trade a clear, detectable 302 for an opaque HTML page.
+          response=$(curl --fail-with-body --silent --show-error \
+            --max-time 270 \
+            -X POST \
+            -H "x-vercel-trusted-oidc-idp-token: ${VERCEL_OIDC_TOKEN}" \
+            -H "x-internal-secret: ${ONLYLIVE_DISPATCH_SECRET}" \
+            "${ONLYLIVE_DISPATCH_BASE_URL}/api/internal/dispatch-emails")
+          echo "$response"
+
+          # HTTP 200 alone does not mean every claimed email actually sent,
+          # or even that the body is what this workflow expects --
+          # dispatchPendingEmails()'s real summary shape is
+          # {claimed,sent,retried,permanentlyFailed,skipped}, all
+          # non-negative integers. Validate that shape explicitly and fail
+          # loudly if it doesn't hold, rather than defaulting a
+          # missing/malformed field to 0 with `// 0` and silently reporting
+          # success on a response this workflow doesn't actually understand.
+          if ! echo "$response" | jq -e '
+            [.claimed, .sent, .retried, .permanentlyFailed, .skipped]
+            | all(type == "number" and . >= 0 and (. == floor))
+          ' > /dev/null; then
+            echo "::error::dispatch-emails response failed schema validation (missing/non-integer/negative field): $response"
+            exit 1
+          fi
+
+          claimed=$(echo "$response" | jq -r '.claimed')
+          retried=$(echo "$response" | jq -r '.retried')
+          permanently_failed=$(echo "$response" | jq -r '.permanentlyFailed')
+
+          # Must match lib/email/dispatcher.ts's BATCH_SIZE production
+          # default. A fully saturated batch means this run may not have
+          # cleared the entire backlog -- distinct from (and a leading
+          # indicator of) an outright failure: it says delivery may be
+          # falling behind this schedule's cadence, not that anything sent
+          # this run actually failed.
+          full_batch_size=20
+          if [ "$claimed" -eq "$full_batch_size" ]; then
+            echo "::warning::claimed a full batch of ${full_batch_size} -- more pending emails may remain; delivery may be falling behind this 5-minute schedule"
+          fi
+
+          # permanentlyFailed is a real, human-actionable problem and must
+          # fail this run (visible red X, satisfies #48's backlog/failure-
+          # visibility requirement); a nonzero retried count is ordinary
+          # transient behavior (provider hiccup, backoff in progress) and
+          # is only logged, not treated as a failure.
+          if [ "$retried" -gt 0 ]; then
+            echo "::warning::${retried} email(s) scheduled for retry this run"
+          fi
+          if [ "$permanently_failed" -gt 0 ]; then
+            echo "::error::${permanently_failed} email(s) permanently failed -- see dispatch-emails logs"
+            exit 1
+          fi
+        env:
+          ONLYLIVE_DISPATCH_BASE_URL: ${{ secrets.ONLYLIVE_DISPATCH_BASE_URL }}
+          ONLYLIVE_DISPATCH_SECRET: ${{ secrets.ONLYLIVE_DISPATCH_SECRET }}
+          VERCEL_OIDC_TOKEN: ${{ steps.vercel-oidc.outputs.token }}
