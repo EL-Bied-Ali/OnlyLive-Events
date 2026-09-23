@@ -103,10 +103,15 @@ Based on the current design and subject to CNDP/counsel confirmation:
 - [ ] Confirm recipients and all processors/subprocessors
 - [ ] Confirm whether any marketing use is planned; do not silently reuse transactional data for marketing
 
-### Production infrastructure information still needed
+### Production infrastructure
 
-- [ ] Final database provider
-- [ ] Final database region/country
+Confirmed from the deployed production configuration:
+
+- [x] Production database provider: **Neon**
+- [x] Production database region: **AWS us-east-1 (United States)** (`onlylive-production`)
+
+Still to confirm for the CNDP/counsel file:
+
 - [ ] Final Vercel production data-location facts relevant to this processing
 - [ ] Resend production sending setup and relevant processing locations
 - [ ] Any additional analytics, monitoring, CRM, or marketing provider added before launch
