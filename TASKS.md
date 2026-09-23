@@ -710,10 +710,7 @@ get its own fresh audit rather than reusing this one.
    prefills confirmed company/infrastructure facts, but counsel/accountant/CNDP
    still need to resolve the remaining policy, tax, retention and transfer
    questions before `LEGAL_DOCUMENTS_APPROVED=true` may be enabled.
-5. **Orders CSV export:** PR #89 removes the silent 20,000-row cap with
-   deterministic keyset pagination and a streamed response. Keep this item open
-   until that PR merges green.
-6. **Vercel WAF / public-production rollout:** stage rate-limit rules in log mode
+5. **Vercel WAF / public-production rollout:** stage rate-limit rules in log mode
    when production write access and meaningful traffic are available, then tune
    and enforce them without replacing account-level limiting. The final public
    custom-domain smoke should be repeated once the production domain/PSP setup is
@@ -721,6 +718,9 @@ get its own fresh audit rather than reusing this one.
 
 ### Resolved decisions removed from `Next` (2026-09-23)
 
+- **Orders CSV export:** PR #89 merged green; `main` now streams the full
+  export with deterministic keyset pagination instead of silently truncating
+  at 20,000 rows.
 - **Production smoke test:** already passed on the protected production
   deployment after PR #79: admin login/logout, catalogue mutation, checkout,
   fake payment confirmation, ticket generation and scanner first/repeat scan.
