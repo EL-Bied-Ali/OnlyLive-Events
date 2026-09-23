@@ -688,57 +688,64 @@ get its own fresh audit rather than reusing this one.
 
 ## Next
 
-1. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
-   from official docs (never speculatively). Re-derive contradictory-event
-   reconciliation from that provider's real lifecycle and revisit holding a
-   database row lock across the real network refund call.
-2. ~~Select a real email provider~~ — done: Resend is selected and
-   integrated (`lib/email/resendProvider.ts`, PR #81 — ported from
-   `feat/charipay-integration`, where it was already implemented,
-   audited, and verified end-to-end via a real unattended purchase on
-   Preview). This wording was previously inaccurate on `main`: the
-   integration existed only on the feature branch until this port, while
-   this file simultaneously (and self-contradictorily) also listed real
-   email delivery as "Blocked" below — both corrected together. Remaining
-   gap here specifically: Production's actual env vars still need
-   `EMAIL_PROVIDER=resend`/`RESEND_FROM_EMAIL`/a production-scoped
-   `RESEND_API_KEY` set (currently `console`, since `main` couldn't
-   support `resend` before this port) and one real post-deploy delivery
-   smoke test — the code path itself is now ready either way.
-3. Decide the production managed-Postgres provider and document/test the
-   backup/restore strategy required by `CLAUDE.md`.
-4. Privacy Policy / Terms & Conditions / Refund Policy / Legal Notice —
-   requires OnlyLive's accountant/lawyer and the eventual PSP requirements.
-5. Paginate the orders CSV export beyond its current most-recent-20,000 cap.
-6. Stage Vercel WAF rate-limit rules in log mode before production, observe
-   real traffic, then tune/enforce without replacing account-level limiting.
-7. Before production rollout, smoke-test admin login/logout, catalogue
-   mutation and scanner validation on the real Vercel preview/custom domain.
-8. Before ChariPay go-live: a customer who registered before phone became
-   required (PR #18) has `phone: null` and cannot pay — ChariPay's adapter
-   rejects cleanly (`PAYMENT_CUSTOMER_DETAILS_REQUIRED`), no crash/financial
-   risk, but there's currently no profile page or endpoint letting an
-   existing customer add a phone number. Needs a small "complete your
-   phone" flow, ideally surfaced at the start of checkout. Not a blocker if
-   production has no real historical customers yet by go-live.
-9. Decide whether `feat/charipay-integration`'s `order_id IS NULL`
-   in-flight-checkout exclusion (excluding order-linked reservations from
-   lazy release/expiry-counting, so a real hosted-checkout redirect can't
-   have its stock resold while payment is still in flight) should be
-   ported to `main` independently of ChariPay, or left as ChariPay-specific
-   hardening. See the PR #82 note above — `main`'s fake-provider checkout
-   has the identical redirect-then-wait shape, so it is not exempt from
-   this race by construction; the interim mitigation
-   (`paid_but_unfulfillable`/`reconciliation_required`) degrades the race
-   to a flagged order rather than an oversold ticket, but whether that's
-   an acceptable permanent posture (vs. actually closing the race) is
-   still open. Not yet discussed with GPT.
+1. **ChariPay is selected and implemented on `feat/charipay-integration` (draft PR #13).**
+   The remaining payment work is provider acceptance, not provider selection:
+   obtain ChariPay's supported sandbox procedure for a genuine signed
+   `payment.failed`, obtain provider-side `operations:refund` enablement and
+   capture the real refund lifecycle, then complete merchant/KYB approval and
+   live credentials. Do not merge PR #13 or set `CHARIPAY_PROVIDER_VERIFIED=true`
+   before those gates are satisfied.
+2. **Activate Resend in Vercel Production when production sending is intended.**
+   The code path is already on `main` and Preview delivery is proven. Production
+   still needs `EMAIL_PROVIDER=resend`, `RESEND_FROM_EMAIL`, a production-scoped
+   `RESEND_API_KEY`, no `RESEND_TEST_RECIPIENT`, then a redeploy and one
+   application-originated delivery smoke test.
+3. **Production database recovery gate — deliberately paused by product/cost
+   decision until closer to public sales.** Neon is already selected and the
+   `onlylive-production` project is provisioned/migrated. Before real customer
+   traffic, upgrade/configure recovery to at least the documented 7-day PITR
+   target, add independent daily logical backups, and complete the timed
+   disposable restore drill from `docs/DATABASE_RECOVERY.md`.
+4. **Legal/accounting/CNDP approval.** The guarded legal drafts exist, and PR #72
+   prefills confirmed company/infrastructure facts, but counsel/accountant/CNDP
+   still need to resolve the remaining policy, tax, retention and transfer
+   questions before `LEGAL_DOCUMENTS_APPROVED=true` may be enabled.
+5. **Orders CSV export:** PR #89 removes the silent 20,000-row cap with
+   deterministic keyset pagination and a streamed response. Keep this item open
+   until that PR merges green.
+6. **Vercel WAF / public-production rollout:** stage rate-limit rules in log mode
+   when production write access and meaningful traffic are available, then tune
+   and enforce them without replacing account-level limiting. The final public
+   custom-domain smoke should be repeated once the production domain/PSP setup is
+   actually ready.
+
+### Resolved decisions removed from `Next` (2026-09-23)
+
+- **Production smoke test:** already passed on the protected production
+  deployment after PR #79: admin login/logout, catalogue mutation, checkout,
+  fake payment confirmation, ticket generation and scanner first/repeat scan.
+- **Legacy customer phone completion:** already implemented on
+  `feat/charipay-integration`; no separate `main` backport is useful while
+  ChariPay itself remains draft-gated.
+- **`order_id IS NULL` inventory hardening on `main`: no standalone backport.**
+  The feature branch couples that exclusion with checkout/provider
+  reconciliation that eventually releases order-linked expired holds after
+  provider resolution. `main` lacks that reconciliation machinery; backporting
+  only the exclusion could strand abandoned fake-checkout inventory as reserved
+  indefinitely. Until PR #13 brings the complete lifecycle, keep `main`'s
+  bounded expiry behavior plus its existing
+  `paid_but_unfulfillable`/`reconciliation_required` late-payment safeguards.
 
 ## Blocked
 
-- Real PSP integration is blocked on OnlyLive selecting a provider.
-- Legal document drafting is blocked on legal/accountant review and the
-  eventual PSP's requirements.
+- **ChariPay provider-side acceptance:** supported genuine `payment.failed`
+  sandbox procedure; `operations:refund` enablement (correlation id
+  `46965bf5-7d91-4655-9e71-7d909e5a11b0`); then merchant/KYB/live credentials.
+- **Legal/accounting/CNDP:** final binding documents, business-policy choices,
+  tax/accounting confirmations, retention schedule and required CNDP filings.
+- **Neon paid recovery capacity:** intentionally deferred until closer to public
+  sales; the current free-plan recovery window does not satisfy the documented
+  >=7-day production target.
 
 ## Deferred (explicitly out of scope, per CLAUDE.md)
 
