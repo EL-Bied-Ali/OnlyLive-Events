@@ -657,6 +657,35 @@ is NOT this bug: that column is written via DB-side `now()`, not a JS
 `now()` with no cross-source skew — a different issue, already fixed
 separately in commit `dad10c6`.
 
+## Completed (`actions/github-script` v9.0.0 bump — PR #84)
+
+`.github/workflows/dispatch-emails-cron.yml`'s `actions/github-script` pin
+bumped from `60a0d83…` (v7.0.1) to `3a2844b…` (v9.0.0), following an
+independent GPT audit rather than bumping casually (this action runs with
+`id-token: write`, so a supply-chain regression here is high-stakes).
+Audit found: the workflow only calls
+`core.getIDToken()`/`setSecret()`/`setOutput()`, never Octokit or
+`@actions/github`, so v9's Octokit-related breaking changes don't apply;
+v7.0.1 and v9.0.0 lock the exact same `@actions/core` 1.10.1 tarball (same
+npm integrity hash), so the OIDC code path itself is byte-identical
+between versions; the runner (2.337.0) exceeds v8+'s minimum (2.327.1);
+and the upstream repo's own `check-dist` step rebuilds `dist/` from
+source and fails the bundle if it doesn't match — this audit read the
+source/locked dependencies but did not independently byte-diff the full
+built v9 bundle itself. Resolves the Node 20 deprecation warning the
+pinned v7.0.1 was emitting.
+
+**Runtime verification completed (2026-09-23):** GPT triggered a real
+`workflow_dispatch` run against `main` on the merged SHA (run
+`35901586420`), confirming the bumped action still mints the OIDC token,
+passes Vercel's Trusted Sources check, and the dispatcher responds with
+real JSON: `{"claimed":0,"sent":0,"retried":0,"permanentlyFailed":0,
+"skipped":0}` (zero across the board reflects no email backlog at that
+moment, not a failure — the call completing end-to-end with a valid
+typed response is the actual proof). This closes the item; no further
+action needed unless the pin is bumped again in the future, which should
+get its own fresh audit rather than reusing this one.
+
 ## Next
 
 1. Select a Moroccan PSP and implement its real `PaymentProvider` adapter
@@ -692,39 +721,18 @@ separately in commit `dad10c6`.
    existing customer add a phone number. Needs a small "complete your
    phone" flow, ideally surfaced at the start of checkout. Not a blocker if
    production has no real historical customers yet by go-live.
-9. **AUDIT DONE (2026-09-23) — runtime verification pending:**
-   `actions/github-script` bumped from `60a0d83…` (v7.0.1) to `3a2844b…`
-   (v9.0.0) in `.github/workflows/dispatch-emails-cron.yml`, following an
-   independent GPT audit rather than bumping casually (this action runs
-   with `id-token: write`, so a supply-chain regression here is
-   high-stakes). Audit found: the workflow only calls
-   `core.getIDToken()`/`setSecret()`/`setOutput()`, never Octokit or
-   `@actions/github`, so v9's Octokit-related breaking changes don't apply;
-   v7.0.1 and v9.0.0 lock the exact same `@actions/core` 1.10.1 tarball
-   (same npm integrity hash), so the OIDC code path itself is
-   byte-identical between versions; the runner (2.337.0) exceeds v8+'s
-   minimum (2.327.1); and the upstream repo's own `check-dist` step
-   rebuilds `dist/` from source and fails the bundle if it doesn't match —
-   this audit read the source/locked dependencies but did not
-   independently byte-diff the full built v9 bundle itself. Resolves the
-   Node 20 deprecation warning the pinned v7.0.1 was emitting.
-   **Still needed before fully closing this item:** a real
-   `workflow_dispatch` run against this exact SHA, confirming it still
-   mints the OIDC token, passes Vercel's Trusted Sources check, and the
-   dispatcher receives a real response — GPT's own recommended final gate,
-   not yet executed.
-10. Decide whether `feat/charipay-integration`'s `order_id IS NULL`
-    in-flight-checkout exclusion (excluding order-linked reservations from
-    lazy release/expiry-counting, so a real hosted-checkout redirect can't
-    have its stock resold while payment is still in flight) should be
-    ported to `main` independently of ChariPay, or left as ChariPay-specific
-    hardening. See the PR #82 note above — `main`'s fake-provider checkout
-    has the identical redirect-then-wait shape, so it is not exempt from
-    this race by construction; the interim mitigation
-    (`paid_but_unfulfillable`/`reconciliation_required`) degrades the race
-    to a flagged order rather than an oversold ticket, but whether that's
-    an acceptable permanent posture (vs. actually closing the race) is
-    still open. Not yet discussed with GPT.
+9. Decide whether `feat/charipay-integration`'s `order_id IS NULL`
+   in-flight-checkout exclusion (excluding order-linked reservations from
+   lazy release/expiry-counting, so a real hosted-checkout redirect can't
+   have its stock resold while payment is still in flight) should be
+   ported to `main` independently of ChariPay, or left as ChariPay-specific
+   hardening. See the PR #82 note above — `main`'s fake-provider checkout
+   has the identical redirect-then-wait shape, so it is not exempt from
+   this race by construction; the interim mitigation
+   (`paid_but_unfulfillable`/`reconciliation_required`) degrades the race
+   to a flagged order rather than an oversold ticket, but whether that's
+   an acceptable permanent posture (vs. actually closing the race) is
+   still open. Not yet discussed with GPT.
 
 ## Blocked
 
