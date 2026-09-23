@@ -1,9 +1,11 @@
 import crypto from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { absoluteAppUrl } from "@/lib/appUrl";
 import { requireCustomer } from "@/lib/auth/customer";
 import { getPaymentForFakeCheckoutPage } from "@/lib/orders/checkout";
 import { signFakeWebhookPayload } from "@/lib/payments/fakeProvider";
+import { buildFakeWebhookForwardHeaders } from "@/lib/payments/fakeWebhookForwarding";
 import { isFakePaymentsAllowed } from "@/lib/payments";
 import { apiErrorResponse, ApiError } from "@/lib/http/errors";
 
@@ -58,10 +60,13 @@ export async function POST(request: NextRequest, context: { params: Promise<{ pa
     });
     const signature = signFakeWebhookPayload(payload);
 
-    const baseUrl = new URL(request.url).origin;
-    const webhookResponse = await fetch(`${baseUrl}/api/payments/webhook/fake`, {
+    // Resolved from NEXTAUTH_URL (lib/appUrl.ts), never from the
+    // incoming request's own URL/Host — this call now carries a secret
+    // header when bypassSecret is set, so the target must not be
+    // influenceable by request data.
+    const webhookResponse = await fetch(absoluteAppUrl("/api/payments/webhook/fake"), {
       method: "POST",
-      headers: { "content-type": "application/json", "x-onlylive-fake-signature": signature },
+      headers: buildFakeWebhookForwardHeaders(signature, process.env.VERCEL_AUTOMATION_BYPASS_SECRET),
       body: payload,
     });
     const webhookResult = await webhookResponse.json();

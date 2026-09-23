@@ -26,7 +26,9 @@ async function runHousekeeping(request: NextRequest) {
     const refunds = await reconcileProcessingRefundsFair(10);
 
     // Runs after this response is sent (see eagerDispatch.ts), so a slow
-    // email batch still never delays this route's own time-sensitive work.
+    // email batch still never delays this route's own time-sensitive work —
+    // an extra backstop trigger point alongside the dedicated
+    // dispatch-emails cron.
     scheduleEagerEmailDispatch();
     return NextResponse.json({
       ...holds,
