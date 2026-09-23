@@ -133,7 +133,7 @@ export async function updateEvent(input: EventMutationInput & { eventId: string 
           FROM reservations r
           JOIN ticket_categories tc ON tc.id = r.ticket_category_id
           WHERE tc.event_id = ${input.eventId}
-            AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= now()))
+            AND (r.status = 'converted' OR (r.status = 'active' AND r.expires_at >= (now() AT TIME ZONE 'UTC')))
           GROUP BY r.user_id
         ) committed_by_user
       `;
@@ -353,7 +353,7 @@ export async function updateSalesPhase(
         SELECT COALESCE(SUM(quantity), 0) AS total
         FROM reservations
         WHERE sales_phase_id = ${phase.id}
-          AND (status = 'converted' OR (status = 'active' AND expires_at >= now()))
+          AND (status = 'converted' OR (status = 'active' AND expires_at >= (now() AT TIME ZONE 'UTC')))
       `;
       const committed = Number(totals[0]?.total ?? 0);
       if (input.phaseQuantityLimit < committed) {
