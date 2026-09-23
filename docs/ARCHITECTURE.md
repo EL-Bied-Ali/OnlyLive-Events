@@ -473,8 +473,23 @@ historical rather than future.
 - **Offline scanning** — deliberately unsupported. The scanner PWA blocks
   validation without a live server connection because safe offline
   multi-device reconciliation is not implemented.
-- **Real payment provider** — no Moroccan PSP is integrated; only the
-  `fake` sandbox provider. See docs/PAYMENTS.md.
+- **Real payment provider** — ChariPay's hosted-checkout adapter is
+  implemented on this branch (`lib/payments/charipayProvider.ts`, draft
+  PR #13), including real webhook signature verification and checkout/
+  refund reconciliation. The sandbox purchase flow is proven end-to-end;
+  real sandbox refund attempts exposed and fixed two integration bugs
+  (`operationId` vs `externalId`; `reason` closed enum vs free text) but
+  the sandbox key itself is currently missing the `operations:refund`
+  capability, so a full refund cannot yet be exercised — see
+  docs/CHARIPAY.md. It is **not** production-approved: KYB/merchant
+  onboarding and two provider-side sandbox blockers (a supported
+  `payment.failed` procedure and the `operations:refund` capability — see
+  docs/CHARIPAY.md and TASKS.md's "Blocked" section) are still open before
+  PR #13 may merge to `main`. (The independent-audit gate itself is
+  already satisfied by this project's established Claude/GPT cross-audit
+  pattern — see TASKS.md — so it is not a separate open blocker.) The
+  `fake` provider remains available for local/CI testing regardless. See
+  docs/PAYMENTS.md.
 - **Real email provider** — implemented. `lib/email/resendProvider.ts`
   (`ResendEmailProvider`) sends through Resend's REST API on top of the same
   durable outbox/dispatcher foundation (idempotent enqueue in the same
