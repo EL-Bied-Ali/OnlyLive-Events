@@ -7,6 +7,8 @@ import { classifyCheckoutNavigation } from "@/lib/payments/redirect";
 
 interface CheckoutClientProps {
   reservationId: string;
+  reservationStatus: string;
+  orderId: string | null;
   expiresAt: string;
   quantity: number;
   unitPriceCents: number;
@@ -33,7 +35,7 @@ function checkoutErrorMessage(payload: CheckoutErrorPayload): string {
     case "PROVIDER_INITIALIZATION_IN_PROGRESS":
       return "Le paiement est encore en cours de préparation. Patientez quelques secondes puis réessayez.";
     case "PROVIDER_UNAVAILABLE":
-      return "Le service de paiement est momentanément indisponible. Vos billets restent réservés pour le moment ; réessayez dans quelques instants.";
+      return "Le paiement n’a pas pu être démarré. Vérifiez l’état de votre réservation ci-dessous avant de réessayer.";
     case "ORDER_NOT_PAYABLE":
       return "Cette commande n’est plus payable. Consultez son statut avant toute nouvelle tentative.";
     default:
@@ -43,6 +45,8 @@ function checkoutErrorMessage(payload: CheckoutErrorPayload): string {
 
 export function CheckoutClient({
   reservationId,
+  reservationStatus,
+  orderId,
   expiresAt,
   quantity,
   unitPriceCents,
@@ -77,7 +81,8 @@ export function CheckoutClient({
     return () => clearInterval(interval);
   }, [expiresAt]);
 
-  const expired = secondsLeft <= 0;
+  const expiredByTime = secondsLeft <= 0;
+  const checkoutUnavailable = reservationStatus !== "active" || expiredByTime;
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
   const total = ((quantity * unitPriceCents) / 100).toFixed(2);
@@ -192,7 +197,7 @@ export function CheckoutClient({
           </div>
         </div>
 
-        {!expired ? (
+        {!checkoutUnavailable ? (
           <div className="customer-hold-notice" role="status" aria-live="polite">
             <span className="customer-hold-dot" aria-hidden="true" />
             <div>
@@ -204,13 +209,25 @@ export function CheckoutClient({
           </div>
         ) : (
           <div className="customer-payment-alert customer-payment-alert-error" role="alert">
-            <strong>Cette réservation a expiré.</strong>
-            <p>Les billets ne sont plus bloqués pour cette commande.</p>
-            <Link href={`/events/${eventSlug}`}>Retour à l’événement</Link>
+            <strong>
+              {reservationStatus !== "active"
+                ? "Cette réservation n’est plus active."
+                : "Le délai de cette réservation est terminé."}
+            </strong>
+            <p>
+              {orderId
+                ? "Une commande existe déjà pour cette réservation. Consultez son statut avant toute nouvelle tentative de paiement."
+                : "Les billets ne sont plus bloqués pour cette réservation."}
+            </p>
+            {orderId ? (
+              <Link href={`/orders/${orderId}`}>Voir le statut de la commande</Link>
+            ) : (
+              <Link href={`/events/${eventSlug}`}>Retour à l’événement</Link>
+            )}
           </div>
         )}
 
-        {!expired && (
+        {!checkoutUnavailable && (
           <div className="customer-payment-explainer">
             <div className="customer-payment-lock" aria-hidden="true">✓</div>
             <div>
@@ -234,7 +251,7 @@ export function CheckoutClient({
           </div>
         )}
 
-        {needsPhone && !expired ? (
+        {needsPhone && !checkoutUnavailable ? (
           <form onSubmit={handleSavePhone} className="customer-phone-form">
             <div>
               <h2>Votre numéro de téléphone</h2>
@@ -266,7 +283,7 @@ export function CheckoutClient({
               {savingPhone ? "Enregistrement…" : "Enregistrer et continuer"}
             </button>
           </form>
-        ) : !expired ? (
+        ) : !checkoutUnavailable ? (
           <button onClick={handlePay} disabled={paymentBusy} className="customer-primary-button">
             {redirecting
               ? "Redirection vers le paiement…"
@@ -276,7 +293,7 @@ export function CheckoutClient({
           </button>
         ) : null}
 
-        {!expired && (
+        {!checkoutUnavailable && (
           <p className="customer-payment-footnote">
             Les billets sont émis uniquement après confirmation du paiement par le prestataire.
           </p>
