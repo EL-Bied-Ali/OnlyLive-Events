@@ -14,6 +14,7 @@ interface CheckoutClientProps {
   categoryName: string;
   eventTitle: string;
   eventSlug: string;
+  paymentProviderName: string;
 }
 
 type CheckoutErrorPayload = {
@@ -49,6 +50,7 @@ export function CheckoutClient({
   categoryName,
   eventTitle,
   eventSlug,
+  paymentProviderName,
 }: CheckoutClientProps) {
   const router = useRouter();
   const [secondsLeft, setSecondsLeft] = useState(() =>
@@ -80,6 +82,8 @@ export function CheckoutClient({
   const seconds = secondsLeft % 60;
   const total = ((quantity * unitPriceCents) / 100).toFixed(2);
   const paymentBusy = submitting || redirecting || savingPhone;
+  const isChariPay = paymentProviderName === "charipay";
+  const paymentDestination = isChariPay ? "ChariPay" : "la page de paiement sécurisée";
 
   async function handlePay() {
     setError(null);
@@ -161,14 +165,16 @@ export function CheckoutClient({
           <span className="customer-brand-mark" aria-hidden="true">OL</span>
           <span>OnlyLive</span>
         </Link>
-        <span className="customer-secure-label">Paiement sécurisé</span>
+        <span className="customer-secure-label">{isChariPay ? "Paiement sécurisé via ChariPay" : "Paiement sécurisé"}</span>
       </header>
 
       <section className="customer-checkout-card" aria-labelledby="checkout-title">
         <div className="customer-checkout-step">Étape 2 sur 3 · Paiement</div>
         <h1 id="checkout-title">Finaliser votre réservation</h1>
         <p className="customer-checkout-intro">
-          Vérifiez votre commande avant de continuer vers la page de paiement sécurisée.
+          {isChariPay
+            ? "Vérifiez votre commande avant de continuer vers ChariPay, notre prestataire de paiement."
+            : "Vérifiez votre commande avant de continuer vers la page de paiement sécurisée."}
         </p>
 
         <div className="customer-order-summary">
@@ -210,8 +216,9 @@ export function CheckoutClient({
             <div>
               <strong>Ce qui va se passer</strong>
               <p>
-                Vous allez continuer vers la page de paiement de notre partenaire. Après le paiement,
-                vous revenez automatiquement sur OnlyLive pendant que nous confirmons le statut.
+                {isChariPay
+                  ? "Vous allez être redirigé vers le checkout hébergé de ChariPay. OnlyLive ne reçoit ni ne stocke les données de votre carte. Après le paiement, vous revenez automatiquement sur OnlyLive pendant que nous confirmons le statut."
+                  : "Vous allez continuer vers la page de paiement sécurisée. Après le paiement, vous revenez automatiquement sur OnlyLive pendant que nous confirmons le statut."}
               </p>
               <p className="customer-payment-warning">
                 Si la confirmation prend quelques secondes, ne relancez pas un second paiement.
@@ -265,7 +272,7 @@ export function CheckoutClient({
               ? "Redirection vers le paiement…"
               : submitting
                 ? "Préparation du paiement…"
-                : `Continuer vers le paiement sécurisé · ${total} ${currency}`}
+                : `Continuer vers ${paymentDestination} · ${total} ${currency}`}
           </button>
         ) : null}
 
