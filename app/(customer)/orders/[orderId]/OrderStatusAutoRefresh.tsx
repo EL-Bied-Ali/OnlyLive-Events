@@ -55,8 +55,6 @@ export function OrderStatusAutoRefresh({ orderId, status }: Props) {
 
     attempts.current = 0;
     startedAt.current = Date.now();
-    setDelayed(false);
-    setStopped(false);
 
     const controller = new AbortController();
     let reconcileInFlight = false;
