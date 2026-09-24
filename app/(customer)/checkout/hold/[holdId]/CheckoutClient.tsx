@@ -93,14 +93,22 @@ export function CheckoutClient({
       if (!response.ok) {
         if (data.error === "PAYMENT_CUSTOMER_DETAILS_REQUIRED") {
           setNeedsPhone(true);
+          // startCheckout may already have extended the reservation before the
+          // provider rejected incomplete customer details. Refresh the Server
+          // Component so the visible countdown uses the authoritative expiry.
+          router.refresh();
           return;
         }
         setError(checkoutErrorMessage(data));
+        // The server may have created/extended the pending checkout before a
+        // provider-side failure. Keep the countdown in sync with that state.
+        router.refresh();
         return;
       }
 
       if (!data.redirectUrl) {
         setError("Le service de paiement n’a pas renvoyé de destination valide. Réessayez.");
+        router.refresh();
         return;
       }
 
