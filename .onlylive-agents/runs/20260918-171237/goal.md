@@ -1,0 +1,1 @@
+Continue OnlyLive incrementally by implementing the highest-priority unblocked production-readiness work documented in TASKS.md. Complete one small coherent feature at a time with targeted tests and durable documentation, stopping only when no unblocked repository work remains.
