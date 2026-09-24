@@ -83,7 +83,7 @@ export function CheckoutClient({
   const total = ((quantity * unitPriceCents) / 100).toFixed(2);
   const paymentBusy = submitting || redirecting || savingPhone;
   const isChariPay = paymentProviderName === "charipay";
-  const paymentDestination = isChariPay ? "ChariPay" : "la page de paiement sécurisée";
+  const paymentDestination = isChariPay ? "ChariPay" : "le paiement sécurisé";
 
   async function handlePay() {
     setError(null);
