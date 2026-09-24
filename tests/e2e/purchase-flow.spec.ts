@@ -29,17 +29,19 @@ test("customer can browse, reserve, pay, and receive a ticket", async ({ page })
   await page.getByRole("button", { name: "Réserver" }).first().click();
   await page.waitForURL(/\/checkout\/hold\//);
 
-  await expect(page.getByText(/expire dans/)).toBeVisible();
+  await expect(page.getByText(/Billets réservés encore/)).toBeVisible();
+  await expect(page.getByText(/vous revenez automatiquement sur OnlyLive/i)).toBeVisible();
 
-  await page.getByRole("button", { name: "Payer" }).click();
+  await page.getByRole("button", { name: /Continuer vers le paiement sécurisé/ }).click();
   await page.waitForURL(/\/pay\/fake\//);
 
   await page.getByRole("button", { name: "Simuler un paiement réussi" }).click();
   await page.waitForURL(/\/orders\//);
 
-  await expect(page.getByText("Payée")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Paiement confirmé" })).toBeVisible();
+  await expect(page.getByText(/vos billets sont disponibles/i)).toBeVisible();
 
-  await page.getByRole("link", { name: "Voir le billet" }).click();
+  await page.getByRole("link", { name: /Voir le billet/ }).click();
   await page.waitForURL(/\/tickets\//);
   await expect(page.getByAltText("QR code du billet")).toBeVisible();
   await expect(page.getByText("Valide")).toBeVisible();
