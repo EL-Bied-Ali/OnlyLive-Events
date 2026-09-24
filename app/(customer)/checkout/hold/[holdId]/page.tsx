@@ -30,6 +30,7 @@ export default async function CheckoutHoldPage({ params }: { params: Promise<{ h
       currency={reservation.salesPhase.currency}
       categoryName={reservation.ticketCategory.name}
       eventTitle={reservation.ticketCategory.event.title}
+      eventSlug={reservation.ticketCategory.event.slug}
     />
   );
 }
