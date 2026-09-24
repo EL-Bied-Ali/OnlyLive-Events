@@ -6,15 +6,73 @@ import { OrderStatusAutoRefresh } from "./OrderStatusAutoRefresh";
 
 export const dynamic = "force-dynamic";
 
-const STATUS_LABELS: Record<string, string> = {
-  pending_payment: "En attente de confirmation du paiement",
-  paid: "Payée",
-  failed: "Paiement échoué",
-  cancelled: "Annulée",
-  refunded: "Remboursée",
-  partially_refunded: "Partiellement remboursée",
-  paid_but_unfulfillable: "Paiement reçu — traitement manuel en cours",
-  reconciliation_required: "Paiement reçu — vérification en cours",
+type StatusTone = "pending" | "success" | "danger" | "neutral" | "attention";
+
+interface StatusPresentation {
+  tone: StatusTone;
+  eyebrow: string;
+  title: string;
+  description: string;
+  guidance?: string;
+}
+
+const STATUS_PRESENTATIONS: Record<string, StatusPresentation> = {
+  pending_payment: {
+    tone: "pending",
+    eyebrow: "Vérification du paiement",
+    title: "Confirmation en cours",
+    description:
+      "Nous vérifions le paiement auprès du prestataire. Le retour depuis la page de paiement ne suffit pas, à lui seul, à confirmer la commande.",
+    guidance: "Ne relancez pas un second paiement pendant cette vérification.",
+  },
+  paid: {
+    tone: "success",
+    eyebrow: "Commande confirmée",
+    title: "Paiement confirmé",
+    description: "Votre commande est confirmée et vos billets sont disponibles ci-dessous.",
+  },
+  failed: {
+    tone: "danger",
+    eyebrow: "Paiement non confirmé",
+    title: "Le paiement n’a pas abouti",
+    description:
+      "Aucun billet n’a été émis pour cette commande. Si vous revenez tout juste du paiement et pensez avoir été débité, actualisez d’abord cette page avant toute nouvelle tentative.",
+    guidance: "Évitez de repayer tant que vous avez un doute sur le premier paiement.",
+  },
+  cancelled: {
+    tone: "neutral",
+    eyebrow: "Commande annulée",
+    title: "Cette commande n’est plus active",
+    description: "Aucun billet actif n’est associé à cette commande.",
+  },
+  refunded: {
+    tone: "neutral",
+    eyebrow: "Remboursement",
+    title: "Commande remboursée",
+    description: "Le remboursement de cette commande a été enregistré.",
+  },
+  partially_refunded: {
+    tone: "attention",
+    eyebrow: "Remboursement partiel",
+    title: "Commande partiellement remboursée",
+    description: "Une partie du montant de cette commande a été remboursée.",
+  },
+  paid_but_unfulfillable: {
+    tone: "attention",
+    eyebrow: "Paiement reçu",
+    title: "Traitement manuel en cours",
+    description:
+      "Le paiement a été reçu, mais la commande nécessite une intervention avant que les billets puissent être émis.",
+    guidance: "Ne payez pas une seconde fois : cette commande est déjà liée à un paiement reçu.",
+  },
+  reconciliation_required: {
+    tone: "attention",
+    eyebrow: "Paiement reçu",
+    title: "Vérification supplémentaire en cours",
+    description:
+      "Le paiement a été reçu et doit être rapproché avant que la commande puisse être finalisée.",
+    guidance: "Ne payez pas une seconde fois pendant cette vérification.",
+  },
 };
 
 const REFRESHABLE_STATUSES = new Set(["pending_payment", "paid_but_unfulfillable", "reconciliation_required"]);
@@ -26,7 +84,7 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: {
-      event: true,
+      event: { include: { venue: true } },
       items: {
         include: {
           ticketCategory: true,
@@ -41,37 +99,101 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
   }
 
   const refreshable = REFRESHABLE_STATUSES.has(order.status);
+  const presentation =
+    STATUS_PRESENTATIONS[order.status] ?? {
+      tone: "neutral" as const,
+      eyebrow: "Statut de la commande",
+      title: order.status,
+      description: "Le statut de cette commande est affiché tel qu’il est enregistré.",
+    };
+  const total = (order.totalAmountCents / 100).toFixed(2);
+  const eventDate = new Intl.DateTimeFormat("fr-MA", {
+    dateStyle: "full",
+    timeStyle: "short",
+  }).format(order.event.startsAt);
 
   return (
-    <main style={{ maxWidth: 640, margin: "0 auto", padding: "48px 16px" }}>
+    <main className="customer-order-page">
+      <header className="customer-order-header">
+        <Link href="/" className="customer-brand" aria-label="OnlyLive — accueil">
+          <span className="customer-brand-mark" aria-hidden="true">OL</span>
+          <span>OnlyLive</span>
+        </Link>
+        <span className="customer-order-number">Commande {order.orderNumber}</span>
+      </header>
+
       <OrderStatusAutoRefresh orderId={order.id} status={order.status} />
-      <h1 style={{ fontSize: 26, marginBottom: 4 }}>Commande {order.orderNumber}</h1>
-      <p style={{ opacity: 0.8, marginBottom: 24 }}>{order.event.title}</p>
 
-      <p style={{ marginBottom: 24 }}>
-        Statut : <strong>{STATUS_LABELS[order.status] ?? order.status}</strong>
-        {refreshable ? <><br /><small>Cette page se met à jour automatiquement pendant la confirmation.</small></> : null}
-      </p>
+      <section className={`customer-order-status customer-order-status-${presentation.tone}`} aria-live="polite">
+        <span className="customer-status-dot" aria-hidden="true" />
+        <div>
+          <p className="customer-status-eyebrow">{presentation.eyebrow}</p>
+          <h1>{presentation.title}</h1>
+          <p>{presentation.description}</p>
+          {presentation.guidance ? <strong>{presentation.guidance}</strong> : null}
+          {refreshable ? (
+            <small>Cette page se met à jour automatiquement pendant la vérification.</small>
+          ) : null}
+        </div>
+      </section>
 
-      <div style={{ display: "grid", gap: 16 }}>
-        {order.items.map((item) => (
-          <div key={item.id} style={{ border: "1px solid #333", borderRadius: 12, padding: 20 }}>
-            <p style={{ margin: "0 0 8px" }}>
-              {item.quantity} × {item.ticketCategory.name} — {((item.quantity * item.unitPriceCents) / 100).toFixed(2)}{" "}
-              {order.currency}
-            </p>
-            {item.tickets.length > 0 && (
-              <ul style={{ margin: 0, paddingLeft: 16 }}>
-                {item.tickets.map((ticket) => (
-                  <li key={ticket.id}>
-                    <Link href={`/orders/${order.id}/tickets/${ticket.id}`}>Voir le billet</Link>
-                  </li>
-                ))}
-              </ul>
-            )}
+      <section className="customer-order-event">
+        <div>
+          <span className="customer-summary-label">Événement</span>
+          <h2>{order.event.title}</h2>
+          <p>{eventDate}</p>
+          <p>{order.event.venue.name}, {order.event.venue.city}</p>
+        </div>
+        <div className="customer-order-total">
+          <span>Total</span>
+          <strong>{total} {order.currency}</strong>
+        </div>
+      </section>
+
+      <section className="customer-order-items" aria-labelledby="order-items-title">
+        <div className="customer-section-heading">
+          <div>
+            <span className="customer-summary-label">Détail</span>
+            <h2 id="order-items-title">Vos billets</h2>
           </div>
-        ))}
-      </div>
+          <span>{order.items.reduce((sum, item) => sum + item.quantity, 0)} billet(s)</span>
+        </div>
+
+        <div className="customer-order-item-list">
+          {order.items.map((item) => (
+            <article key={item.id} className="customer-order-item">
+              <div className="customer-order-item-heading">
+                <div>
+                  <strong>{item.ticketCategory.name}</strong>
+                  <span>{item.quantity} × {(item.unitPriceCents / 100).toFixed(2)} {order.currency}</span>
+                </div>
+                <strong>{((item.quantity * item.unitPriceCents) / 100).toFixed(2)} {order.currency}</strong>
+              </div>
+
+              {item.tickets.length > 0 ? (
+                <div className="customer-ticket-links">
+                  {item.tickets.map((ticket, index) => (
+                    <Link key={ticket.id} href={`/orders/${order.id}/tickets/${ticket.id}`}>
+                      Voir le billet {item.tickets.length > 1 ? index + 1 : ""}
+                    </Link>
+                  ))}
+                </div>
+              ) : (
+                <p className="customer-ticket-pending">
+                  {order.status === "paid"
+                    ? "Les billets sont en cours de préparation. Actualisez cette page si nécessaire."
+                    : "Les billets apparaîtront ici après confirmation et finalisation de la commande."}
+                </p>
+              )}
+            </article>
+          ))}
+        </div>
+      </section>
+
+      <footer className="customer-order-footer">
+        <Link href={`/events/${order.event.slug}`}>Retour à l’événement</Link>
+        <p>Conservez le numéro {order.orderNumber} si vous devez faire référence à cette commande.</p>
+      </footer>
     </main>
   );
 }
