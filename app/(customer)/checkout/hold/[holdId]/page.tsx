@@ -27,6 +27,8 @@ export default async function CheckoutHoldPage({ params }: { params: Promise<{ h
   return (
     <CheckoutClient
       reservationId={reservation.id}
+      reservationStatus={reservation.status}
+      orderId={reservation.orderId}
       expiresAt={reservation.expiresAt.toISOString()}
       quantity={reservation.quantity}
       unitPriceCents={reservation.unitPriceCents}
