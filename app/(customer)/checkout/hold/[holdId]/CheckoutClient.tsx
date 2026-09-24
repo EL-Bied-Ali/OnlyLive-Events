@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { classifyCheckoutNavigation } from "@/lib/payments/redirect";
@@ -12,6 +13,31 @@ interface CheckoutClientProps {
   currency: string;
   categoryName: string;
   eventTitle: string;
+  eventSlug: string;
+}
+
+type CheckoutErrorPayload = {
+  error?: string;
+  message?: string;
+};
+
+function checkoutErrorMessage(payload: CheckoutErrorPayload): string {
+  switch (payload.error) {
+    case "HOLD_EXPIRED":
+      return "Cette réservation a expiré. Revenez à l’événement pour sélectionner de nouveaux billets.";
+    case "CHECKOUT_TOO_CLOSE_TO_EXPIRY":
+      return "Il ne reste plus assez de temps pour ouvrir le paiement en toute sécurité. Recommencez la réservation.";
+    case "CHECKOUT_RECONCILIATION_REQUIRED":
+      return "Une tentative de paiement existe déjà pour cette réservation et doit d’abord être vérifiée. Ne relancez pas un second paiement.";
+    case "PROVIDER_INITIALIZATION_IN_PROGRESS":
+      return "Le paiement est encore en cours de préparation. Patientez quelques secondes puis réessayez.";
+    case "PROVIDER_UNAVAILABLE":
+      return "Le service de paiement est momentanément indisponible. Vos billets restent réservés pour le moment ; réessayez dans quelques instants.";
+    case "ORDER_NOT_PAYABLE":
+      return "Cette commande n’est plus payable. Consultez son statut avant toute nouvelle tentative.";
+    default:
+      return payload.message ?? "Impossible de démarrer le paiement. Réessayez dans quelques instants.";
+  }
 }
 
 export function CheckoutClient({
@@ -22,6 +48,7 @@ export function CheckoutClient({
   currency,
   categoryName,
   eventTitle,
+  eventSlug,
 }: CheckoutClientProps) {
   const router = useRouter();
   const [secondsLeft, setSecondsLeft] = useState(() =>
@@ -29,6 +56,8 @@ export function CheckoutClient({
   );
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [redirecting, setRedirecting] = useState(false);
+
   // Set only when the provider rejects checkout for a missing/invalid phone
   // (a customer who registered before phone became mandatory) — see
   // /api/customers/phone. Never shown speculatively: only after the
@@ -50,31 +79,44 @@ export function CheckoutClient({
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
   const total = ((quantity * unitPriceCents) / 100).toFixed(2);
+  const paymentBusy = submitting || redirecting || savingPhone;
 
   async function handlePay() {
     setError(null);
     setSubmitting(true);
+    let navigationStarted = false;
+
     try {
       const response = await fetch(`/api/checkout/${reservationId}/start`, { method: "POST" });
-      const data = await response.json();
+      const data = (await response.json()) as CheckoutErrorPayload & { redirectUrl?: string };
+
       if (!response.ok) {
         if (data.error === "PAYMENT_CUSTOMER_DETAILS_REQUIRED") {
           setNeedsPhone(true);
           return;
         }
-        setError(data.message ?? "Impossible de démarrer le paiement");
+        setError(checkoutErrorMessage(data));
         return;
       }
+
+      if (!data.redirectUrl) {
+        setError("Le service de paiement n’a pas renvoyé de destination valide. Réessayez.");
+        return;
+      }
+
       const navigation = classifyCheckoutNavigation(data.redirectUrl);
+      navigationStarted = true;
+      setRedirecting(true);
+
       if (navigation.kind === "external") {
         window.location.assign(navigation.url);
         return;
       }
       router.push(navigation.url);
     } catch {
-      setError("Erreur réseau, réessayez");
+      setError("La connexion au service de paiement a échoué. Vérifiez votre réseau puis réessayez.");
     } finally {
-      setSubmitting(false);
+      if (!navigationStarted) setSubmitting(false);
     }
   }
 
@@ -82,77 +124,149 @@ export function CheckoutClient({
     event.preventDefault();
     setPhoneError(null);
     setSavingPhone(true);
+
     try {
       const response = await fetch("/api/customers/phone", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ phone }),
       });
-      const data = await response.json();
+      const data = (await response.json()) as CheckoutErrorPayload;
       if (!response.ok) {
-        setPhoneError(data.message ?? "Numéro de téléphone invalide");
+        setPhoneError(data.message ?? "Vérifiez le numéro saisi et réessayez.");
         return;
       }
+
       setNeedsPhone(false);
-      // Retry checkout immediately now that the provider's requirement is met.
       await handlePay();
     } catch {
-      setPhoneError("Erreur réseau, réessayez");
+      setPhoneError("Impossible d’enregistrer le numéro pour le moment. Vérifiez votre connexion puis réessayez.");
     } finally {
       setSavingPhone(false);
     }
   }
 
   return (
-    <main style={{ maxWidth: 480, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 26, marginBottom: 16 }}>Finaliser la réservation</h1>
-      <div style={{ border: "1px solid #333", borderRadius: 12, padding: 20, marginBottom: 24 }}>
-        <p style={{ margin: "0 0 4px" }}>{eventTitle}</p>
-        <p style={{ margin: "0 0 4px", opacity: 0.8 }}>
-          {quantity} × {categoryName}
-        </p>
-        <p style={{ fontSize: 20, fontWeight: 600, margin: "12px 0 0" }}>
-          {total} {currency}
-        </p>
-      </div>
+    <main className="customer-checkout-page">
+      <header className="customer-checkout-header">
+        <Link href="/" className="customer-brand" aria-label="OnlyLive — accueil">
+          <span className="customer-brand-mark" aria-hidden="true">OL</span>
+          <span>OnlyLive</span>
+        </Link>
+        <span className="customer-secure-label">Paiement sécurisé</span>
+      </header>
 
-      {!expired ? (
-        <p style={{ marginBottom: 16 }}>
-          Votre réservation expire dans{" "}
-          <strong>
-            {minutes}:{seconds.toString().padStart(2, "0")}
-          </strong>
+      <section className="customer-checkout-card" aria-labelledby="checkout-title">
+        <div className="customer-checkout-step">Étape 2 sur 3 · Paiement</div>
+        <h1 id="checkout-title">Finaliser votre réservation</h1>
+        <p className="customer-checkout-intro">
+          Vérifiez votre commande avant de continuer vers la page de paiement sécurisée.
         </p>
-      ) : (
-        <p style={{ marginBottom: 16, color: "#ff6b6b" }}>Votre réservation a expiré.</p>
-      )}
 
-      {error && <p style={{ color: "#ff6b6b" }}>{error}</p>}
+        <div className="customer-order-summary">
+          <div>
+            <span className="customer-summary-label">Événement</span>
+            <strong>{eventTitle}</strong>
+          </div>
+          <div>
+            <span className="customer-summary-label">Billets</span>
+            <strong>{quantity} × {categoryName}</strong>
+          </div>
+          <div className="customer-summary-total">
+            <span>Total à payer</span>
+            <strong>{total} {currency}</strong>
+          </div>
+        </div>
 
-      {needsPhone ? (
-        <form onSubmit={handleSavePhone} style={{ display: "grid", gap: 12 }}>
-          <p style={{ margin: 0 }}>
-            Un numéro de téléphone est requis pour finaliser ce paiement.
-          </p>
-          <input
-            type="tel"
-            placeholder="Téléphone (ex. 06 12 34 56 78)"
-            value={phone}
-            onChange={(event) => setPhone(event.target.value)}
-            required
-            minLength={8}
-            style={{ padding: 10 }}
-          />
-          {phoneError && <p style={{ color: "#ff6b6b", margin: 0 }}>{phoneError}</p>}
-          <button type="submit" disabled={savingPhone} style={{ padding: 14, width: "100%" }}>
-            {savingPhone ? "..." : "Enregistrer et continuer"}
+        {!expired ? (
+          <div className="customer-hold-notice" role="status" aria-live="polite">
+            <span className="customer-hold-dot" aria-hidden="true" />
+            <div>
+              <strong>
+                Billets réservés encore {minutes}:{seconds.toString().padStart(2, "0")}
+              </strong>
+              <p>Terminez le paiement avant la fin du délai pour conserver cette réservation.</p>
+            </div>
+          </div>
+        ) : (
+          <div className="customer-payment-alert customer-payment-alert-error" role="alert">
+            <strong>Cette réservation a expiré.</strong>
+            <p>Les billets ne sont plus bloqués pour cette commande.</p>
+            <Link href={`/events/${eventSlug}`}>Retour à l’événement</Link>
+          </div>
+        )}
+
+        {!expired && (
+          <div className="customer-payment-explainer">
+            <div className="customer-payment-lock" aria-hidden="true">✓</div>
+            <div>
+              <strong>Ce qui va se passer</strong>
+              <p>
+                Vous allez continuer vers la page de paiement de notre partenaire. Après le paiement,
+                vous revenez automatiquement sur OnlyLive pendant que nous confirmons le statut.
+              </p>
+              <p className="customer-payment-warning">
+                Si la confirmation prend quelques secondes, ne relancez pas un second paiement.
+              </p>
+            </div>
+          </div>
+        )}
+
+        {error && (
+          <div className="customer-payment-alert customer-payment-alert-error" role="alert">
+            <strong>Paiement non démarré</strong>
+            <p>{error}</p>
+          </div>
+        )}
+
+        {needsPhone && !expired ? (
+          <form onSubmit={handleSavePhone} className="customer-phone-form">
+            <div>
+              <h2>Votre numéro de téléphone</h2>
+              <p>
+                Notre partenaire de paiement en a besoin pour traiter la transaction. Il sera aussi
+                enregistré sur votre compte OnlyLive pour éviter de vous le redemander.
+              </p>
+            </div>
+            <label htmlFor="checkout-phone">Téléphone</label>
+            <input
+              id="checkout-phone"
+              type="tel"
+              inputMode="tel"
+              autoComplete="tel"
+              placeholder="Ex. 06 12 34 56 78"
+              value={phone}
+              onChange={(event) => setPhone(event.target.value)}
+              required
+              minLength={8}
+              aria-invalid={Boolean(phoneError)}
+              aria-describedby={phoneError ? "checkout-phone-error" : undefined}
+            />
+            {phoneError && (
+              <p id="checkout-phone-error" className="customer-field-error" role="alert">
+                {phoneError}
+              </p>
+            )}
+            <button type="submit" disabled={paymentBusy} className="customer-primary-button">
+              {savingPhone ? "Enregistrement…" : "Enregistrer et continuer"}
+            </button>
+          </form>
+        ) : !expired ? (
+          <button onClick={handlePay} disabled={paymentBusy} className="customer-primary-button">
+            {redirecting
+              ? "Redirection vers le paiement…"
+              : submitting
+                ? "Préparation du paiement…"
+                : `Continuer vers le paiement sécurisé · ${total} ${currency}`}
           </button>
-        </form>
-      ) : (
-        <button onClick={handlePay} disabled={expired || submitting} style={{ padding: 14, width: "100%" }}>
-          {submitting ? "..." : "Payer"}
-        </button>
-      )}
+        ) : null}
+
+        {!expired && (
+          <p className="customer-payment-footnote">
+            Les billets sont émis uniquement après confirmation du paiement par le prestataire.
+          </p>
+        )}
+      </section>
     </main>
   );
 }
