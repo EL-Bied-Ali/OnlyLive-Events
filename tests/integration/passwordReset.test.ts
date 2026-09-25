@@ -128,6 +128,52 @@ describe("resetPasswordWithToken", () => {
     expect(tokenRow.usedAt).not.toBeNull();
   });
 
+  it("actually changes which password authenticates the account, not just the stored hash", async () => {
+    const { hashPassword, verifyPassword } = await import("@/lib/auth/password");
+    const oldPassword = "the-original-password-123";
+    const user = await prisma.user.create({
+      data: {
+        email: `reset-verify-${randomUUID()}@test.onlylive.ma`,
+        passwordHash: await hashPassword(oldPassword),
+        name: "Reset Verify",
+      },
+    });
+    const { requestPasswordReset, resetPasswordWithToken } = await import("@/lib/auth/passwordReset");
+
+    await requestPasswordReset(user.email);
+    const rawToken = extractRawToken(lastSendInput().text);
+    const newPassword = "the-brand-new-password-456";
+    await resetPasswordWithToken(rawToken, newPassword);
+
+    const updated = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    await expect(verifyPassword(updated.passwordHash, oldPassword)).resolves.toBe(false);
+    await expect(verifyPassword(updated.passwordHash, newPassword)).resolves.toBe(true);
+  });
+
+  it("lets only one of two concurrent submissions of the same token succeed", async () => {
+    const user = await createTestUser("reset-concurrent");
+    const { requestPasswordReset, resetPasswordWithToken } = await import("@/lib/auth/passwordReset");
+
+    await requestPasswordReset(user.email);
+    const rawToken = extractRawToken(lastSendInput().text);
+
+    // Same token, submitted in parallel with two different new passwords --
+    // the atomic updateMany compare-and-set (usedAt IS NULL AND expiresAt in
+    // the future) must let exactly one through, not both racing to "reset".
+    const [first, second] = await Promise.all([
+      resetPasswordWithToken(rawToken, "concurrent-password-one"),
+      resetPasswordWithToken(rawToken, "concurrent-password-two"),
+    ]);
+
+    const outcomes = [first, second].sort();
+    expect(outcomes).toEqual(["invalid_or_expired", "reset"]);
+
+    // authVersion increments exactly once, alongside the single winning
+    // password change -- not once per attempt.
+    const updated = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(updated.authVersion).toBe(user.authVersion + 1);
+  });
+
   it("rejects reusing an already-used token, and never touches the password on that second attempt", async () => {
     const user = await createTestUser("reset-reuse");
     const { requestPasswordReset, resetPasswordWithToken } = await import("@/lib/auth/passwordReset");
