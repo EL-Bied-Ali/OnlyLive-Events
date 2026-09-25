@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { classifyCheckoutNavigation } from "@/lib/payments/redirect";
+import { formatCurrency } from "@/lib/formatCurrency";
 
 interface CheckoutClientProps {
   reservationId: string;
@@ -85,7 +86,7 @@ export function CheckoutClient({
   const checkoutUnavailable = reservationStatus !== "active" || expiredByTime;
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
-  const total = ((quantity * unitPriceCents) / 100).toFixed(2);
+  const total = formatCurrency(quantity * unitPriceCents, currency);
   const paymentBusy = submitting || redirecting || savingPhone;
   const isChariPay = paymentProviderName === "charipay";
   const paymentDestination = isChariPay ? "ChariPay" : "le paiement sécurisé";
@@ -193,7 +194,7 @@ export function CheckoutClient({
           </div>
           <div className="customer-summary-total">
             <span>Total à payer</span>
-            <strong>{total} {currency}</strong>
+            <strong>{total}</strong>
           </div>
         </div>
 
@@ -286,7 +287,7 @@ export function CheckoutClient({
               ? "Redirection vers le paiement…"
               : submitting
                 ? "Préparation du paiement…"
-                : `Continuer vers ${paymentDestination} · ${total} ${currency}`}
+                : `Continuer vers ${paymentDestination} · ${total}`}
           </button>
         ) : null}
 
