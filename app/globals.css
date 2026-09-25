@@ -398,6 +398,12 @@ textarea {
   text-transform: uppercase;
 }
 
+.live-back-link {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+}
+
 .live-back-link:hover { color: #fff; }
 
 .live-home-hero {
@@ -480,7 +486,7 @@ textarea {
 
 .live-home-intro > span {
   flex: 0 0 auto;
-  color: #73727d;
+  color: #8a8994;
   font-size: .68rem;
   font-weight: 800;
   letter-spacing: .1em;
@@ -527,7 +533,7 @@ textarea {
 
 .live-footer { width: min(100% - 40px, 1180px); margin: 0 auto; padding: 32px 0 56px; display: flex; justify-content: space-between; gap: 24px; border-top: 1px solid var(--live-line); }
 .live-footer ul { margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 18px; list-style: none; }
-.live-footer a { color: #85848e; font-size: .74rem; }
+.live-footer a { min-width: 40px; min-height: 40px; padding-inline: 4px; display: inline-flex; align-items: center; justify-content: center; color: #85848e; font-size: .74rem; }
 
 .live-event-page { padding-bottom: 72px; }
 .live-event-hero { width: min(100% - 40px, 1180px); min-height: 650px; margin: 0 auto; display: grid; grid-template-columns: minmax(320px, .82fr) minmax(0, 1.18fr); align-items: center; gap: clamp(46px, 8vw, 110px); padding: 68px 0 90px; }
@@ -562,14 +568,14 @@ textarea {
 .live-ticket-price strong { font-size: 1.75rem; letter-spacing: -.05em; }
 .live-ticket-price strong span { color: #8e8d97; font-size: .75rem; letter-spacing: .04em; }
 .live-reserve-form { display: grid; grid-template-columns: 82px 1fr; gap: 8px; }
-.live-reserve-form label { grid-column: 1 / -1; color: #74737d; font-size: .65rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+.live-reserve-form label { grid-column: 1 / -1; color: #9695a0; font-size: .65rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
 .live-reserve-form select { min-height: 50px; padding: 0 12px; border: 1px solid #383741; border-radius: 0; background: #08080b; color: #fff; }
 .live-reserve-form button { min-height: 50px; padding: 0 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 0; border-radius: 0; background: var(--live-coral); color: #fff; font-weight: 900; cursor: pointer; }
 .live-reserve-form button:hover:not(:disabled) { background: #ff496a; }
 .live-reserve-form button:disabled { opacity: .55; cursor: wait; }
 .live-reserve-error { grid-column: 1 / -1; color: #ff9db1; font-size: .78rem; line-height: 1.4; }
 .live-ticket-unavailable { margin: 0; color: #7f7e88; line-height: 1.5; }
-.live-ticket-trust { margin: 20px 0 0; color: #777680; font-size: .72rem; text-align: right; }
+.live-ticket-trust { margin: 20px 0 0; color: #8a8994; font-size: .72rem; text-align: right; }
 
 /* Login/register and the local provider simulator share the same customer tone. */
 .customer-auth-page,
@@ -589,7 +595,7 @@ textarea {
 .customer-auth-form button:disabled { opacity: .55; cursor: wait; }
 .customer-auth-error { margin: 0; color: #ff9db1; font-size: .86rem; line-height: 1.45; }
 .customer-auth-switch { margin: 20px 0 0; color: #85848f; font-size: .84rem; }
-.customer-auth-switch a { color: #fff; font-weight: 800; }
+.customer-auth-switch a { min-height: 40px; display: inline-flex; align-items: center; color: #fff; font-weight: 800; }
 .fake-payment-badge { margin: 0; color: var(--live-amber); font-size: .7rem; font-weight: 900; letter-spacing: .12em; text-transform: uppercase; }
 .fake-payment-summary { margin: 28px 0 18px; padding: 20px; display: flex; align-items: center; justify-content: space-between; gap: 20px; border: 1px solid var(--live-line); background: #09090d; }
 .fake-payment-summary p { margin: 0; color: #b8b7c0; }
@@ -599,7 +605,7 @@ textarea {
 .fake-payment-actions button:disabled { opacity: .55; cursor: wait; }
 .fake-payment-success { background: #56d4a7; color: #07130f; }
 .fake-payment-failure { border: 1px solid #41343a !important; background: transparent; color: #e7b4be; }
-.fake-payment-note { margin: 15px 0 0; color: #74737d; font-size: .72rem; text-align: center; }
+.fake-payment-note { margin: 15px 0 0; color: #8a8994; font-size: .72rem; text-align: center; }
 
 @media (max-width: 760px) {
   .live-nav { width: min(100% - 28px, 1180px); min-height: 72px; }
@@ -841,7 +847,9 @@ textarea {
 }
 
 .customer-payment-alert a {
-  display: inline-block;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
   margin-top: 10px;
   font-weight: 750;
 }
@@ -1363,6 +1371,9 @@ textarea {
 }
 
 .customer-ticket-back {
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
   color: #95939d;
   font-size: .7rem;
   font-weight: 800;
@@ -1467,7 +1478,7 @@ textarea {
 
 .customer-ticket-facts dt {
   margin-bottom: 6px;
-  color: #74717d;
+  color: #8a8793;
   font-size: .61rem;
   font-weight: 850;
   letter-spacing: .12em;
@@ -1574,16 +1585,36 @@ textarea {
 .customer-ticket-footer p {
   max-width: 650px;
   margin: 0;
-  color: #76737e;
+  color: #898692;
   font-size: .75rem;
   line-height: 1.5;
 }
 
 .customer-ticket-footer a {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
   flex: 0 0 auto;
   color: #fff;
   font-size: .76rem;
   font-weight: 800;
+}
+
+.live-brand:focus-visible,
+.live-back-link:focus-visible,
+.live-footer a:focus-visible,
+.live-event-card:focus-visible,
+.live-reserve-form select:focus-visible,
+.live-reserve-form button:focus-visible,
+.customer-auth-switch a:focus-visible,
+.customer-auth-form input:focus-visible,
+.customer-auth-form button:focus-visible,
+.fake-payment-actions button:focus-visible,
+.customer-payment-alert a:focus-visible,
+.customer-ticket-back:focus-visible,
+.customer-ticket-footer a:focus-visible {
+  outline: 3px solid rgba(255,113,140,.48);
+  outline-offset: 4px;
 }
 
 @media (max-width: 760px) {

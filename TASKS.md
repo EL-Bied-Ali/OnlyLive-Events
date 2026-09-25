@@ -18,6 +18,11 @@ memory alone.
   light, scroll-driven ticket entrances, and restrained hover feedback. All
   motion is decorative, disables under `prefers-reduced-motion`, and leaves
   payment/order status semantics static and immediately readable.
+- Final accessibility/responsive audit covered 1440, 768, 390, and 320 px:
+  no horizontal overflow or framework overlays, one H1 per screen, labelled
+  form controls, enlarged secondary touch targets, visible branded focus, and
+  stronger micro-copy contrast. Reduced-motion emulation disables every
+  decorative animation; browser measurement reported zero layout shift.
 - Added a three-step checkout progress indicator, locally formatted MAD
   amounts, responsive mobile layouts, and clearer status-specific hierarchy.
 - Preserved strict payment truthfulness for pending, failed, expired,
