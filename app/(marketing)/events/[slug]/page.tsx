@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { ReserveForm } from "./ReserveForm";
@@ -22,67 +23,90 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
     },
   });
 
-  if (!event) {
-    notFound();
-  }
+  if (!event) notFound();
 
   const now = new Date();
   const salesAreOpen =
     event.status === "on_sale" && event.salesOpenAt <= now && event.salesCloseAt > now;
+  const eventDate = new Intl.DateTimeFormat("fr-MA", {
+    dateStyle: "full",
+    timeStyle: "short",
+  }).format(event.startsAt);
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 4 }}>{event.title}</h1>
-      <p style={{ opacity: 0.8, marginBottom: 4 }}>
-        {event.venue.name}, {event.venue.city}
-      </p>
-      <p style={{ opacity: 0.8, marginBottom: 24 }}>
-        {new Intl.DateTimeFormat("fr-MA", { dateStyle: "full", timeStyle: "short" }).format(event.startsAt)}
-      </p>
-      <p style={{ marginBottom: 32 }}>{event.description}</p>
+    <main className="event-page">
+      <header className="event-header">
+        <Link href="/" className="customer-brand" aria-label="OnlyLive — accueil">
+          <span className="customer-brand-mark" aria-hidden="true">OL</span>
+          <span>OnlyLive</span>
+        </Link>
+        <Link href="/" className="event-back-link">Tous les événements</Link>
+      </header>
+
+      <section className="event-hero">
+        <span className="customer-summary-label">Événement</span>
+        <h1>{event.title}</h1>
+        <div className="event-meta">
+          <span>{eventDate}</span>
+          <span>{event.venue.name}, {event.venue.city}</span>
+        </div>
+        {event.description ? <p className="event-description">{event.description}</p> : null}
+      </section>
 
       {event.status === "cancelled" ? (
-        <p role="alert" style={{ padding: 16, borderRadius: 10, background: "#3d1d27", color: "#ffb0c0" }}>
-          Cet événement est annulé. Les détenteurs de billets seront contactés par OnlyLive.
-        </p>
+        <div role="alert" className="customer-payment-alert customer-payment-alert-error event-alert">
+          <strong>Événement annulé</strong>
+          <p>Les détenteurs de billets seront contactés par OnlyLive.</p>
+        </div>
       ) : null}
 
-      <h2 style={{ fontSize: 22, marginBottom: 16 }}>Billets</h2>
-      <div style={{ display: "grid", gap: 24 }}>
-        {event.ticketCategories.map((category) => {
-          const inventory = category.inventory;
-          const available = inventory
-            ? inventory.totalQuantity - inventory.reservedQuantity - inventory.soldQuantity
-            : 0;
-          const openPhase = salesAreOpen ? category.salesPhases.find(
-            (phase) => phase.startsAt <= now && (!phase.endsAt || phase.endsAt > now),
-          ) : undefined;
+      <section className="event-tickets" aria-labelledby="ticket-options-title">
+        <div className="marketing-section-heading">
+          <div>
+            <span className="customer-summary-label">Billetterie</span>
+            <h2 id="ticket-options-title">Choisissez vos billets</h2>
+          </div>
+          {salesAreOpen ? <span>Vente ouverte</span> : null}
+        </div>
 
-          return (
-            <div key={category.id} style={{ border: "1px solid #333", borderRadius: 12, padding: 20 }}>
-              <h3 style={{ fontSize: 18, marginBottom: 4 }}>{category.name}</h3>
-              {category.description && <p style={{ opacity: 0.7, marginBottom: 12 }}>{category.description}</p>}
+        <div className="event-ticket-list">
+          {event.ticketCategories.map((category) => {
+            const inventory = category.inventory;
+            const available = inventory
+              ? inventory.totalQuantity - inventory.reservedQuantity - inventory.soldQuantity
+              : 0;
+            const openPhase = salesAreOpen ? category.salesPhases.find(
+              (phase) => phase.startsAt <= now && (!phase.endsAt || phase.endsAt > now),
+            ) : undefined;
 
-              {!openPhase && event.status !== "cancelled" ? <p style={{ opacity: 0.6 }}>Aucune vente ouverte pour le moment</p> : null}
+            return (
+              <article key={category.id} className="event-ticket-card">
+                <div className="event-ticket-info">
+                  <h3>{category.name}</h3>
+                  {category.description ? <p>{category.description}</p> : null}
+                  {openPhase ? (
+                    <div className="event-ticket-price">
+                      <strong>{(openPhase.priceCents / 100).toFixed(2)} {openPhase.currency}</strong>
+                      <span>{openPhase.name}</span>
+                    </div>
+                  ) : event.status !== "cancelled" ? (
+                    <p className="event-ticket-unavailable">Aucune vente ouverte pour le moment.</p>
+                  ) : null}
+                </div>
 
-              {openPhase && (
-                <>
-                  <p style={{ fontSize: 20, fontWeight: 600, marginBottom: 12 }}>
-                    {(openPhase.priceCents / 100).toFixed(2)} {openPhase.currency}
-                    <span style={{ fontSize: 14, opacity: 0.6, marginLeft: 8 }}>({openPhase.name})</span>
-                  </p>
+                {openPhase ? (
                   <ReserveForm
                     ticketCategoryId={category.id}
                     salesPhaseId={openPhase.id}
                     available={available}
                     maxPerOrder={event.maxTicketsPerUser}
                   />
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </div>
+      </section>
     </main>
   );
 }
