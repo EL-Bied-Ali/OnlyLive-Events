@@ -107,6 +107,8 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
       description: "Le statut de cette commande est affiché tel qu’il est enregistré.",
     };
   const total = (order.totalAmountCents / 100).toFixed(2);
+  const tickets = order.items.flatMap((item) => item.tickets);
+  const primaryTicket = tickets.length === 1 ? tickets[0] : null;
   const eventDate = new Intl.DateTimeFormat("fr-MA", {
     dateStyle: "full",
     timeStyle: "short",
@@ -133,6 +135,15 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
           {presentation.guidance ? <strong>{presentation.guidance}</strong> : null}
           {refreshable ? (
             <small>Cette page se met à jour automatiquement pendant la vérification.</small>
+          ) : null}
+          {order.status === "paid" && primaryTicket ? (
+            <Link className="customer-status-primary-action" href={`/orders/${order.id}/tickets/${primaryTicket.id}`}>
+              Afficher mon billet
+            </Link>
+          ) : order.status === "paid" && tickets.length > 1 ? (
+            <a className="customer-status-primary-action" href="#order-items-title">
+              Voir mes {tickets.length} billets
+            </a>
           ) : null}
         </div>
       </section>
