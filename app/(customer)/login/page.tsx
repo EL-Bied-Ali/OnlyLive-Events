@@ -37,33 +37,46 @@ function LoginForm() {
   }
 
   return (
-    <main style={{ maxWidth: 400, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 28, marginBottom: 24 }}>Se connecter</h1>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
-        <input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          required
-          style={{ padding: 10 }}
-        />
-        <input
-          type="password"
-          placeholder="Mot de passe"
-          value={password}
-          onChange={(event) => setPassword(event.target.value)}
-          required
-          style={{ padding: 10 }}
-        />
-        {error && <p style={{ color: "#ff6b6b", margin: 0 }}>{error}</p>}
-        <button type="submit" disabled={submitting} style={{ padding: 12 }}>
-          {submitting ? "..." : "Se connecter"}
-        </button>
-      </form>
-      <p style={{ marginTop: 16 }}>
-        Pas encore de compte ? <Link href="/register">Créer un compte</Link>
-      </p>
+    <main className="customer-auth-page">
+      <Link href="/" className="customer-brand customer-auth-brand" aria-label="OnlyLive — accueil">
+        <span className="customer-brand-mark" aria-hidden="true">OL</span>
+        <span>OnlyLive</span>
+      </Link>
+      <section className="customer-auth-card">
+        <span className="customer-summary-label">Votre compte</span>
+        <h1>Se connecter</h1>
+        <p className="customer-auth-intro">Accédez à vos réservations et billets OnlyLive.</p>
+        <form onSubmit={handleSubmit} className="customer-auth-form">
+          <label htmlFor="login-email">Email</label>
+          <input
+            id="login-email"
+            type="email"
+            autoComplete="email"
+            placeholder="vous@exemple.com"
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            required
+          />
+          <label htmlFor="login-password">Mot de passe</label>
+          <input
+            id="login-password"
+            type="password"
+            autoComplete="current-password"
+            placeholder="Votre mot de passe"
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            required
+          />
+          {error ? <p className="customer-field-error" role="alert">{error}</p> : null}
+          <button type="submit" disabled={submitting} className="customer-primary-button customer-auth-submit">
+            {submitting ? "Connexion…" : "Se connecter"}
+          </button>
+        </form>
+        <p className="customer-auth-switch">
+          Pas encore de compte ?{" "}
+          <Link href={`/register?callbackUrl=${encodeURIComponent(callbackUrl)}`}>Créer un compte</Link>
+        </p>
+      </section>
     </main>
   );
 }
