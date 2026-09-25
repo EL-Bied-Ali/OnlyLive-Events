@@ -45,5 +45,5 @@ test("customer can browse, reserve, pay, and receive a ticket", async ({ page })
   await page.getByRole("link", { name: /Voir le billet/ }).click();
   await page.waitForURL(/\/tickets\//);
   await expect(page.getByAltText("QR code du billet")).toBeVisible();
-  await expect(page.getByText("Valide")).toBeVisible();
+  await expect(page.getByText("Billet valide")).toBeVisible();
 });

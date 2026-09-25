@@ -11,6 +11,9 @@ memory alone.
   ticket-pass selection cards without changing catalogue or inventory logic.
 - Unified register/login, checkout, fake-provider sandbox, and order pages so
   the customer keeps one coherent visual language from discovery to ticket.
+- Rebuilt the ticket screen as a responsive event pass; valid tickets expose
+  a high-contrast QR while used/cancelled tickets replace it with an explicit
+  non-actionable state so an invalid credential never looks scannable.
 - Added a three-step checkout progress indicator, locally formatted MAD
   amounts, responsive mobile layouts, and clearer status-specific hierarchy.
 - Preserved strict payment truthfulness for pending, failed, expired,
