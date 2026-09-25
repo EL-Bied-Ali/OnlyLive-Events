@@ -2,6 +2,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { getCustomerSession } from "@/lib/auth/customer";
 import { SignOutButton } from "@/components/SignOutButton";
+import { CustomerNavMobileMenu } from "@/components/CustomerNavMobileMenu";
 
 /**
  * Shared across every customer-facing page (marketing, orders, tickets).
@@ -28,25 +29,27 @@ export async function CustomerNav({ trailing }: { trailing?: ReactNode } = {}) {
 
       <div className="customer-nav-links">
         {trailing}
-        {customer ? (
-          <>
-            <Link href="/mes-billets">Mes billets</Link>
-            <Link href="/mes-commandes">Mes commandes</Link>
-            <Link href="/mon-compte">Compte</Link>
-            <Link href="/aide">Aide</Link>
-            <SignOutButton />
-          </>
-        ) : (
-          <>
-            <Link href="/aide">Aide</Link>
-            <Link href="/login" className="customer-nav-login">
-              Connexion
-            </Link>
-            <Link href="/register" className="customer-nav-register">
-              Inscription
-            </Link>
-          </>
-        )}
+        <CustomerNavMobileMenu>
+          {customer ? (
+            <>
+              <Link href="/mes-billets">Mes billets</Link>
+              <Link href="/mes-commandes">Mes commandes</Link>
+              <Link href="/mon-compte">Compte</Link>
+              <Link href="/aide">Aide</Link>
+              <SignOutButton />
+            </>
+          ) : (
+            <>
+              <Link href="/aide">Aide</Link>
+              <Link href="/login" className="customer-nav-login">
+                Connexion
+              </Link>
+              <Link href="/register" className="customer-nav-register">
+                Inscription
+              </Link>
+            </>
+          )}
+        </CustomerNavMobileMenu>
       </div>
     </nav>
   );

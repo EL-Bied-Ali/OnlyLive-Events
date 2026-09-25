@@ -2072,7 +2072,35 @@ textarea {
   color: #fff;
 }
 
+/*
+ * Above 640px, CustomerNavMobileMenu's wrapper and panel collapse out of
+ * the layout entirely (display: contents) so its links/buttons become
+ * direct children of .customer-nav-links' flex row -- pixel-identical to
+ * before the toggle existed. [hidden] is overridden here too: this state
+ * must never depend on the toggle's open/closed React state on desktop.
+ */
+.customer-nav-menu,
+.customer-nav-menu-panel {
+  display: contents;
+}
+
+.customer-nav-menu-toggle {
+  display: none;
+}
+
 @media (max-width: 640px) {
+  /* .customer-nav-links has always claimed width: 100% below this
+     breakpoint, but .live-nav (its flex parent, alongside .live-brand)
+     never had flex-wrap -- so instead of wrapping onto its own row, both
+     flex children were silently shrunk to fit one row together, and
+     .customer-nav-links never actually reached full width. Harmless
+     before (its own children just wrapped within whatever width it did
+     get), but CustomerNavMobileMenu's full-width panel makes the gap
+     between claimed and actual width obvious. */
+  .live-nav {
+    flex-wrap: wrap;
+  }
+
   .customer-nav-links {
     width: 100%;
     justify-content: flex-start;
@@ -2082,6 +2110,86 @@ textarea {
 
   .customer-nav-links a {
     padding: 10px 0;
+  }
+
+  /* Below 640px, five-plus auth links (Mes billets/Mes commandes/Compte/
+     Aide/Deconnexion) plus any page-specific trailing content would wrap
+     across several rows and push the header past 200px tall. Collapse
+     them behind one toggle instead; trailing content (rendered outside
+     this component in CustomerNav.tsx) stays visible either way. */
+  .customer-nav-menu {
+    display: block;
+    width: 100%;
+  }
+
+  .customer-nav-menu-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    justify-content: space-between;
+    padding: 10px 0;
+    border: 0;
+    background: transparent;
+    color: #c7cbd6;
+    font-weight: 700;
+    font-size: 0.86rem;
+    cursor: pointer;
+  }
+
+  .customer-nav-menu-toggle:hover,
+  .customer-nav-menu-toggle:focus-visible {
+    color: #fff;
+  }
+
+  .customer-nav-menu-toggle:focus-visible {
+    outline: 3px solid rgba(134, 214, 185, 0.46);
+    outline-offset: 3px;
+    border-radius: 6px;
+  }
+
+  .customer-nav-menu-icon {
+    width: 10px;
+    height: 10px;
+    border-right: 2px solid currentColor;
+    border-bottom: 2px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform 140ms ease;
+  }
+
+  .customer-nav-menu-icon.is-open {
+    transform: rotate(-135deg);
+  }
+
+  .customer-nav-menu-panel {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding-bottom: 8px;
+  }
+
+  .customer-nav-menu-panel[hidden] {
+    display: none;
+  }
+
+  .customer-nav-menu-panel a {
+    width: 100%;
+  }
+
+  /* .live-nav centers its two flex children by default, which looks fine
+     when both are short -- but once the panel opens and grows tall, that
+     centering floats the brand mark oddly beside a much taller column
+     instead of anchoring it to the top. Only override alignment for that
+     open state, so the already-correct closed-state row is untouched. */
+  .live-nav:has(.customer-nav-menu-panel:not([hidden])) {
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 640px) and (prefers-reduced-motion: reduce) {
+  .customer-nav-menu-icon {
+    transition: none;
   }
 }
 
