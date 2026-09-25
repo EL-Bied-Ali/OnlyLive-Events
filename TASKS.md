@@ -14,6 +14,10 @@ memory alone.
 - Rebuilt the ticket screen as a responsive event pass; valid tickets expose
   a high-contrast QR while used/cancelled tickets replace it with an explicit
   non-actionable state so an invalid credential never looks scannable.
+- Added a dependency-free motion layer: staged hero reveals, ambient stage
+  light, scroll-driven ticket entrances, and restrained hover feedback. All
+  motion is decorative, disables under `prefers-reduced-motion`, and leaves
+  payment/order status semantics static and immediately readable.
 - Added a three-step checkout progress indicator, locally formatted MAD
   amounts, responsive mobile layouts, and clearer status-specific hierarchy.
 - Preserved strict payment truthfulness for pending, failed, expired,

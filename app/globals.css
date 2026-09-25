@@ -1623,3 +1623,205 @@ textarea {
   .customer-ticket-facts dd { color: #000; }
 }
 
+/* Motion language: short stage-like reveals and slow ambient light. Motion is
+   decorative only; payment truth, controls, and status changes never depend
+   on an animation completing. */
+@keyframes live-reveal-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes live-reveal-scale {
+  from { opacity: 0; transform: scale(.965) translateY(16px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes live-stage-breathe {
+  0%, 100% { transform: scale(.96); opacity: .72; }
+  50% { transform: scale(1.035); opacity: 1; }
+}
+
+@keyframes live-ambient-drift {
+  0%, 100% { transform: translate3d(0, 0, 0) scale(1); }
+  50% { transform: translate3d(-2.5%, 2%, 0) scale(1.08); }
+}
+
+@keyframes live-hold-pulse {
+  0%, 100% { box-shadow: 0 0 0 5px rgba(242,204,92,.09); }
+  50% { box-shadow: 0 0 0 9px rgba(242,204,92,.025); }
+}
+
+.live-home::after,
+.live-event-page::after {
+  content: "";
+  width: min(62vw, 880px);
+  aspect-ratio: 1;
+  position: fixed;
+  top: -36vw;
+  right: -18vw;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(255,49,88,.12), transparent 66%);
+  filter: blur(18px);
+  animation: live-ambient-drift 14s ease-in-out infinite;
+}
+
+.live-nav {
+  animation: live-reveal-up 520ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+.live-home-hero .live-kicker,
+.live-event-hero-copy .live-kicker {
+  animation: live-reveal-up 560ms 100ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+.live-home-hero h1,
+.live-event-hero-copy h1 {
+  animation: live-reveal-up 720ms 170ms cubic-bezier(.16,.8,.2,1) both;
+}
+
+.live-home-intro,
+.live-event-description {
+  animation: live-reveal-up 620ms 300ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+.live-event-facts {
+  animation: live-reveal-up 620ms 390ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+.live-event-visual {
+  transform-origin: 50% 70%;
+  animation: live-reveal-scale 820ms 120ms cubic-bezier(.16,.8,.2,1) both;
+}
+
+.live-stage-ring {
+  animation: live-stage-breathe 5.5s ease-in-out infinite;
+}
+
+.live-stage-number {
+  text-shadow: 0 0 42px rgba(255,255,255,.08);
+  transition: letter-spacing 420ms cubic-bezier(.2,.75,.25,1), text-shadow 420ms ease;
+}
+
+.live-event-visual:hover .live-stage-number {
+  letter-spacing: -.055em;
+  text-shadow: 0 0 48px rgba(255,181,71,.22);
+}
+
+.live-event-list li {
+  animation: live-reveal-up 600ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+.live-event-list li:nth-child(1) { animation-delay: 340ms; }
+.live-event-list li:nth-child(2) { animation-delay: 410ms; }
+.live-event-list li:nth-child(3) { animation-delay: 480ms; }
+.live-event-list li:nth-child(4) { animation-delay: 550ms; }
+.live-event-list li:nth-child(5) { animation-delay: 620ms; }
+.live-event-list li:nth-child(n+6) { animation-delay: 690ms; }
+
+.live-event-arrow {
+  transition: color 220ms ease, background 220ms ease, border-color 220ms ease, transform 320ms cubic-bezier(.2,.75,.25,1);
+}
+
+.live-event-card:hover .live-event-arrow { transform: rotate(45deg); }
+
+.live-ticket-card {
+  transition: transform 260ms cubic-bezier(.2,.75,.25,1), border-color 260ms ease, box-shadow 260ms ease;
+}
+
+.live-ticket-card:hover {
+  z-index: 1;
+  transform: translateY(-4px);
+  border-color: rgba(255,113,140,.42);
+  box-shadow: 0 24px 70px rgba(0,0,0,.34);
+}
+
+.live-reserve-form button {
+  transition: background 180ms ease, transform 180ms ease, box-shadow 180ms ease;
+}
+
+.live-reserve-form button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 14px 32px rgba(255,49,88,.22);
+}
+
+.customer-hold-dot { animation: live-hold-pulse 2s ease-in-out infinite; }
+
+.customer-ticket-intro,
+.customer-ticket-pass,
+.customer-ticket-footer {
+  animation: live-reveal-up 650ms cubic-bezier(.2,.75,.25,1) both;
+}
+
+.customer-ticket-pass { animation-delay: 110ms; }
+.customer-ticket-footer { animation-delay: 220ms; }
+.customer-ticket-qr { transition: transform 260ms cubic-bezier(.2,.75,.25,1), box-shadow 260ms ease; }
+.customer-ticket-qr:hover { transform: translateY(-3px); box-shadow: 0 24px 80px rgba(0,0,0,.48); }
+
+@supports (animation-timeline: view()) {
+  .live-program .live-section-heading,
+  .live-tickets .live-section-heading {
+    animation: live-reveal-up linear both;
+    animation-timeline: view();
+    animation-range: entry 0% cover 28%;
+  }
+
+  .live-ticket-card {
+    animation: live-reveal-up linear both;
+    animation-timeline: view();
+    animation-range: entry 0% cover 24%;
+  }
+}
+
+@media (hover: none) {
+  .live-event-card:hover .live-event-arrow,
+  .live-ticket-card:hover,
+  .live-reserve-form button:hover:not(:disabled),
+  .customer-ticket-qr:hover {
+    transform: none;
+  }
+
+  .live-ticket-card:hover { box-shadow: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-home::after,
+  .live-event-page::after,
+  .live-nav,
+  .live-home-hero .live-kicker,
+  .live-event-hero-copy .live-kicker,
+  .live-home-hero h1,
+  .live-event-hero-copy h1,
+  .live-home-intro,
+  .live-event-description,
+  .live-event-facts,
+  .live-event-visual,
+  .live-stage-ring,
+  .live-event-list li,
+  .live-program .live-section-heading,
+  .live-tickets .live-section-heading,
+  .live-ticket-card,
+  .customer-hold-dot,
+  .customer-ticket-intro,
+  .customer-ticket-pass,
+  .customer-ticket-footer {
+    animation: none !important;
+  }
+
+  .live-stage-number,
+  .live-event-arrow,
+  .live-ticket-card,
+  .live-reserve-form button,
+  .customer-ticket-qr {
+    transition: none !important;
+  }
+
+  .live-event-card:hover .live-event-arrow,
+  .live-ticket-card:hover,
+  .live-reserve-form button:hover:not(:disabled),
+  .customer-ticket-qr:hover {
+    transform: none;
+  }
+}
+
