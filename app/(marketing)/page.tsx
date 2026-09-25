@@ -12,53 +12,72 @@ export default async function HomePage() {
   });
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 8 }}>OnlyLive</h1>
-      <p style={{ opacity: 0.7, marginBottom: 32 }}>Billetterie officielle des événements live au Maroc</p>
+    <main className="marketing-page">
+      <header className="marketing-header">
+        <Link href="/" className="customer-brand" aria-label="OnlyLive — accueil">
+          <span className="customer-brand-mark" aria-hidden="true">OL</span>
+          <span>OnlyLive</span>
+        </Link>
+        <span>Billetterie officielle</span>
+      </header>
 
-      {events.length === 0 && <p>Aucun événement pour le moment.</p>}
+      <section className="marketing-hero">
+        <span className="customer-summary-label">Événements live au Maroc</span>
+        <h1>Vos prochains lives,<br />sans détour.</h1>
+        <p>Réservez vos billets et retrouvez-les directement sur OnlyLive.</p>
+      </section>
 
-      <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 16 }}>
-        {events.map((event) => (
-          <li key={event.id} style={{ border: "1px solid #333", borderRadius: 12, padding: 20 }}>
-            <Link href={`/events/${event.slug}`} style={{ textDecoration: "none" }}>
-              <h2 style={{ fontSize: 22, marginBottom: 4 }}>{event.title}</h2>
-              <p style={{ opacity: 0.8, margin: 0 }}>
-                {event.venue.name}, {event.venue.city} —{" "}
-                {new Intl.DateTimeFormat("fr-MA", { dateStyle: "long" }).format(event.startsAt)}
-              </p>
-              {event.status === "sold_out" && (
-                <span style={{ display: "inline-block", marginTop: 8, color: "#ff6b6b" }}>Complet</span>
-              )}
-            </Link>
-          </li>
-        ))}
-      </ul>
+      <section className="marketing-events" aria-labelledby="events-title">
+        <div className="marketing-section-heading">
+          <div>
+            <span className="customer-summary-label">À l’affiche</span>
+            <h2 id="events-title">Événements</h2>
+          </div>
+          <span>{events.length} événement{events.length > 1 ? "s" : ""}</span>
+        </div>
+
+        {events.length === 0 ? (
+          <div className="marketing-empty">Aucun événement pour le moment.</div>
+        ) : (
+          <ul className="marketing-event-list">
+            {events.map((event) => {
+              const day = new Intl.DateTimeFormat("fr-MA", { day: "2-digit" }).format(event.startsAt);
+              const month = new Intl.DateTimeFormat("fr-MA", { month: "short" }).format(event.startsAt);
+              const date = new Intl.DateTimeFormat("fr-MA", { dateStyle: "long" }).format(event.startsAt);
+
+              return (
+                <li key={event.id}>
+                  <Link href={`/events/${event.slug}`} className="marketing-event-card">
+                    <div className="marketing-event-date" aria-hidden="true">
+                      <strong>{day}</strong>
+                      <span>{month}</span>
+                    </div>
+                    <div className="marketing-event-copy">
+                      <h3>{event.title}</h3>
+                      <p>{event.venue.name} · {event.venue.city}</p>
+                      <small>{date}</small>
+                    </div>
+                    <div className="marketing-event-action">
+                      {event.status === "sold_out" ? <span className="marketing-sold-out">Complet</span> : <span>Voir les billets</span>}
+                      <span aria-hidden="true">→</span>
+                    </div>
+                  </Link>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </section>
 
       {legalDocumentsApproved() && (
-        <footer style={{ marginTop: 64, paddingTop: 24, borderTop: "1px solid #333" }}>
-          <ul style={{ listStyle: "none", padding: 0, display: "flex", gap: 16, flexWrap: "wrap" }}>
-            <li>
-              <Link href="/legal/mentions-legales" style={{ fontSize: 13, opacity: 0.7 }}>
-                Mentions légales
-              </Link>
-            </li>
-            <li>
-              <Link href="/legal/conditions-generales" style={{ fontSize: 13, opacity: 0.7 }}>
-                CGV
-              </Link>
-            </li>
-            <li>
-              <Link href="/legal/politique-de-confidentialite" style={{ fontSize: 13, opacity: 0.7 }}>
-                Confidentialité
-              </Link>
-            </li>
-            <li>
-              <Link href="/legal/politique-de-remboursement" style={{ fontSize: 13, opacity: 0.7 }}>
-                Remboursement
-              </Link>
-            </li>
-          </ul>
+        <footer className="marketing-footer">
+          <span>OnlyLive</span>
+          <nav aria-label="Informations légales">
+            <Link href="/legal/mentions-legales">Mentions légales</Link>
+            <Link href="/legal/conditions-generales">CGV</Link>
+            <Link href="/legal/politique-de-confidentialite">Confidentialité</Link>
+            <Link href="/legal/politique-de-remboursement">Remboursement</Link>
+          </nav>
         </footer>
       )}
     </main>
