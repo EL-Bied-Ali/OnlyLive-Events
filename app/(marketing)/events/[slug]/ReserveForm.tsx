@@ -26,7 +26,10 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
     event.preventDefault();
     setError(null);
 
-    if (status !== "authenticated") {
+    if (status === "loading") {
+      return;
+    }
+    if (status === "unauthenticated") {
       router.push(`/login?callbackUrl=${encodeURIComponent(window.location.pathname)}`);
       return;
     }
@@ -66,8 +69,8 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
           </option>
         ))}
       </select>
-      <button type="submit" disabled={submitting}>
-        {submitting ? "Réservation…" : "Réserver"}<span aria-hidden="true">→</span>
+      <button type="submit" disabled={submitting || status === "loading"}>
+        {submitting ? "Réservation…" : status === "loading" ? "Vérification…" : "Réserver"}<span aria-hidden="true">→</span>
       </button>
       {error ? <span className="live-reserve-error" role="alert">{error}</span> : null}
     </form>
