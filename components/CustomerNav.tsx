@@ -33,10 +33,12 @@ export async function CustomerNav({ trailing }: { trailing?: ReactNode } = {}) {
             <Link href="/mes-billets">Mes billets</Link>
             <Link href="/mes-commandes">Mes commandes</Link>
             <Link href="/mon-compte">Compte</Link>
+            <Link href="/aide">Aide</Link>
             <SignOutButton />
           </>
         ) : (
           <>
+            <Link href="/aide">Aide</Link>
             <Link href="/login" className="customer-nav-login">
               Connexion
             </Link>

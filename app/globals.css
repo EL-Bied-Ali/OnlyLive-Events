@@ -3768,3 +3768,88 @@ html { scroll-behavior: smooth; }
   margin: 26px auto 0;
   padding: 0 clamp(16px, 4vw, 40px);
 }
+
+/* Help (/aide) */
+
+.aide-page {
+  min-height: 100vh;
+  padding-bottom: 64px;
+  background: var(--live-ink);
+}
+
+.aide-heading {
+  max-width: 640px;
+  margin: 0 auto;
+  padding: 34px clamp(16px, 4vw, 40px) 8px;
+}
+
+.aide-heading h1 {
+  margin: 0 0 6px;
+  font-size: clamp(1.6rem, 4.5vw, 2.1rem);
+  letter-spacing: -0.03em;
+}
+
+.aide-heading p {
+  margin: 0;
+  color: #9ba2b0;
+  line-height: 1.5;
+}
+
+.aide-topics {
+  max-width: 640px;
+  margin: 18px auto 0;
+  padding: 0 clamp(16px, 4vw, 40px);
+  display: grid;
+  gap: 14px;
+}
+
+.aide-topic {
+  padding: 20px;
+  border: 1px solid #292e39;
+  border-radius: 16px;
+  background: var(--live-panel);
+}
+
+.aide-topic h2 {
+  margin: 0 0 8px;
+  font-size: 1.02rem;
+  letter-spacing: -0.01em;
+}
+
+.aide-topic-answer p {
+  margin: 0 0 8px;
+  color: #aeb3bf;
+  line-height: 1.55;
+}
+
+.aide-topic-answer p:last-child {
+  margin-bottom: 0;
+}
+
+.aide-topic-answer a {
+  color: #ff9db1;
+  font-weight: 700;
+}
+
+.aide-contact {
+  max-width: 640px;
+  margin: 22px auto 0;
+  padding: 20px clamp(16px, 4vw, 40px);
+  border-top: 1px solid #21252e;
+}
+
+.aide-contact h2 {
+  margin: 0 0 8px;
+  font-size: 1.02rem;
+}
+
+.aide-contact p {
+  margin: 0;
+  color: #aeb3bf;
+  line-height: 1.6;
+}
+
+.aide-contact a {
+  color: #ff9db1;
+  font-weight: 700;
+}
