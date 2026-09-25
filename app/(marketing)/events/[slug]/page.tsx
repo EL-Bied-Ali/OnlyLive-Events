@@ -34,6 +34,18 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
   const eventMonth = new Intl.DateTimeFormat("fr-MA", { month: "long" }).format(event.startsAt);
   const eventYear = new Intl.DateTimeFormat("fr-MA", { year: "numeric" }).format(event.startsAt);
   const eventTime = new Intl.DateTimeFormat("fr-MA", { hour: "2-digit", minute: "2-digit" }).format(event.startsAt);
+  const openPrices = salesAreOpen
+    ? event.ticketCategories.flatMap((category) =>
+        category.salesPhases
+          .filter((phase) => phase.startsAt <= now && (!phase.endsAt || phase.endsAt > now))
+          .map((phase) => phase.priceCents),
+      )
+    : [];
+  const fromPriceCents = openPrices.length > 0 ? Math.min(...openPrices) : null;
+  const fromPrice =
+    fromPriceCents === null
+      ? null
+      : new Intl.NumberFormat("fr-MA", { maximumFractionDigits: 0 }).format(fromPriceCents / 100);
 
   return (
     <main className="live-event-page">
@@ -46,10 +58,24 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
       </nav>
 
       <section className="live-event-hero" aria-labelledby="event-title">
-        <div className="live-event-visual" aria-hidden="true">
-          <span className="live-stage-number">05·12</span>
+        <div className={`live-event-visual${event.coverImageUrl ? " has-cover" : ""}`} aria-hidden="true">
+          {event.coverImageUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- administrator-managed event artwork can be hosted on arbitrary approved origins.
+            <img className="live-event-cover" src={event.coverImageUrl} alt="" />
+          ) : null}
+          <span className="live-stage-number">{eventDay}·{new Intl.DateTimeFormat("fr-MA", { month: "2-digit" }).format(event.startsAt)}</span>
           <span className="live-stage-ring" />
-          <span className="live-stage-caption">Casablanca<br />{eventYear}</span>
+          <span className="live-stage-scanline" />
+          <span className="live-stage-caption">{event.venue.city}<br />{eventYear}</span>
+          <span className={`live-stage-status ${salesAreOpen ? "is-live" : ""}`}>
+            {salesAreOpen
+              ? "Billets en vente"
+              : event.status === "sold_out"
+                ? "Complet"
+                : event.status === "cancelled"
+                  ? "Annulé"
+                  : "Hors vente"}
+          </span>
         </div>
         <div className="live-event-hero-copy">
           <p className="live-kicker"><span aria-hidden="true" /> OnlyLive présente</p>
@@ -59,6 +85,44 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
             <div><dt>Date</dt><dd><strong>{eventDay} {eventMonth}</strong><span>{eventYear} · {eventTime}</span></dd></div>
             <div><dt>Lieu</dt><dd><strong>{event.venue.name}</strong><span>{event.venue.city}, Maroc</span></dd></div>
           </dl>
+          <div className="live-hero-actions">
+            {salesAreOpen && fromPrice ? (
+              <a className="live-hero-ticket-cta" href="#tickets">
+                <span>Choisir mes billets</span>
+                <span aria-hidden="true">↘</span>
+              </a>
+            ) : (
+              <div className="live-hero-ticket-cta is-disabled" aria-disabled="true">
+                <span>
+                  {event.status === "sold_out"
+                    ? "Billetterie complète"
+                    : event.status === "cancelled"
+                      ? "Événement annulé"
+                      : "Vente indisponible"}
+                </span>
+                <span aria-hidden="true">—</span>
+              </div>
+            )}
+            <p className="live-hero-price">
+              {fromPrice ? (
+                <>
+                  <small>À partir de</small>
+                  <strong>{fromPrice} MAD</strong>
+                </>
+              ) : (
+                <>
+                  <small>Disponibilité</small>
+                  <strong>
+                    {event.status === "sold_out"
+                      ? "Complet"
+                      : event.status === "cancelled"
+                        ? "Annulé"
+                        : "Hors vente"}
+                  </strong>
+                </>
+              )}
+            </p>
+          </div>
         </div>
       </section>
 
@@ -68,7 +132,7 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
         </p>
       ) : null}
 
-      <section className="live-tickets" aria-labelledby="tickets-title">
+      <section id="tickets" className="live-tickets" aria-labelledby="tickets-title">
         <div className="live-section-heading">
           <p>Choisissez votre expérience</p>
           <h2 id="tickets-title">Billets</h2>

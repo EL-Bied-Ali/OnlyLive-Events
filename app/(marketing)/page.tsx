@@ -26,11 +26,14 @@ export default async function HomePage() {
         <h1 id="home-title">Le live commence<br /><em>ici.</em></h1>
         <div className="live-home-intro">
           <p>Des scènes qui vibrent. Des billets officiels. Une expérience pensée pour le public marocain.</p>
-          <span>{events.length.toString().padStart(2, "0")} date{events.length === 1 ? "" : "s"} à l’affiche</span>
+          <div className="live-home-meta">
+            <span>{events.length.toString().padStart(2, "0")} date{events.length === 1 ? "" : "s"} à l’affiche</span>
+            <a href="#program"><span>Voir la programmation</span><span aria-hidden="true">↓</span></a>
+          </div>
         </div>
       </section>
 
-      <section className="live-program" aria-labelledby="program-title">
+      <section id="program" className="live-program" aria-labelledby="program-title">
         <div className="live-section-heading">
           <p>À l’affiche</p>
           <h2 id="program-title">Prochainement sur scène</h2>
