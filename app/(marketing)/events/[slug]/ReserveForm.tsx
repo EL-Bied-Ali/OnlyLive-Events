@@ -19,7 +19,7 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
   const [submitting, setSubmitting] = useState(false);
 
   if (available <= 0) {
-    return <p style={{ opacity: 0.6 }}>Épuisé</p>;
+    return <p className="event-ticket-sold-out">Épuisé</p>;
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -52,23 +52,25 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-      <select
-        value={quantity}
-        onChange={(event) => setQuantity(Number(event.target.value))}
-        disabled={submitting}
-        style={{ padding: 8 }}
-      >
-        {Array.from({ length: Math.min(maxPerOrder, available) }, (_, i) => i + 1).map((n) => (
-          <option key={n} value={n}>
-            {n}
-          </option>
-        ))}
-      </select>
-      <button type="submit" disabled={submitting} style={{ padding: "8px 16px" }}>
-        {submitting ? "..." : "Réserver"}
+    <form onSubmit={handleSubmit} className="event-reserve-form">
+      <div className="event-quantity-field">
+        <label htmlFor={`quantity-${ticketCategoryId}`}>Quantité</label>
+        <select
+          id={`quantity-${ticketCategoryId}`}
+          value={quantity}
+          onChange={(event) => setQuantity(Number(event.target.value))}
+          disabled={submitting}
+        >
+          {Array.from({ length: Math.min(maxPerOrder, available) }, (_, i) => i + 1).map((n) => (
+            <option key={n} value={n}>{n}</option>
+          ))}
+        </select>
+      </div>
+      <button type="submit" disabled={submitting} className="customer-primary-button event-reserve-button">
+        {submitting ? "Réservation…" : "Réserver"}
       </button>
-      {error && <span style={{ color: "#ff6b6b", fontSize: 14 }}>{error}</span>}
+      {available <= 5 ? <small className="event-low-stock">Plus que {available} disponible{available > 1 ? "s" : ""}</small> : null}
+      {error ? <p className="customer-field-error event-reserve-error" role="alert">{error}</p> : null}
     </form>
   );
 }
