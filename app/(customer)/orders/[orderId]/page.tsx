@@ -5,6 +5,7 @@ import { requireCustomerForPage } from "@/lib/auth/customer";
 import { OrderStatusAutoRefresh } from "./OrderStatusAutoRefresh";
 import { formatCurrency } from "@/lib/formatCurrency";
 import { formatEventDate } from "@/lib/formatEventDate";
+import { CustomerNav } from "@/components/CustomerNav";
 
 export const dynamic = "force-dynamic";
 
@@ -122,13 +123,7 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
 
   return (
     <main className="customer-order-page">
-      <header className="customer-order-header">
-        <Link href="/" className="customer-brand" aria-label="OnlyLive — accueil">
-          <span className="customer-brand-mark" aria-hidden="true">OL</span>
-          <span>OnlyLive</span>
-        </Link>
-        <span className="customer-order-number">Commande {order.orderNumber}</span>
-      </header>
+      <CustomerNav trailing={<span className="customer-order-number">Commande {order.orderNumber}</span>} />
 
       <OrderStatusAutoRefresh orderId={order.id} status={order.status} />
 

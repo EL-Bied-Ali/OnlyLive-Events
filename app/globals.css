@@ -2017,18 +2017,6 @@ textarea {
 
 /* Shared customer nav (components/CustomerNav.tsx) */
 
-.customer-nav {
-  min-height: 64px;
-  padding: 16px clamp(16px, 4vw, 40px);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-  flex-wrap: wrap;
-  border-bottom: 1px solid #1d212a;
-  background: #0b0b0f;
-}
-
 .customer-nav-links {
   display: flex;
   align-items: center;
@@ -2085,11 +2073,6 @@ textarea {
 }
 
 @media (max-width: 640px) {
-  .customer-nav {
-    min-height: auto;
-    padding: 14px 16px;
-  }
-
   .customer-nav-links {
     width: 100%;
     justify-content: flex-start;

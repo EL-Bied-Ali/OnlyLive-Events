@@ -10,6 +10,7 @@ import {
   formatEventTime,
   formatEventYear,
 } from "@/lib/formatEventDate";
+import { CustomerNav } from "@/components/CustomerNav";
 
 export const dynamic = "force-dynamic";
 
@@ -74,13 +75,7 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
           <img src={eventBackdropUrl} alt="" />
         </div>
       ) : null}
-      <nav className="live-nav" aria-label="Navigation principale">
-        <Link href="/" className="live-brand" aria-label="OnlyLive — accueil">
-          <span className="live-brand-mark" aria-hidden="true">OL</span>
-          <span>OnlyLive</span>
-        </Link>
-        <Link href="/" className="live-back-link">← Tous les événements</Link>
-      </nav>
+      <CustomerNav trailing={<Link href="/" className="live-back-link">← Tous les événements</Link>} />
 
       <section className="live-event-hero" aria-labelledby="event-title">
         <div className={`live-event-visual${eventPosterUrl ? " has-cover" : ""}`} aria-hidden="true">

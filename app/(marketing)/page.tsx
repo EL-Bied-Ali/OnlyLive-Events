@@ -2,6 +2,7 @@ import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { legalDocumentsApproved } from "@/lib/legal/approval";
 import { formatEventDateOnly, formatEventDay, formatEventMonth } from "@/lib/formatEventDate";
+import { CustomerNav } from "@/components/CustomerNav";
 
 export const dynamic = "force-dynamic";
 
@@ -14,13 +15,7 @@ export default async function HomePage() {
 
   return (
     <main className="live-home">
-      <nav className="live-nav" aria-label="Navigation principale">
-        <Link href="/" className="live-brand" aria-label="OnlyLive — accueil">
-          <span className="live-brand-mark" aria-hidden="true">OL</span>
-          <span>OnlyLive</span>
-        </Link>
-        <span className="live-nav-note">Casablanca · Maroc</span>
-      </nav>
+      <CustomerNav trailing={<span className="live-nav-note">Casablanca · Maroc</span>} />
 
       <section className="live-home-hero" aria-labelledby="home-title">
         <p className="live-kicker"><span aria-hidden="true" /> Billetterie officielle</p>

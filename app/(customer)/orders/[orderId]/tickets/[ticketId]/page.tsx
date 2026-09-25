@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireCustomerForPage } from "@/lib/auth/customer";
 import { renderTicketQrDataUrl } from "@/lib/tickets";
 import { formatEventDate } from "@/lib/formatEventDate";
+import { CustomerNav } from "@/components/CustomerNav";
 
 export const dynamic = "force-dynamic";
 
@@ -54,15 +55,13 @@ export default async function TicketPage({
 
   return (
     <main className={`customer-ticket-page customer-ticket-${ticket.status}`}>
-      <header className="customer-ticket-header">
-        <Link href="/" className="customer-brand" aria-label="OnlyLive — accueil">
-          <span className="customer-brand-mark" aria-hidden="true">OL</span>
-          <span>OnlyLive</span>
-        </Link>
-        <Link href={`/orders/${orderId}`} className="customer-ticket-back">
-          ← Commande {ticket.orderItem.order.orderNumber}
-        </Link>
-      </header>
+      <CustomerNav
+        trailing={
+          <Link href={`/orders/${orderId}`} className="customer-ticket-back">
+            ← Commande {ticket.orderItem.order.orderNumber}
+          </Link>
+        }
+      />
 
       <section className="customer-ticket-intro" aria-labelledby="ticket-title">
         <p className="customer-status-eyebrow">Votre accès</p>
