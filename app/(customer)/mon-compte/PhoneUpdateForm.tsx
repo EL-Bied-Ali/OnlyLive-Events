@@ -7,12 +7,29 @@ interface Props {
   currentPhone: string | null;
 }
 
+// Keyed by the API's `error` code, never its `message` -- that field can be
+// an internal/English string (a hardcoded rate-limit message, a raw Zod
+// validation message, a generic 500 fallback) never meant for direct
+// customer display. Unknown codes fall back to the generic message below,
+// same as before this map existed.
+const PHONE_UPDATE_ERROR_MESSAGES: Record<string, string> = {
+  RATE_LIMITED: "Trop de tentatives. Réessayez dans quelques minutes.",
+  INVALID_INPUT: "Numéro de téléphone invalide.",
+  UNAUTHENTICATED: "Votre session a expiré. Reconnectez-vous puis réessayez.",
+};
+
 export function PhoneUpdateForm({ currentPhone }: Props) {
   const router = useRouter();
   const [phone, setPhone] = useState(currentPhone ?? "");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [justSaved, setJustSaved] = useState(false);
+
+  function startEditing() {
+    setJustSaved(false);
+    setEditing(true);
+  }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
@@ -26,10 +43,11 @@ export function PhoneUpdateForm({ currentPhone }: Props) {
       });
       const data = await response.json();
       if (!response.ok) {
-        setError(data.message ?? "Numéro de téléphone invalide.");
+        setError(PHONE_UPDATE_ERROR_MESSAGES[data.error] ?? "Numéro de téléphone invalide.");
         return;
       }
       setEditing(false);
+      setJustSaved(true);
       router.refresh();
     } catch {
       setError("Impossible d’enregistrer le numéro pour le moment. Vérifiez votre connexion puis réessayez.");
@@ -44,8 +62,13 @@ export function PhoneUpdateForm({ currentPhone }: Props) {
         <div>
           <span className="customer-summary-label">Téléphone</span>
           <strong>{currentPhone ?? "Non renseigné"}</strong>
+          {justSaved && (
+            <p role="status" aria-live="polite" className="customer-account-success">
+              Numéro mis à jour.
+            </p>
+          )}
         </div>
-        <button type="button" className="customer-account-edit" onClick={() => setEditing(true)}>
+        <button type="button" className="customer-account-edit" onClick={startEditing}>
           Modifier
         </button>
       </div>

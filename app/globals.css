@@ -3884,6 +3884,22 @@ html { scroll-behavior: smooth; }
   color: #fff;
 }
 
+.customer-account-edit:focus-visible,
+.customer-account-save:focus-visible,
+.customer-account-cancel:focus-visible,
+.customer-account-field-editing input:focus-visible {
+  outline: 3px solid rgba(134, 214, 185, 0.46);
+  outline-offset: 3px;
+  border-radius: 10px;
+}
+
+.customer-account-success {
+  margin: 6px 0 0;
+  color: #68deb3;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
 .customer-account-signout {
   max-width: 560px;
   margin: 26px auto 0;
