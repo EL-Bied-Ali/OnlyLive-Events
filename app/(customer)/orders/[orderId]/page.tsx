@@ -100,15 +100,22 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
   }
 
   const refreshable = REFRESHABLE_STATUSES.has(order.status);
-  const presentation =
+  const tickets = order.items.flatMap((item) => item.tickets);
+  const basePresentation =
     STATUS_PRESENTATIONS[order.status] ?? {
       tone: "neutral" as const,
       eyebrow: "Statut de la commande",
       title: order.status,
       description: "Le statut de cette commande est affiché tel qu’il est enregistré.",
     };
+  const presentation =
+    order.status === "paid" && tickets.length === 0
+      ? {
+          ...basePresentation,
+          description: "Votre commande est confirmée. Vos billets sont encore en cours de préparation.",
+        }
+      : basePresentation;
   const total = formatCurrency(order.totalAmountCents, order.currency);
-  const tickets = order.items.flatMap((item) => item.tickets);
   const primaryTicket = tickets.length === 1 ? tickets[0] : null;
   const eventDate = new Intl.DateTimeFormat("fr-MA", {
     dateStyle: "full",
