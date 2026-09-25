@@ -919,14 +919,213 @@ textarea {
   .customer-primary-button { transition: none; }
 }
 
+/* Customer ticket: optimized for quick scanning at the venue while preserving status truth. */
+.customer-ticket-page {
+  min-height: 100vh;
+  width: min(100%, 520px);
+  margin: 0 auto;
+  padding: 28px 18px 56px;
+}
+
+.customer-ticket-header {
+  min-height: 56px;
+  margin-bottom: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.customer-ticket-back-link {
+  color: #949bab;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.customer-ticket-back-link:hover {
+  color: #fff;
+}
+
+.customer-ticket-card {
+  overflow: hidden;
+  border: 1px solid #292e39;
+  border-radius: 22px;
+  background: #11141b;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+}
+
+.customer-ticket-event {
+  padding: 24px 24px 18px;
+  text-align: center;
+}
+
+.customer-ticket-event h1 {
+  margin: 7px 0 5px;
+  font-size: clamp(1.55rem, 6vw, 2.1rem);
+  line-height: 1.08;
+  letter-spacing: -0.04em;
+}
+
+.customer-ticket-event p {
+  margin: 0;
+  color: #9ba2b0;
+  font-weight: 700;
+}
+
+.customer-ticket-status {
+  margin: 0 20px 18px;
+  padding: 12px 14px;
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  border: 1px solid #303641;
+  border-radius: 12px;
+  background: #0d1016;
+}
+
+.customer-ticket-status-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: #9fa6b5;
+}
+
+.customer-ticket-status strong {
+  display: block;
+  font-size: 0.9rem;
+}
+
+.customer-ticket-status p {
+  margin: 3px 0 0;
+  color: #939bab;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.customer-ticket-status-valid {
+  border-color: #245342;
+  background: #10231d;
+}
+
+.customer-ticket-status-valid .customer-ticket-status-dot {
+  background: #68deb3;
+  box-shadow: 0 0 0 5px rgba(104, 222, 179, 0.08);
+}
+
+.customer-ticket-status-valid strong {
+  color: #8ae6c4;
+}
+
+.customer-ticket-status-used {
+  border-color: #5a491d;
+  background: #211d0f;
+}
+
+.customer-ticket-status-used .customer-ticket-status-dot {
+  background: #f0c95f;
+}
+
+.customer-ticket-status-used strong {
+  color: #f1d485;
+}
+
+.customer-ticket-status-cancelled {
+  border-color: #713444;
+  background: #28141b;
+}
+
+.customer-ticket-status-cancelled .customer-ticket-status-dot {
+  background: #ff7892;
+}
+
+.customer-ticket-status-cancelled strong {
+  color: #ffafbf;
+}
+
+.customer-ticket-qr {
+  margin: 0 20px 20px;
+  padding: 22px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: #fff;
+}
+
+.customer-ticket-qr img {
+  display: block;
+  width: min(100%, 290px);
+  height: auto;
+}
+
+.customer-ticket-qr-used,
+.customer-ticket-qr-cancelled {
+  opacity: 0.62;
+}
+
+.customer-ticket-details {
+  margin: 0;
+  border-top: 1px solid #292e38;
+}
+
+.customer-ticket-details > div {
+  padding: 14px 20px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 14px;
+  border-top: 1px solid #252a33;
+}
+
+.customer-ticket-details > div:first-child {
+  border-top: 0;
+}
+
+.customer-ticket-details dt {
+  color: #7f8797;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.customer-ticket-details dd {
+  margin: 0;
+  color: #e7e9ed;
+  font-size: 0.86rem;
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.customer-ticket-footer {
+  margin-top: 16px;
+  text-align: center;
+}
+
+.customer-ticket-footer a {
+  color: #e7e9ed;
+  font-size: 0.84rem;
+  font-weight: 750;
+  text-decoration: none;
+}
+
+.customer-ticket-footer p {
+  margin: 8px auto 0;
+  max-width: 420px;
+  color: #747c8c;
+  font-size: 0.75rem;
+  line-height: 1.45;
+}
+
 @media (max-width: 560px) {
   .customer-checkout-page,
-  .customer-order-page {
+  .customer-order-page,
+  .customer-ticket-page {
     padding: 18px 12px 42px;
   }
 
   .customer-checkout-header,
-  .customer-order-header {
+  .customer-order-header,
+  .customer-ticket-header {
     min-height: 48px;
     margin-bottom: 18px;
   }
@@ -973,6 +1172,26 @@ textarea {
 
   .customer-status-primary-action {
     width: 100%;
+  }
+
+  .customer-ticket-event {
+    padding: 20px 16px 16px;
+  }
+
+  .customer-ticket-status,
+  .customer-ticket-qr {
+    margin-left: 14px;
+    margin-right: 14px;
+  }
+
+  .customer-ticket-qr {
+    padding: 18px;
+  }
+
+  .customer-ticket-details > div {
+    padding-left: 16px;
+    padding-right: 16px;
+    grid-template-columns: 80px minmax(0, 1fr);
   }
 }
 
