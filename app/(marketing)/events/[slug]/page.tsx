@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { ReserveForm } from "./ReserveForm";
 import { formatCurrency } from "@/lib/formatCurrency";
+import { formatEventDate } from "@/lib/formatEventDate";
 
 export const dynamic = "force-dynamic";
 
@@ -29,10 +30,7 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
   const now = new Date();
   const salesAreOpen =
     event.status === "on_sale" && event.salesOpenAt <= now && event.salesCloseAt > now;
-  const eventDate = new Intl.DateTimeFormat("fr-MA", {
-    dateStyle: "full",
-    timeStyle: "short",
-  }).format(event.startsAt);
+  const eventDate = formatEventDate(event.startsAt);
 
   return (
     <main className="event-page">

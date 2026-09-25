@@ -2,6 +2,7 @@ import Link from "next/link";
 import { requireCustomerForPage } from "@/lib/auth/customer";
 import { prisma } from "@/lib/db";
 import { CustomerNav } from "@/components/CustomerNav";
+import { formatEventDate } from "@/lib/formatEventDate";
 
 export const dynamic = "force-dynamic";
 
@@ -17,12 +18,23 @@ type WalletTicket = Awaited<ReturnType<typeof loadTickets>>["upcoming"][number];
 // render-purity violation (see react-hooks/purity, which flags impure calls
 // inside component bodies).
 async function loadTickets(userId: string) {
+  // Explicit select, not include: this page never needs validationToken
+  // (or any other Ticket column beyond these) -- no reason for a QR-capable
+  // secret to be loaded into a server-side result set it's never read from.
   const tickets = await prisma.ticket.findMany({
     where: { orderItem: { order: { userId } } },
-    include: {
-      event: { include: { venue: true } },
-      ticketCategory: true,
-      orderItem: { include: { order: true } },
+    select: {
+      id: true,
+      status: true,
+      event: {
+        select: {
+          title: true,
+          startsAt: true,
+          venue: { select: { name: true, city: true } },
+        },
+      },
+      ticketCategory: { select: { name: true } },
+      orderItem: { select: { order: { select: { id: true } } } },
     },
     orderBy: { event: { startsAt: "asc" } },
   });
@@ -36,10 +48,7 @@ async function loadTickets(userId: string) {
 
 function WalletCard({ ticket }: { ticket: WalletTicket }) {
   const status = STATUS_PRESENTATION[ticket.status] ?? { label: ticket.status, tone: "neutral" };
-  const eventDate = new Intl.DateTimeFormat("fr-MA", {
-    dateStyle: "long",
-    timeStyle: "short",
-  }).format(ticket.event.startsAt);
+  const eventDate = formatEventDate(ticket.event.startsAt, "long");
 
   return (
     <Link

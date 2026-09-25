@@ -33,6 +33,12 @@ test("a customer sees only their own purchased tickets in Mes billets", async ({
   await expect(pageA.getByRole("heading", { name: /Tiakola/ })).toBeVisible();
   await expect(pageA.getByText("Valide")).toBeVisible();
 
+  // Capture A's own ticket URL (the wallet card links straight to it) so we
+  // can prove B is rejected from it directly, not just absent from B's list.
+  await pageA.getByRole("heading", { name: /Tiakola/ }).click();
+  await pageA.waitForURL(/\/orders\/.+\/tickets\/.+/);
+  const ticketUrl = pageA.url();
+
   const contextB = await browser.newContext();
   const pageB = await contextB.newPage();
   await pageB.goto("/register");
@@ -47,6 +53,11 @@ test("a customer sees only their own purchased tickets in Mes billets", async ({
   await expect(pageB.getByRole("heading", { name: "Mes billets" })).toBeVisible();
   await expect(pageB.getByText("Vous n’avez pas encore de billet.")).toBeVisible();
   await expect(pageB.getByRole("heading", { name: /Tiakola/ })).toHaveCount(0);
+
+  // Adversarial case: B doesn't just fail to see A's ticket in a list, B is
+  // rejected even when it types A's exact ticket URL directly.
+  const crossAccessResponse = await pageB.request.get(ticketUrl);
+  expect(crossAccessResponse.status()).toBe(404);
 
   await contextA.close();
   await contextB.close();

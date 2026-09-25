@@ -4,6 +4,7 @@ import { prisma } from "@/lib/db";
 import { requireCustomerForPage } from "@/lib/auth/customer";
 import { OrderStatusAutoRefresh } from "./OrderStatusAutoRefresh";
 import { formatCurrency } from "@/lib/formatCurrency";
+import { formatEventDate } from "@/lib/formatEventDate";
 
 export const dynamic = "force-dynamic";
 
@@ -117,10 +118,7 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
       : basePresentation;
   const total = formatCurrency(order.totalAmountCents, order.currency);
   const primaryTicket = tickets.length === 1 ? tickets[0] : null;
-  const eventDate = new Intl.DateTimeFormat("fr-MA", {
-    dateStyle: "full",
-    timeStyle: "short",
-  }).format(order.event.startsAt);
+  const eventDate = formatEventDate(order.event.startsAt);
 
   return (
     <main className="customer-order-page">

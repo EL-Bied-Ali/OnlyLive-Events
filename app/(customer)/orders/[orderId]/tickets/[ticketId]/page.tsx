@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireCustomerForPage } from "@/lib/auth/customer";
 import { renderTicketQrDataUrl } from "@/lib/tickets";
+import { formatEventDate } from "@/lib/formatEventDate";
 
 export const dynamic = "force-dynamic";
 
@@ -58,10 +59,7 @@ export default async function TicketPage({
       tone: "neutral",
       guidance: "Le statut affiché correspond à l’état actuel du billet.",
     };
-  const eventDate = new Intl.DateTimeFormat("fr-MA", {
-    dateStyle: "full",
-    timeStyle: "short",
-  }).format(ticket.event.startsAt);
+  const eventDate = formatEventDate(ticket.event.startsAt);
 
   return (
     <main className="customer-ticket-page">

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { legalDocumentsApproved } from "@/lib/legal/approval";
+import { formatEventDateOnly, formatEventDay, formatEventMonth } from "@/lib/formatEventDate";
 
 export const dynamic = "force-dynamic";
 
@@ -41,9 +42,9 @@ export default async function HomePage() {
         ) : (
           <ul className="marketing-event-list">
             {events.map((event) => {
-              const day = new Intl.DateTimeFormat("fr-MA", { day: "2-digit" }).format(event.startsAt);
-              const month = new Intl.DateTimeFormat("fr-MA", { month: "short" }).format(event.startsAt);
-              const date = new Intl.DateTimeFormat("fr-MA", { dateStyle: "long" }).format(event.startsAt);
+              const day = formatEventDay(event.startsAt);
+              const month = formatEventMonth(event.startsAt);
+              const date = formatEventDateOnly(event.startsAt);
 
               return (
                 <li key={event.id}>

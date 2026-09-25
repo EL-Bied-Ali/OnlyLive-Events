@@ -1820,8 +1820,8 @@ textarea {
   gap: 14px;
 }
 
-.customer-wallet-list-past {
-  opacity: 0.68;
+.customer-wallet-list-past .customer-wallet-card {
+  border-color: #21252e;
 }
 
 .customer-wallet-card {
@@ -1839,11 +1839,16 @@ textarea {
   transition: transform 140ms ease, border-color 140ms ease;
 }
 
-.customer-wallet-card:hover,
+.customer-wallet-card:hover {
+  transform: translateY(-2px);
+  border-color: #3a4150;
+}
+
 .customer-wallet-card:focus-visible {
   transform: translateY(-2px);
   border-color: #3a4150;
-  outline: none;
+  outline: 3px solid rgba(240, 106, 131, 0.36);
+  outline-offset: 3px;
 }
 
 .customer-wallet-card-main {

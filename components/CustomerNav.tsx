@@ -27,8 +27,8 @@ export async function CustomerNav() {
         {customer ? (
           <>
             <Link href="/mes-billets">Mes billets</Link>
-            <Link href="/mes-commandes">Mes commandes</Link>
-            <Link href="/mon-compte">Compte</Link>
+            {/* Mes commandes / Compte land once those pages ship -- no
+                dead links in the meantime. */}
             <SignOutButton />
           </>
         ) : (
