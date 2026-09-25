@@ -33,20 +33,20 @@ test("a customer can only ever update their own phone number, never another cust
   const contextA = await browser.newContext();
   const pageA = await contextA.newPage();
   await pageA.goto("/register");
-  await pageA.getByPlaceholder("Nom").fill("Phone Owner");
-  await pageA.getByPlaceholder("Email").fill(`phone-owner-${suffix}@test.onlylive.ma`);
-  await pageA.getByPlaceholder(/Mot de passe/).fill("PhoneOwnerPassword123!");
-  await pageA.getByPlaceholder(/Téléphone/).fill("0611111111");
+  await pageA.getByLabel("Nom").fill("Phone Owner");
+  await pageA.getByLabel("Email").fill(`phone-owner-${suffix}@test.onlylive.ma`);
+  await pageA.getByLabel("Mot de passe").fill("PhoneOwnerPassword123!");
+  await pageA.getByLabel("Téléphone").fill("0611111111");
   await pageA.getByRole("button", { name: "Créer mon compte" }).click();
   await pageA.waitForURL("/");
 
   const contextB = await browser.newContext();
   const pageB = await contextB.newPage();
   await pageB.goto("/register");
-  await pageB.getByPlaceholder("Nom").fill("Phone Other");
-  await pageB.getByPlaceholder("Email").fill(`phone-other-${suffix}@test.onlylive.ma`);
-  await pageB.getByPlaceholder(/Mot de passe/).fill("PhoneOtherPassword123!");
-  await pageB.getByPlaceholder(/Téléphone/).fill("0622222222");
+  await pageB.getByLabel("Nom").fill("Phone Other");
+  await pageB.getByLabel("Email").fill(`phone-other-${suffix}@test.onlylive.ma`);
+  await pageB.getByLabel("Mot de passe").fill("PhoneOtherPassword123!");
+  await pageB.getByLabel("Téléphone").fill("0622222222");
   await pageB.getByRole("button", { name: "Créer mon compte" }).click();
   await pageB.waitForURL("/");
 
@@ -76,10 +76,10 @@ test("a customer cannot fetch another customer's order", async ({ browser }) => 
   const contextA = await browser.newContext();
   const pageA = await contextA.newPage();
   await pageA.goto("/register");
-  await pageA.getByPlaceholder("Nom").fill("Customer A");
-  await pageA.getByPlaceholder("Email").fill(`access-a-${suffix}@test.onlylive.ma`);
-  await pageA.getByPlaceholder(/Mot de passe/).fill("CustomerAPassword123!");
-  await pageA.getByPlaceholder(/Téléphone/).fill("0612345678");
+  await pageA.getByLabel("Nom").fill("Customer A");
+  await pageA.getByLabel("Email").fill(`access-a-${suffix}@test.onlylive.ma`);
+  await pageA.getByLabel("Mot de passe").fill("CustomerAPassword123!");
+  await pageA.getByLabel("Téléphone").fill("0612345678");
   await pageA.getByRole("button", { name: "Créer mon compte" }).click();
   await pageA.waitForURL("/");
 
@@ -101,10 +101,10 @@ test("a customer cannot fetch another customer's order", async ({ browser }) => 
   const contextB = await browser.newContext();
   const pageB = await contextB.newPage();
   await pageB.goto("/register");
-  await pageB.getByPlaceholder("Nom").fill("Customer B");
-  await pageB.getByPlaceholder("Email").fill(`access-b-${suffix}@test.onlylive.ma`);
-  await pageB.getByPlaceholder(/Mot de passe/).fill("CustomerBPassword123!");
-  await pageB.getByPlaceholder(/Téléphone/).fill("0612345679");
+  await pageB.getByLabel("Nom").fill("Customer B");
+  await pageB.getByLabel("Email").fill(`access-b-${suffix}@test.onlylive.ma`);
+  await pageB.getByLabel("Mot de passe").fill("CustomerBPassword123!");
+  await pageB.getByLabel("Téléphone").fill("0612345679");
   await pageB.getByRole("button", { name: "Créer mon compte" }).click();
   await pageB.waitForURL("/");
 
