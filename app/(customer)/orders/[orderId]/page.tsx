@@ -133,7 +133,15 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
       <OrderStatusAutoRefresh orderId={order.id} status={order.status} />
 
       <section className={`customer-order-status customer-order-status-${presentation.tone}`} aria-live="polite">
-        <span className="customer-status-dot" aria-hidden="true" />
+        <span className="customer-status-symbol" aria-hidden="true">
+          {presentation.tone === "success"
+            ? "✓"
+            : presentation.tone === "danger"
+              ? "!"
+              : presentation.tone === "neutral"
+                ? "—"
+                : "···"}
+        </span>
         <div>
           <p className="customer-status-eyebrow">{presentation.eyebrow}</p>
           <h1>{presentation.title}</h1>

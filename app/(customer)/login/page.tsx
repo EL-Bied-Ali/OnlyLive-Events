@@ -38,14 +38,14 @@ function LoginForm() {
 
   return (
     <main className="customer-auth-page">
-      <Link href="/" className="customer-brand customer-auth-brand" aria-label="OnlyLive — accueil">
-        <span className="customer-brand-mark" aria-hidden="true">OL</span>
+      <Link href="/" className="live-brand customer-auth-brand" aria-label="OnlyLive — accueil">
+        <span className="live-brand-mark" aria-hidden="true">OL</span>
         <span>OnlyLive</span>
       </Link>
       <section className="customer-auth-card">
-        <span className="customer-summary-label">Votre compte</span>
-        <h1>Se connecter</h1>
-        <p className="customer-auth-intro">Accédez à vos réservations et billets OnlyLive.</p>
+        <p className="live-kicker"><span aria-hidden="true" /> Espace client</p>
+        <h1>Retrouvez votre soirée.</h1>
+        <p className="customer-auth-intro">Connectez-vous pour réserver vos billets et retrouver vos achats OnlyLive.</p>
         <form onSubmit={handleSubmit} className="customer-auth-form">
           <label htmlFor="login-email">Email</label>
           <input
@@ -67,8 +67,8 @@ function LoginForm() {
             onChange={(event) => setPassword(event.target.value)}
             required
           />
-          {error ? <p className="customer-field-error" role="alert">{error}</p> : null}
-          <button type="submit" disabled={submitting} className="customer-primary-button customer-auth-submit">
+          {error ? <p className="customer-auth-error" role="alert">{error}</p> : null}
+          <button type="submit" disabled={submitting}>
             {submitting ? "Connexion…" : "Se connecter"}
           </button>
         </form>

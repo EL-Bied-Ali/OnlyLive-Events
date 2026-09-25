@@ -47,14 +47,14 @@ function RegisterForm() {
 
   return (
     <main className="customer-auth-page">
-      <Link href="/" className="customer-brand customer-auth-brand" aria-label="OnlyLive — accueil">
-        <span className="customer-brand-mark" aria-hidden="true">OL</span>
+      <Link href="/" className="live-brand customer-auth-brand" aria-label="OnlyLive — accueil">
+        <span className="live-brand-mark" aria-hidden="true">OL</span>
         <span>OnlyLive</span>
       </Link>
       <section className="customer-auth-card">
-        <span className="customer-summary-label">Nouveau compte</span>
-        <h1>Créer un compte</h1>
-        <p className="customer-auth-intro">Quelques informations suffisent pour réserver et retrouver vos billets.</p>
+        <p className="live-kicker"><span aria-hidden="true" /> Première fois ici</p>
+        <h1>Votre prochaine soirée commence ici.</h1>
+        <p className="customer-auth-intro">Créez votre compte pour réserver et retrouver vos billets OnlyLive.</p>
         <form onSubmit={handleSubmit} className="customer-auth-form">
           <label htmlFor="register-name">Nom</label>
           <input
@@ -102,9 +102,9 @@ function RegisterForm() {
             minLength={8}
           />
 
-          {error ? <p className="customer-field-error" role="alert">{error}</p> : null}
+          {error ? <p className="customer-auth-error" role="alert">{error}</p> : null}
 
-          <button type="submit" disabled={submitting} className="customer-primary-button customer-auth-submit">
+          <button type="submit" disabled={submitting}>
             {submitting ? "Création…" : "Créer mon compte"}
           </button>
         </form>

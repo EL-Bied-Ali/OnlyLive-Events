@@ -4,6 +4,38 @@ Recover project state at the start of a session by reading this file,
 `CLAUDE.md`, `docs/*.md`, `tests.json`, and recent git history — not from
 memory alone.
 
+## Completed (customer UX/UI polish — PR #93)
+
+- Reworked the public journey into an editorial concert-poster direction:
+  stronger OnlyLive identity, event-led homepage, immersive event hero, and
+  ticket-pass selection cards without changing catalogue or inventory logic.
+- Unified register/login, checkout, fake-provider sandbox, and order pages so
+  the customer keeps one coherent visual language from discovery to ticket.
+- Rebuilt the ticket screen as a responsive event pass; valid tickets expose
+  a high-contrast QR while used/cancelled tickets replace it with an explicit
+  non-actionable state so an invalid credential never looks scannable.
+- Added a dependency-free motion layer: staged hero reveals, ambient stage
+  light, scroll-driven ticket entrances, and restrained hover feedback. All
+  motion is decorative, disables under `prefers-reduced-motion`, and leaves
+  payment/order status semantics static and immediately readable.
+- Final accessibility/responsive audit covered 1440, 768, 390, and 320 px:
+  no horizontal overflow or framework overlays, one H1 per screen, labelled
+  form controls, enlarged secondary touch targets, visible branded focus, and
+  stronger micro-copy contrast. Reduced-motion emulation disables every
+  decorative animation; browser measurement reported zero layout shift.
+- Brought the four legal-information routes into the same visual system with
+  a readable long-form layout and mobile navigation, while keeping the draft
+  warning and every unresolved placeholder impossible to mistake for final
+  legal copy.
+- Added a three-step checkout progress indicator, locally formatted MAD
+  amounts, responsive mobile layouts, and clearer status-specific hierarchy.
+- Preserved strict payment truthfulness for pending, failed, expired,
+  refunded, reconciliation-required, and confirmed states; no browser return
+  is presented as payment proof and no ticket is promised before fulfillment.
+- Visually verified desktop and mobile layouts plus confirmed, pending,
+  failed, and expired flows. Typecheck, lint, production build, 440 Vitest
+  tests, and the affected Playwright purchase/access scenarios pass.
+
 ## Completed (this session)
 
 - Project scaffold: Next.js 16 / React 19 / TypeScript, ESLint, Vitest,

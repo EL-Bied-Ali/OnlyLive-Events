@@ -174,6 +174,12 @@ export function CheckoutClient({
         <span className="customer-secure-label">{isChariPay ? "Paiement sécurisé via ChariPay" : "Paiement sécurisé"}</span>
       </header>
 
+      <ol className="customer-flow-progress" aria-label="Progression de la commande">
+        <li className="is-complete"><span aria-hidden="true">✓</span><strong>Billets</strong></li>
+        <li className="is-current" aria-current="step"><span aria-hidden="true">2</span><strong>Paiement</strong></li>
+        <li><span aria-hidden="true">3</span><strong>Confirmation</strong></li>
+      </ol>
+
       <section className="customer-checkout-card" aria-labelledby="checkout-title">
         <div className="customer-checkout-step">Paiement</div>
         <h1 id="checkout-title">Finaliser votre réservation</h1>

@@ -19,14 +19,17 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
   const [submitting, setSubmitting] = useState(false);
 
   if (available <= 0) {
-    return <p className="event-ticket-sold-out">Épuisé</p>;
+    return <p className="live-ticket-unavailable">Épuisé</p>;
   }
 
   async function handleSubmit(event: React.FormEvent) {
     event.preventDefault();
     setError(null);
 
-    if (status !== "authenticated") {
+    if (status === "loading") {
+      return;
+    }
+    if (status === "unauthenticated") {
       router.push(`/login?callbackUrl=${encodeURIComponent(window.location.pathname)}`);
       return;
     }
@@ -52,25 +55,24 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
   }
 
   return (
-    <form onSubmit={handleSubmit} className="event-reserve-form">
-      <div className="event-quantity-field">
-        <label htmlFor={`quantity-${ticketCategoryId}`}>Quantité</label>
-        <select
-          id={`quantity-${ticketCategoryId}`}
-          value={quantity}
-          onChange={(event) => setQuantity(Number(event.target.value))}
-          disabled={submitting}
-        >
-          {Array.from({ length: Math.min(maxPerOrder, available) }, (_, i) => i + 1).map((n) => (
-            <option key={n} value={n}>{n}</option>
-          ))}
-        </select>
-      </div>
-      <button type="submit" disabled={submitting} className="customer-primary-button event-reserve-button">
-        {submitting ? "Réservation…" : "Réserver"}
+    <form onSubmit={handleSubmit} className="live-reserve-form">
+      <label htmlFor={`quantity-${ticketCategoryId}`}>Quantité</label>
+      <select
+        id={`quantity-${ticketCategoryId}`}
+        value={quantity}
+        onChange={(event) => setQuantity(Number(event.target.value))}
+        disabled={submitting}
+      >
+        {Array.from({ length: Math.min(maxPerOrder, available) }, (_, i) => i + 1).map((n) => (
+          <option key={n} value={n}>
+            {n}
+          </option>
+        ))}
+      </select>
+      <button type="submit" disabled={submitting || status === "loading"}>
+        {submitting ? "Réservation…" : status === "loading" ? "Vérification…" : "Réserver"}<span aria-hidden="true">→</span>
       </button>
-      {available <= 5 ? <small className="event-low-stock">Plus que {available} disponible{available > 1 ? "s" : ""}</small> : null}
-      {error ? <p className="customer-field-error event-reserve-error" role="alert">{error}</p> : null}
+      {error ? <span className="live-reserve-error" role="alert">{error}</span> : null}
     </form>
   );
 }

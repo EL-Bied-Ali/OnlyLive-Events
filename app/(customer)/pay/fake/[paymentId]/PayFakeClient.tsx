@@ -31,13 +31,13 @@ export function PayFakeClient({ paymentId }: { paymentId: string }) {
   }
 
   return (
-    <div style={{ display: "grid", gap: 12 }}>
-      {error && <p style={{ color: "#ff6b6b" }}>{error}</p>}
-      <button onClick={() => simulate("succeeded")} disabled={submitting !== null} style={{ padding: 14 }}>
-        {submitting === "succeeded" ? "..." : "Simuler un paiement réussi"}
+    <div className="fake-payment-actions">
+      {error && <p className="customer-auth-error" role="alert">{error}</p>}
+      <button className="fake-payment-success" onClick={() => simulate("succeeded")} disabled={submitting !== null}>
+        {submitting === "succeeded" ? "Confirmation…" : "Simuler un paiement réussi"}
       </button>
-      <button onClick={() => simulate("failed")} disabled={submitting !== null} style={{ padding: 14 }}>
-        {submitting === "failed" ? "..." : "Simuler un paiement échoué"}
+      <button className="fake-payment-failure" onClick={() => simulate("failed")} disabled={submitting !== null}>
+        {submitting === "failed" ? "Confirmation…" : "Simuler un paiement échoué"}
       </button>
     </div>
   );

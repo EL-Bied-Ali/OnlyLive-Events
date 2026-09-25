@@ -24,98 +24,91 @@ export default async function TicketPage({
     },
   });
 
-  // The ownership check goes through the order, not the ticket directly —
-  // a ticket has no user_id of its own by design.
   if (!ticket || ticket.orderItem.order.id !== orderId || ticket.orderItem.order.userId !== customer.id) {
     notFound();
   }
 
-  // The QR's validity is decided atomically by the backend scanner — this
-  // data URL is a rendering convenience only, never a source of truth for
-  // admission.
-  const qrDataUrl = await renderTicketQrDataUrl(ticket.validationToken);
+  const qrDataUrl =
+    ticket.status === "valid" ? await renderTicketQrDataUrl(ticket.validationToken) : null;
 
-  const STATUS_PRESENTATION: Record<string, { label: string; tone: string; guidance: string }> = {
+  const STATUS_PRESENTATIONS: Record<string, { label: string; guidance: string }> = {
     valid: {
       label: "Billet valide",
-      tone: "valid",
-      guidance: "Présentez ce QR code à l’entrée de l’événement.",
+      guidance: "Présentez ce QR code au contrôle d’accès. Augmentez la luminosité de votre écran pour faciliter le scan.",
     },
     used: {
       label: "Billet déjà scanné",
-      tone: "used",
-      guidance: "Ce billet a déjà été enregistré par le contrôle d’accès.",
+      guidance: "Ce billet a déjà été utilisé à l’entrée et ne peut pas être présenté une seconde fois.",
     },
     cancelled: {
       label: "Billet annulé",
-      tone: "cancelled",
-      guidance: "Ce billet n’est plus actif pour le contrôle d’accès.",
+      guidance: "Ce billet n’est plus valide et son QR code ne permet plus l’accès à l’événement.",
     },
   };
-
-  const status =
-    STATUS_PRESENTATION[ticket.status] ?? {
-      label: ticket.status,
-      tone: "neutral",
-      guidance: "Le statut affiché correspond à l’état actuel du billet.",
-    };
+  const status = STATUS_PRESENTATIONS[ticket.status] ?? {
+    label: ticket.status,
+    guidance: "Le statut de ce billet est affiché tel qu’il est enregistré.",
+  };
   const eventDate = formatEventDate(ticket.event.startsAt);
+  const shortTicketId = ticket.id.slice(-8).toUpperCase();
 
   return (
-    <main className="customer-ticket-page">
+    <main className={`customer-ticket-page customer-ticket-${ticket.status}`}>
       <header className="customer-ticket-header">
         <Link href="/" className="customer-brand" aria-label="OnlyLive — accueil">
           <span className="customer-brand-mark" aria-hidden="true">OL</span>
           <span>OnlyLive</span>
         </Link>
-        <Link href={`/orders/${orderId}`} className="customer-ticket-back-link">
-          Commande {ticket.orderItem.order.orderNumber}
+        <Link href={`/orders/${orderId}`} className="customer-ticket-back">
+          ← Commande {ticket.orderItem.order.orderNumber}
         </Link>
       </header>
 
-      <article className="customer-ticket-card">
-        <div className="customer-ticket-event">
-          <span className="customer-summary-label">Votre billet</span>
-          <h1>{ticket.event.title}</h1>
-          <p>{ticket.ticketCategory.name}</p>
-        </div>
+      <section className="customer-ticket-intro" aria-labelledby="ticket-title">
+        <p className="customer-status-eyebrow">Votre accès</p>
+        <h1 id="ticket-title">Prêt pour le live.</h1>
+        <p>Gardez ce billet accessible à l’entrée, même si le réseau mobile est saturé.</p>
+      </section>
 
-        <div className={`customer-ticket-status customer-ticket-status-${status.tone}`} role="status">
-          <span className="customer-ticket-status-dot" aria-hidden="true" />
-          <div>
+      <article className="customer-ticket-pass">
+        <div className="customer-ticket-details">
+          <div className={`customer-ticket-state customer-ticket-state-${ticket.status}`} role="status">
+            <span aria-hidden="true">{ticket.status === "valid" ? "✓" : ticket.status === "used" ? "···" : "!"}</span>
             <strong>{status.label}</strong>
-            <p>{status.guidance}</p>
           </div>
+
+          <div className="customer-ticket-event-copy">
+            <span>OnlyLive présente</span>
+            <h2>{ticket.event.title}</h2>
+          </div>
+
+          <dl className="customer-ticket-facts">
+            <div><dt>Catégorie</dt><dd>{ticket.ticketCategory.name}</dd></div>
+            <div><dt>Date</dt><dd>{eventDate}</dd></div>
+            <div><dt>Lieu</dt><dd>{ticket.event.venue.name}<span>{ticket.event.venue.city}, Maroc</span></dd></div>
+            <div><dt>Référence billet</dt><dd>OL-{shortTicketId}</dd></div>
+          </dl>
         </div>
 
-        <div className={`customer-ticket-qr customer-ticket-qr-${status.tone}`}>
-          {/* eslint-disable-next-line @next/next/no-img-element -- data URL, not an optimizable remote image */}
-          <img src={qrDataUrl} alt="QR code du billet" />
+        <div className="customer-ticket-code">
+          <span className="customer-ticket-notch" aria-hidden="true" />
+          {qrDataUrl ? (
+            <div className="customer-ticket-qr">
+              {/* eslint-disable-next-line @next/next/no-img-element -- data URL, not an optimizable remote image */}
+              <img src={qrDataUrl} alt="QR code du billet" />
+            </div>
+          ) : (
+            <div className="customer-ticket-code-disabled" aria-hidden="true">
+              <span>{ticket.status === "used" ? "UTILISÉ" : "ANNULÉ"}</span>
+            </div>
+          )}
+          <p>{status.guidance}</p>
         </div>
-
-        <dl className="customer-ticket-details">
-          <div>
-            <dt>Date</dt>
-            <dd>{eventDate}</dd>
-          </div>
-          <div>
-            <dt>Lieu</dt>
-            <dd>{ticket.event.venue.name}, {ticket.event.venue.city}</dd>
-          </div>
-          <div>
-            <dt>Catégorie</dt>
-            <dd>{ticket.ticketCategory.name}</dd>
-          </div>
-          <div>
-            <dt>Référence</dt>
-            <dd>{ticket.id}</dd>
-          </div>
-        </dl>
       </article>
 
       <footer className="customer-ticket-footer">
-        <Link href={`/orders/${orderId}`}>Retour à la commande</Link>
-        <p>La validation du billet est effectuée par le système de contrôle OnlyLive.</p>
+        <p>Le contrôle d’accès vérifie ce billet en temps réel. Une capture ou une copie ne crée pas de second accès.</p>
+        <Link href={`/orders/${orderId}`}>Voir la commande</Link>
       </footer>
     </main>
   );
