@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireCustomerForPage } from "@/lib/auth/customer";
 import { OrderStatusAutoRefresh } from "./OrderStatusAutoRefresh";
+import { formatCurrency } from "@/lib/formatCurrency";
 
 export const dynamic = "force-dynamic";
 
@@ -106,7 +107,7 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
       title: order.status,
       description: "Le statut de cette commande est affiché tel qu’il est enregistré.",
     };
-  const total = (order.totalAmountCents / 100).toFixed(2);
+  const total = formatCurrency(order.totalAmountCents, order.currency);
   const tickets = order.items.flatMap((item) => item.tickets);
   const primaryTicket = tickets.length === 1 ? tickets[0] : null;
   const eventDate = new Intl.DateTimeFormat("fr-MA", {
@@ -157,7 +158,7 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
         </div>
         <div className="customer-order-total">
           <span>Total</span>
-          <strong>{total} {order.currency}</strong>
+          <strong>{total}</strong>
         </div>
       </section>
 
@@ -176,9 +177,9 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
               <div className="customer-order-item-heading">
                 <div>
                   <strong>{item.ticketCategory.name}</strong>
-                  <span>{item.quantity} × {(item.unitPriceCents / 100).toFixed(2)} {order.currency}</span>
+                  <span>{item.quantity} × {formatCurrency(item.unitPriceCents, order.currency)}</span>
                 </div>
-                <strong>{((item.quantity * item.unitPriceCents) / 100).toFixed(2)} {order.currency}</strong>
+                <strong>{formatCurrency(item.quantity * item.unitPriceCents, order.currency)}</strong>
               </div>
 
               {item.tickets.length > 0 ? (
