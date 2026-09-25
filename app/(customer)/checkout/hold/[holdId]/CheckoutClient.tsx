@@ -174,7 +174,7 @@ export function CheckoutClient({
       </header>
 
       <section className="customer-checkout-card" aria-labelledby="checkout-title">
-        <div className="customer-checkout-step">Étape 2 sur 3 · Paiement</div>
+        <div className="customer-checkout-step">Paiement</div>
         <h1 id="checkout-title">Finaliser votre réservation</h1>
         <p className="customer-checkout-intro">
           {isChariPay
@@ -231,14 +231,11 @@ export function CheckoutClient({
           <div className="customer-payment-explainer">
             <div className="customer-payment-lock" aria-hidden="true">✓</div>
             <div>
-              <strong>Ce qui va se passer</strong>
+              <strong>{isChariPay ? "Paiement traité par ChariPay" : "Paiement sécurisé"}</strong>
               <p>
                 {isChariPay
-                  ? "Vous allez être redirigé vers le checkout hébergé de ChariPay. OnlyLive ne reçoit ni ne stocke les données de votre carte. Après le paiement, vous revenez automatiquement sur OnlyLive pendant que nous confirmons le statut."
-                  : "Vous allez continuer vers la page de paiement sécurisée. Après le paiement, vous revenez automatiquement sur OnlyLive pendant que nous confirmons le statut."}
-              </p>
-              <p className="customer-payment-warning">
-                Si la confirmation prend quelques secondes, ne relancez pas un second paiement.
+                  ? "Vous quittez brièvement OnlyLive pour payer, puis revenez ici pour la confirmation."
+                  : "Vous continuez vers la page de paiement, puis revenez ici pour la confirmation."}
               </p>
             </div>
           </div>
@@ -294,9 +291,10 @@ export function CheckoutClient({
         ) : null}
 
         {!checkoutUnavailable && (
-          <p className="customer-payment-footnote">
-            Les billets sont émis uniquement après confirmation du paiement par le prestataire.
-          </p>
+          <div className="customer-payment-footnotes">
+            <p>Les billets sont émis uniquement après confirmation du paiement.</p>
+            <p>Si la confirmation prend quelques secondes, ne relancez pas un second paiement.</p>
+          </div>
         )}
       </section>
     </main>
