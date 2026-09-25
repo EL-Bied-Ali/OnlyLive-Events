@@ -52,6 +52,46 @@ describe("requestPasswordReset", () => {
     expect(sendMock).not.toHaveBeenCalled();
   });
 
+  it("puts the token in a URL fragment, never a query string", async () => {
+    const user = await createTestUser("reset-fragment");
+    const { requestPasswordReset } = await import("@/lib/auth/passwordReset");
+
+    await requestPasswordReset(user.email);
+
+    const linkLine = lastSendInput().text.split("\n").find((line) => line.includes("http"));
+    expect(linkLine).toBeDefined();
+    // A query string is sent to the server and can land in access/runtime
+    // logs and browser history; a fragment never leaves the browser.
+    expect(linkLine).toContain("#token=");
+    expect(linkLine).not.toContain("?token=");
+  });
+
+  it("marks the reset email sensitive, so a real console/log-based provider never prints it", async () => {
+    const user = await createTestUser("reset-sensitive-flag");
+    const { requestPasswordReset } = await import("@/lib/auth/passwordReset");
+
+    await requestPasswordReset(user.email);
+
+    expect(sendMock.mock.calls.at(-1)?.[0]).toMatchObject({ sensitive: true });
+  });
+
+  it("does not turn a transient email-provider outage into an account-existence oracle", async () => {
+    const user = await createTestUser("reset-provider-outage");
+    const { requestPasswordReset } = await import("@/lib/auth/passwordReset");
+
+    sendMock.mockRejectedValueOnce(new Error("email_provider_error"));
+
+    // Same observable outcome (resolves, no throw) as the unknown-account
+    // case above -- a caller cannot use a thrown error here to infer that
+    // the account exists during a provider outage.
+    await expect(requestPasswordReset(user.email)).resolves.toBeUndefined();
+
+    // The token created before the failed send must not be left claimable
+    // against a reset email the customer never actually received.
+    const rows = await prisma.passwordResetToken.findMany({ where: { userId: user.id } });
+    expect(rows).toHaveLength(0);
+  });
+
   it("invalidates a previous unused token when a new one is requested for the same account", async () => {
     const user = await createTestUser("reset-request-twice");
     const { requestPasswordReset } = await import("@/lib/auth/passwordReset");

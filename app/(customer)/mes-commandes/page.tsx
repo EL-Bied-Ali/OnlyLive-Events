@@ -14,8 +14,8 @@ const STATUS_PRESENTATION: Record<string, { label: string; tone: string }> = {
   cancelled: { label: "Annulée", tone: "neutral" },
   refunded: { label: "Remboursée", tone: "neutral" },
   partially_refunded: { label: "Partiellement remboursée", tone: "attention" },
-  paid_but_unfulfillable: { label: "Vérification en cours", tone: "attention" },
-  reconciliation_required: { label: "Vérification en cours", tone: "attention" },
+  paid_but_unfulfillable: { label: "Traitement manuel en cours", tone: "attention" },
+  reconciliation_required: { label: "Vérification supplémentaire en cours", tone: "attention" },
 };
 
 type OrderRow = Awaited<ReturnType<typeof loadOrders>>[number];
@@ -30,7 +30,7 @@ async function loadOrders(userId: string) {
       currency: true,
       totalAmountCents: true,
       createdAt: true,
-      event: { select: { title: true, slug: true } },
+      event: { select: { title: true } },
       payments: { select: { refunds: { select: { status: true, amountCents: true } } } },
     },
     orderBy: { createdAt: "desc" },
@@ -87,7 +87,7 @@ export default async function MesCommandesPage() {
 
       <div className="customer-orders-heading">
         <h1>Mes commandes</h1>
-        <p>L’historique de vos achats OnlyLive, avec le statut de paiement et de remboursement.</p>
+        <p>L’historique de vos commandes OnlyLive, avec le statut de paiement et de remboursement.</p>
       </div>
 
       {orders.length === 0 ? (

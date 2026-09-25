@@ -10,6 +10,47 @@ describe("ConsoleEmailProvider", () => {
     expect(first.providerMessageId).not.toBe(second.providerMessageId);
     expect(first.providerMessageId).toMatch(/^console_/);
   });
+
+  it("never logs recipient, subject, or body for a sensitive email (e.g. a password-reset link)", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const provider = new ConsoleEmailProvider();
+      const rawToken = "super-secret-raw-reset-token-must-not-leak";
+      await provider.send({
+        to: "victim@test.onlylive.ma",
+        subject: "Réinitialisation de votre mot de passe OnlyLive",
+        text: `Cliquez ici : https://onlylive.ma/reinitialiser-mot-de-passe#token=${rawToken}`,
+        idempotencyKey: "sensitive-1",
+        sensitive: true,
+      });
+
+      const loggedOutput = logSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(loggedOutput).not.toContain(rawToken);
+      expect(loggedOutput).not.toContain("victim@test.onlylive.ma");
+      expect(loggedOutput).not.toContain("Réinitialisation de votre mot de passe");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it("still logs recipient/subject/body for a non-sensitive email", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const provider = new ConsoleEmailProvider();
+      await provider.send({
+        to: "buyer@test.onlylive.ma",
+        subject: "Confirmation de commande",
+        text: "Merci pour votre achat",
+        idempotencyKey: "normal-1",
+      });
+
+      const loggedOutput = logSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(loggedOutput).toContain("buyer@test.onlylive.ma");
+      expect(loggedOutput).toContain("Confirmation de commande");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
 });
 
 describe("getEmailProvider", () => {

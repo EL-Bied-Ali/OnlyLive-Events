@@ -38,27 +38,43 @@ export async function requestPasswordReset(email: string): Promise<void> {
     });
   });
 
-  const resetUrl = absoluteAppUrl(`/reinitialiser-mot-de-passe?token=${rawToken}`);
+  // The fragment (#token=...) is never sent to the server -- browser/access
+  // logs and history only ever see the bare path, unlike a query string.
+  // The reset page reads it client-side and immediately scrubs it from the
+  // visible URL.
+  const resetUrl = absoluteAppUrl(`/reinitialiser-mot-de-passe#token=${rawToken}`);
 
-  // Deliberately sent directly, not through the durable EmailOutbox: the
-  // outbox pattern re-renders content from durable business state at send
-  // time (see lib/email/notifications.ts), but a reset token's raw value
-  // is by design never persisted anywhere to re-render from. A transient
-  // provider failure here just means the customer can request again.
-  await getEmailProvider().send({
-    to: user.email,
-    subject: "Réinitialisation de votre mot de passe OnlyLive",
-    text: [
-      "Vous avez demandé la réinitialisation de votre mot de passe OnlyLive.",
-      "",
-      `Cliquez sur ce lien pour choisir un nouveau mot de passe : ${resetUrl}`,
-      "",
-      "Ce lien expire dans 1 heure et ne peut être utilisé qu'une seule fois.",
-      "",
-      "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email -- votre mot de passe actuel reste inchangé.",
-    ].join("\n"),
-    idempotencyKey: resetToken.id,
-  });
+  try {
+    // Deliberately sent directly, not through the durable EmailOutbox: the
+    // outbox pattern re-renders content from durable business state at send
+    // time (see lib/email/notifications.ts), but a reset token's raw value
+    // is by design never persisted anywhere to re-render from. A transient
+    // provider failure here just means the customer can request again.
+    await getEmailProvider().send({
+      to: user.email,
+      subject: "Réinitialisation de votre mot de passe OnlyLive",
+      text: [
+        "Vous avez demandé la réinitialisation de votre mot de passe OnlyLive.",
+        "",
+        `Cliquez sur ce lien pour choisir un nouveau mot de passe : ${resetUrl}`,
+        "",
+        "Ce lien expire dans 1 heure et ne peut être utilisé qu'une seule fois.",
+        "",
+        "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email -- votre mot de passe actuel reste inchangé.",
+      ].join("\n"),
+      idempotencyKey: resetToken.id,
+      sensitive: true,
+    });
+  } catch (error) {
+    // A provider failure for a KNOWN account must be indistinguishable
+    // from the unknown-account case above (both just return), or the
+    // caller's HTTP status becomes an account-enumeration oracle: known +
+    // outage -> would otherwise surface as a 500, unknown -> always 200.
+    // The unusable token is deleted so it can't be claimed later against a
+    // reset the customer never actually received.
+    await prisma.passwordResetToken.delete({ where: { id: resetToken.id } }).catch(() => {});
+    console.error("password_reset_email_send_failed", error instanceof Error ? error.message : error);
+  }
 }
 
 export type ResetPasswordOutcome = "reset" | "invalid_or_expired";

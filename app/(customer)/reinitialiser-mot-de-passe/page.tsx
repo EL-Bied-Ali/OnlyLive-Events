@@ -1,13 +1,36 @@
 "use client";
 
-import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 function ResetPasswordForm() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const token = searchParams.get("token");
+  // The token travels in the URL fragment (#token=...), never a query
+  // string: a fragment is never sent to the server, so it can't land in
+  // Vercel/access logs or get captured by browser history the way a query
+  // param would. Read on mount only -- window is unavailable during SSR --
+  // and immediately scrub it from the visible URL so it doesn't linger
+  // there either (e.g. if the user copies the URL after it loads).
+  const [token, setToken] = useState<string | null>(null);
+  const [tokenReady, setTokenReady] = useState(false);
+
+  useEffect(() => {
+    const hash = window.location.hash;
+    const extracted = hash.startsWith("#") ? new URLSearchParams(hash.slice(1)).get("token") : null;
+    if (hash) {
+      // Scrub first: once this fires, re-reading window.location.hash would
+      // return empty, so the token must be captured into state from the
+      // value read above, not derived again on a later render.
+      window.history.replaceState(null, "", window.location.pathname);
+    }
+    // The token lives only in a URL fragment, which (unlike a query string)
+    // Next.js cannot see server-side at all; bridging it into React state
+    // on mount is the one place this value can first become available.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setToken(extracted);
+    setTokenReady(true);
+  }, []);
 
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -42,6 +65,10 @@ function ResetPasswordForm() {
     } finally {
       setSubmitting(false);
     }
+  }
+
+  if (!tokenReady) {
+    return null;
   }
 
   if (!token) {
@@ -114,9 +141,7 @@ export default function ResetPasswordPage() {
           <span aria-hidden="true" /> Espace client
         </p>
         <h1>Choisir un nouveau mot de passe</h1>
-        <Suspense>
-          <ResetPasswordForm />
-        </Suspense>
+        <ResetPasswordForm />
       </section>
     </main>
   );

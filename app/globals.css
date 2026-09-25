@@ -3337,7 +3337,10 @@ html { scroll-behavior: smooth; }
 .customer-checkout-page,
 .customer-order-page,
 .customer-ticket-page,
-.customer-wallet-page {
+.customer-wallet-page,
+.customer-orders-page,
+.customer-account-page,
+.aide-page {
   --live-coral: #4b7868;
   --live-mint: #86d6b9;
   --live-amber: #d9ac66;
@@ -3655,6 +3658,16 @@ html { scroll-behavior: smooth; }
   .customer-order-row-amount {
     justify-items: start;
     text-align: left;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-order-row {
+    transition: none !important;
+  }
+  .customer-order-row:hover,
+  .customer-order-row:focus-visible {
+    transform: none;
   }
 }
 
