@@ -480,9 +480,8 @@ textarea {
 }
 
 .customer-payment-explainer {
-  padding: 16px;
-  border: 1px solid #2a3842;
-  background: #0f181e;
+  padding: 14px 2px 2px;
+  border-top: 1px solid #252a34;
 }
 
 .customer-payment-lock {
@@ -569,12 +568,22 @@ textarea {
   transform: none;
 }
 
-.customer-payment-footnote {
+.customer-payment-footnotes {
   margin: 12px 8px 0;
+  display: grid;
+  gap: 3px;
   color: #7f8797;
   font-size: 0.78rem;
   line-height: 1.45;
   text-align: center;
+}
+
+.customer-payment-footnotes p {
+  margin: 0;
+}
+
+.customer-payment-footnotes p:last-child {
+  color: #9a8f70;
 }
 
 .customer-phone-form {
@@ -671,6 +680,33 @@ textarea {
   display: block;
   margin-top: 8px;
   color: #7f8797;
+}
+
+.customer-status-primary-action {
+  width: fit-content;
+  min-height: 46px;
+  margin-top: 16px;
+  padding: 0 17px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 11px;
+  background: #ea2549;
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 850;
+  text-decoration: none;
+  box-shadow: 0 12px 28px rgba(234, 37, 73, 0.2);
+}
+
+.customer-status-primary-action:hover {
+  filter: brightness(1.06);
+}
+
+.customer-status-primary-action:focus-visible {
+  outline: 3px solid rgba(240, 106, 131, 0.36);
+  outline-offset: 3px;
 }
 
 .customer-order-status-success {
@@ -933,6 +969,10 @@ textarea {
 
   .customer-order-item-heading {
     align-items: flex-start;
+  }
+
+  .customer-status-primary-action {
+    width: 100%;
   }
 }
 
