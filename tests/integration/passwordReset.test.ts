@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { Session } from "next-auth";
 import { prisma } from "@/lib/db";
 import { createTestUser } from "../helpers/fixtures";
 
@@ -170,5 +171,96 @@ describe("resetPasswordWithToken", () => {
     await expect(resetPasswordWithToken("completely-made-up-token", "a-brand-new-password")).resolves.toBe(
       "invalid_or_expired",
     );
+  });
+
+  it("increments authVersion in the same transaction as the password change", async () => {
+    const user = await createTestUser("reset-auth-version");
+    expect(user.authVersion).toBe(0);
+
+    const { requestPasswordReset, resetPasswordWithToken } = await import("@/lib/auth/passwordReset");
+    await requestPasswordReset(user.email);
+    const rawToken = extractRawToken(lastSendInput().text);
+
+    await resetPasswordWithToken(rawToken, "a-brand-new-password");
+
+    const updated = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    expect(updated.authVersion).toBe(1);
+  });
+});
+
+/**
+ * The Credentials provider's JWT strategy has no persisted session row to
+ * delete server-side (see lib/auth/customer.ts's top comment) -- authVersion
+ * is the actual revocation mechanism, so its enforcement lives in the
+ * session() callback itself. Testing that callback directly (rather than
+ * driving a full NextAuth HTTP round-trip) exercises the exact logic
+ * requireCustomer()/requireCustomerForPage() depend on.
+ */
+describe("session callback: password reset revokes pre-reset sessions", () => {
+  afterEach(() => {
+    sendMock.mockClear();
+  });
+
+  it("a session token issued before a reset is rejected after it, while a fresh sign-in still works", async () => {
+    const user = await createTestUser("reset-session-revocation");
+    const { authOptions } = await import("@/lib/auth/customer");
+    const { requestPasswordReset, resetPasswordWithToken } = await import("@/lib/auth/passwordReset");
+
+    const jwtCallback = authOptions.callbacks!.jwt!;
+    const sessionCallback = authOptions.callbacks!.session!;
+
+    // Simulate the JWT issued by the original sign-in, before any reset.
+    const staleToken = await jwtCallback({
+      token: {},
+      user: { id: user.id, email: user.email, name: user.name, authVersion: user.authVersion },
+    } as Parameters<typeof jwtCallback>[0]);
+
+    const baseSession = { expires: new Date(Date.now() + 86_400_000).toISOString() };
+    const sessionBeforeReset = (await sessionCallback({
+      session: { ...baseSession, user: { id: "", email: user.email, name: user.name } },
+      token: staleToken,
+    } as Parameters<typeof sessionCallback>[0])) as Session;
+    expect(sessionBeforeReset.user?.id).toBe(user.id);
+
+    await requestPasswordReset(user.email);
+    const rawToken = extractRawToken(lastSendInput().text);
+    const outcome = await resetPasswordWithToken(rawToken, "a-brand-new-post-reset-password");
+    expect(outcome).toBe("reset");
+
+    // Same stale token as before the reset -- must now read as unauthenticated.
+    const sessionAfterReset = (await sessionCallback({
+      session: { ...baseSession, user: { id: "", email: user.email, name: user.name } },
+      token: staleToken,
+    } as Parameters<typeof sessionCallback>[0])) as Session;
+    expect(sessionAfterReset.user).toBeUndefined();
+
+    // A fresh sign-in after the reset picks up the new authVersion and works.
+    const refreshedUser = await prisma.user.findUniqueOrThrow({ where: { id: user.id } });
+    const freshToken = await jwtCallback({
+      token: {},
+      user: { id: refreshedUser.id, email: refreshedUser.email, name: refreshedUser.name, authVersion: refreshedUser.authVersion },
+    } as Parameters<typeof jwtCallback>[0]);
+    const sessionWithFreshToken = (await sessionCallback({
+      session: { ...baseSession, user: { id: "", email: user.email, name: user.name } },
+      token: freshToken,
+    } as Parameters<typeof sessionCallback>[0])) as Session;
+    expect(sessionWithFreshToken.user?.id).toBe(user.id);
+  });
+
+  it("treats a legacy token with no authVersion as version 0, matching every pre-existing user's default", async () => {
+    const user = await createTestUser("reset-legacy-token");
+    const { authOptions } = await import("@/lib/auth/customer");
+    const sessionCallback = authOptions.callbacks!.session!;
+
+    const legacyToken = { sub: user.id } as Parameters<typeof sessionCallback>[0]["token"];
+    const session = (await sessionCallback({
+      session: {
+        expires: new Date(Date.now() + 86_400_000).toISOString(),
+        user: { id: "", email: user.email, name: user.name },
+      },
+      token: legacyToken,
+    } as Parameters<typeof sessionCallback>[0])) as Session;
+
+    expect(session.user?.id).toBe(user.id);
   });
 });

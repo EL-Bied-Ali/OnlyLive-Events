@@ -112,7 +112,17 @@ export async function resetPasswordWithToken(rawToken: string, newPassword: stri
         where: { tokenHash },
         select: { userId: true },
       });
-      await tx.user.update({ where: { id: record.userId }, data: { passwordHash } });
+      // authVersion increments atomically alongside the password change --
+      // not as a separate step -- so a crash between the two can never
+      // leave the password changed with old sessions still trusted, or
+      // sessions revoked with the password left unchanged. This is what
+      // makes an already-authenticated session from before the reset stop
+      // working: see the session() callback in lib/auth/customer.ts, which
+      // compares a JWT's stored version against this column on every read.
+      await tx.user.update({
+        where: { id: record.userId },
+        data: { passwordHash, authVersion: { increment: 1 } },
+      });
     });
   } catch (error) {
     if (error instanceof PasswordResetTokenInvalid) return "invalid_or_expired";

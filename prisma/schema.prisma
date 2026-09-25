@@ -20,6 +20,12 @@ model User {
   name            String?
   phone           String?
   emailVerifiedAt DateTime? @map("email_verified_at")
+  // Bumped whenever every outstanding session must stop working immediately
+  // (currently: password reset). A Credentials-provider JWT session can't be
+  // revoked server-side the usual way (no persisted session row to delete),
+  // so this is the mechanism: the JWT carries the version it was issued
+  // with, and it's compared against this live column on every session read.
+  authVersion     Int       @default(0) @map("auth_version")
   createdAt       DateTime  @default(now()) @map("created_at")
   updatedAt       DateTime  @updatedAt @map("updated_at")
 
