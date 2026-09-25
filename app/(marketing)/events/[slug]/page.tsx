@@ -46,9 +46,21 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
     fromPriceCents === null
       ? null
       : new Intl.NumberFormat("fr-MA", { maximumFractionDigits: 0 }).format(fromPriceCents / 100);
+  const isTiakolaCasablanca = event.slug === "tiakola-casablanca-2026";
+  const eventPosterUrl =
+    event.coverImageUrl ??
+    (isTiakolaCasablanca ? "/events/tiakola-casablanca-2026/poster.webp" : null);
+  const eventBackdropUrl =
+    isTiakolaCasablanca ? "/events/tiakola-casablanca-2026/hero.webp" : event.coverImageUrl;
 
   return (
     <main className="live-event-page">
+      {eventBackdropUrl ? (
+        <div className="live-event-backdrop" aria-hidden="true">
+          {/* eslint-disable-next-line @next/next/no-img-element -- event artwork can be hosted on arbitrary approved origins. */}
+          <img src={eventBackdropUrl} alt="" />
+        </div>
+      ) : null}
       <nav className="live-nav" aria-label="Navigation principale">
         <Link href="/" className="live-brand" aria-label="OnlyLive — accueil">
           <span className="live-brand-mark" aria-hidden="true">OL</span>
@@ -58,10 +70,10 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
       </nav>
 
       <section className="live-event-hero" aria-labelledby="event-title">
-        <div className={`live-event-visual${event.coverImageUrl ? " has-cover" : ""}`} aria-hidden="true">
-          {event.coverImageUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- administrator-managed event artwork can be hosted on arbitrary approved origins.
-            <img className="live-event-cover" src={event.coverImageUrl} alt="" />
+        <div className={`live-event-visual${eventPosterUrl ? " has-cover" : ""}`} aria-hidden="true">
+          {eventPosterUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- event artwork can be hosted on arbitrary approved origins.
+            <img className="live-event-cover" src={eventPosterUrl} alt="" />
           ) : null}
           <span className="live-stage-number">{eventDay}·{new Intl.DateTimeFormat("fr-MA", { month: "2-digit" }).format(event.startsAt)}</span>
           <span className="live-stage-ring" />

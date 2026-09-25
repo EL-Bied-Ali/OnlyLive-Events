@@ -2320,3 +2320,166 @@ html { scroll-behavior: smooth; }
   .customer-order-items,
   .customer-order-status-success .customer-status-symbol { animation: none !important; }
 }
+
+/* OnlyLive Events brand pass: green identity for customer-facing surfaces. */
+.live-home,
+.live-event-page,
+.customer-auth-page,
+.fake-payment-page,
+.customer-checkout-page,
+.customer-order-page,
+.customer-ticket-page {
+  --live-coral: #4b7868;
+  --live-mint: #86d6b9;
+  --live-amber: #d9ac66;
+}
+
+.live-home,
+.live-event-page {
+  background:
+    radial-gradient(circle at 84% 8%, rgba(75,120,104,.24), transparent 28rem),
+    radial-gradient(circle at 12% 58%, rgba(217,172,102,.08), transparent 24rem),
+    #07090a;
+}
+
+.live-brand-mark {
+  background: #4b7868;
+  box-shadow: 0 0 0 6px rgba(134,214,185,.08), 0 12px 34px rgba(75,120,104,.32);
+}
+
+.live-section-heading p,
+.live-event-copy > span,
+.live-ticket-label {
+  color: var(--live-mint);
+}
+
+.live-event-card:hover {
+  background: linear-gradient(90deg, rgba(75,120,104,.16), rgba(75,120,104,.018));
+}
+
+.live-event-card:hover .live-event-arrow {
+  color: #fff;
+}
+
+.live-event-backdrop {
+  height: 760px;
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: .16;
+  mask-image: linear-gradient(to bottom, #000 0%, rgba(0,0,0,.72) 52%, transparent 100%);
+}
+
+.live-event-backdrop img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: blur(3px) saturate(.82) brightness(.62);
+  transform: scale(1.025);
+}
+
+.live-event-page > :not(.live-event-backdrop) {
+  position: relative;
+  z-index: 1;
+}
+
+.live-event-visual.has-cover {
+  min-height: 0;
+  aspect-ratio: 4 / 5;
+  background: #09100e;
+  border-color: rgba(134,214,185,.22);
+  box-shadow: 0 34px 100px rgba(0,0,0,.58), 0 0 70px rgba(75,120,104,.12);
+}
+
+.live-event-visual.has-cover .live-event-cover {
+  filter: saturate(.98) contrast(1.03) brightness(.82);
+}
+
+.live-event-visual.has-cover .live-stage-number,
+.live-event-visual.has-cover .live-stage-ring,
+.live-event-visual.has-cover .live-stage-caption,
+.live-event-visual.has-cover .live-stage-scanline {
+  display: none;
+}
+
+.live-event-visual.has-cover::before {
+  z-index: 1;
+  background: linear-gradient(to top, rgba(5,10,8,.32), transparent 44%);
+}
+
+.live-stage-status {
+  padding: 8px 10px;
+  border: 1px solid rgba(134,214,185,.22);
+  background: rgba(4,12,9,.72);
+  backdrop-filter: blur(10px);
+}
+
+.live-hero-ticket-cta,
+.live-reserve-form button {
+  background: #4b7868;
+}
+
+.live-hero-ticket-cta:hover,
+.live-reserve-form button:hover:not(:disabled) {
+  background: #3f7564;
+}
+
+.live-hero-ticket-cta::after {
+  background: linear-gradient(90deg, transparent, rgba(180,235,214,.25), transparent);
+}
+
+.live-ticket-card:hover {
+  border-color: rgba(134,214,185,.34);
+  box-shadow: 0 24px 70px rgba(0,0,0,.36), 0 0 34px rgba(75,120,104,.08);
+}
+
+.live-event-thumb {
+  width: 112px;
+  aspect-ratio: 1;
+  display: block;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.13);
+  background: #101511;
+}
+
+.live-event-thumb img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  transition: transform 520ms cubic-bezier(.16,.8,.2,1), filter 260ms ease;
+}
+
+.live-event-thumb.is-empty {
+  background:
+    radial-gradient(circle at 50% 45%, rgba(134,214,185,.18), transparent 45%),
+    #101511;
+}
+
+.live-event-card {
+  grid-template-columns: 34px 112px 122px minmax(0,1fr) 56px;
+  gap: 22px;
+}
+
+.live-event-card:hover .live-event-thumb img {
+  transform: scale(1.055);
+  filter: saturate(1.05);
+}
+
+@media (max-width: 760px) {
+  .live-event-card {
+    grid-template-columns: 76px minmax(0,1fr) 42px;
+  }
+  .live-event-thumb { width: 76px; grid-column: 1; grid-row: 1; }
+  .live-event-date { display: none; }
+  .live-event-copy { grid-column: 2; grid-row: 1; }
+  .live-event-arrow { grid-column: 3; grid-row: 1; }
+  .live-event-visual.has-cover { min-height: 0; aspect-ratio: 4 / 5; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-event-thumb img { transition: none !important; }
+  .live-event-card:hover .live-event-thumb img { transform: none; }
+}

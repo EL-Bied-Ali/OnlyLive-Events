@@ -45,10 +45,21 @@ export default async function HomePage() {
           {events.map((event, index) => {
             const day = new Intl.DateTimeFormat("fr-MA", { day: "2-digit" }).format(event.startsAt);
             const month = new Intl.DateTimeFormat("fr-MA", { month: "short" }).format(event.startsAt).replace(".", "");
+            const eventThumbUrl =
+              event.coverImageUrl ??
+              (event.slug === "tiakola-casablanca-2026"
+                ? "/events/tiakola-casablanca-2026/square.webp"
+                : null);
             return (
               <li key={event.id}>
                 <Link href={`/events/${event.slug}`} className="live-event-card">
                   <span className="live-event-index">{String(index + 1).padStart(2, "0")}</span>
+                  <span className={`live-event-thumb${eventThumbUrl ? "" : " is-empty"}`} aria-hidden="true">
+                    {eventThumbUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- event artwork can be hosted on arbitrary approved origins.
+                      <img src={eventThumbUrl} alt="" />
+                    ) : null}
+                  </span>
                   <span className="live-event-date" aria-label={new Intl.DateTimeFormat("fr-MA", { dateStyle: "long" }).format(event.startsAt)}>
                     <strong>{day}</strong><span>{month}</span>
                   </span>
