@@ -73,6 +73,9 @@ function LoginForm() {
           </button>
         </form>
         <p className="customer-auth-switch">
+          <Link href="/mot-de-passe-oublie">Mot de passe oublié ?</Link>
+        </p>
+        <p className="customer-auth-switch">
           Pas encore de compte ?{" "}
           <Link href={`/register?callbackUrl=${encodeURIComponent(callbackUrl)}`}>Créer un compte</Link>
         </p>
