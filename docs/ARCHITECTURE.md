@@ -18,7 +18,12 @@
     supports JWT sessions — it throws `CALLBACK_CREDENTIALS_JWT_ERROR`
     under the database strategy, since there's no OAuth account row to
     hang a session off of. This was caught by the Playwright e2e suite,
-    not by inspection. See docs/SECURITY.md for the resulting tradeoff.
+    not by inspection. There is still no generic "revoke this one
+    session" the way admin sessions have, but `User.authVersion`
+    (compared against each JWT's stored version on every `session()`
+    read) gives the one revocation path this app actually needs: a
+    password reset invalidates every session issued before it. See
+    docs/SECURITY.md's Session fixation row for the remaining gap.
   - Admin/scanner staff: a **separate, minimal custom session**
     (`AdminSession` table, HMAC-hashed bearer token, own httpOnly cookie
     `onlylive_admin_session`). Deliberately not Auth.js and not Lucia
