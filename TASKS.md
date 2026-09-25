@@ -23,6 +23,10 @@ memory alone.
   form controls, enlarged secondary touch targets, visible branded focus, and
   stronger micro-copy contrast. Reduced-motion emulation disables every
   decorative animation; browser measurement reported zero layout shift.
+- Brought the four legal-information routes into the same visual system with
+  a readable long-form layout and mobile navigation, while keeping the draft
+  warning and every unresolved placeholder impossible to mistake for final
+  legal copy.
 - Added a three-step checkout progress indicator, locally formatted MAD
   amounts, responsive mobile layouts, and clearer status-specific hierarchy.
 - Preserved strict payment truthfulness for pending, failed, expired,

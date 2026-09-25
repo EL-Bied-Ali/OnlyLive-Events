@@ -17,26 +17,22 @@ export function LegalPage({
   children: React.ReactNode;
 }) {
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "48px 16px 96px" }}>
-      <p style={{ marginBottom: 24 }}>
-        <Link href="/" style={{ textDecoration: "none", opacity: 0.7 }}>
-          ← Retour à l&apos;accueil
+    <main className="legal-page">
+      <header className="legal-header">
+        <Link href="/" className="live-brand" aria-label="OnlyLive — accueil">
+          <span className="live-brand-mark" aria-hidden="true">OL</span>
+          <span>OnlyLive</span>
         </Link>
-      </p>
+        <Link href="/" className="legal-back">← Retour à l&apos;accueil</Link>
+      </header>
 
-      <div
-        role="note"
-        style={{
-          border: "1px solid #7a5b00",
-          background: "#3a2c00",
-          color: "#ffd875",
-          borderRadius: 8,
-          padding: "12px 16px",
-          marginBottom: 32,
-          fontSize: 14,
-          lineHeight: 1.5,
-        }}
-      >
+      <div className="legal-heading">
+        <p>Informations OnlyLive</p>
+        <h1>{title}</h1>
+        <span>{updatedNote}</span>
+      </div>
+
+      <div role="note" className="legal-draft-note">
         <strong>Document provisoire — ne pas utiliser en production.</strong> Ce texte est un
         modèle de structure généré pour préparer la publication de ce document. Il ne constitue
         pas un avis juridique et doit être relu, complété et validé par un avocat et/ou
@@ -45,18 +41,14 @@ export function LegalPage({
         modèle n&apos;invente pas.
       </div>
 
-      <h1 style={{ fontSize: 28, fontWeight: 700, marginBottom: 8 }}>{title}</h1>
-      <p style={{ opacity: 0.7, marginBottom: 32, fontSize: 14 }}>{updatedNote}</p>
+      <article className="legal-content">{children}</article>
 
-      <div style={{ display: "grid", gap: 20, lineHeight: 1.6 }}>{children}</div>
-
-      <nav style={{ marginTop: 48, paddingTop: 24, borderTop: "1px solid #333" }}>
-        <ul style={{ listStyle: "none", padding: 0, display: "flex", gap: 16, flexWrap: "wrap" }}>
+      <nav className="legal-navigation" aria-label="Documents légaux">
+        <p>Autres documents</p>
+        <ul>
           {LEGAL_LINKS.map((link) => (
             <li key={link.href}>
-              <Link href={link.href} style={{ fontSize: 14, opacity: 0.8 }}>
-                {link.label}
-              </Link>
+              <Link href={link.href}>{link.label}</Link>
             </li>
           ))}
         </ul>
@@ -67,16 +59,16 @@ export function LegalPage({
 
 export function Section({ heading, children }: { heading: string; children: React.ReactNode }) {
   return (
-    <section>
-      <h2 style={{ fontSize: 18, fontWeight: 600, marginBottom: 8 }}>{heading}</h2>
-      <div style={{ opacity: 0.9 }}>{children}</div>
+    <section className="legal-section">
+      <h2>{heading}</h2>
+      <div>{children}</div>
     </section>
   );
 }
 
 export function ToFill({ children }: { children: React.ReactNode }) {
   return (
-    <span style={{ background: "#3a2c00", color: "#ffd875", padding: "1px 6px", borderRadius: 4 }}>
+    <span className="legal-to-fill">
       [À COMPLÉTER : {children}]
     </span>
   );
