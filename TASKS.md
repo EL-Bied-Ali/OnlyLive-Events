@@ -4,6 +4,22 @@ Recover project state at the start of a session by reading this file,
 `CLAUDE.md`, `docs/*.md`, `tests.json`, and recent git history — not from
 memory alone.
 
+## Completed (customer UX/UI polish — PR #93)
+
+- Reworked the public journey into an editorial concert-poster direction:
+  stronger OnlyLive identity, event-led homepage, immersive event hero, and
+  ticket-pass selection cards without changing catalogue or inventory logic.
+- Unified register/login, checkout, fake-provider sandbox, and order pages so
+  the customer keeps one coherent visual language from discovery to ticket.
+- Added a three-step checkout progress indicator, locally formatted MAD
+  amounts, responsive mobile layouts, and clearer status-specific hierarchy.
+- Preserved strict payment truthfulness for pending, failed, expired,
+  refunded, reconciliation-required, and confirmed states; no browser return
+  is presented as payment proof and no ticket is promised before fulfillment.
+- Visually verified desktop and mobile layouts plus confirmed, pending,
+  failed, and expired flows. Typecheck, lint, production build, 440 Vitest
+  tests, and the affected Playwright purchase/access scenarios pass.
+
 ## Completed (this session)
 
 - Project scaffold: Next.js 16 / React 19 / TypeScript, ESLint, Vitest,

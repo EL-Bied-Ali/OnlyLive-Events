@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { ReserveForm } from "./ReserveForm";
 
@@ -29,26 +30,50 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
   const now = new Date();
   const salesAreOpen =
     event.status === "on_sale" && event.salesOpenAt <= now && event.salesCloseAt > now;
+  const eventDay = new Intl.DateTimeFormat("fr-MA", { day: "2-digit" }).format(event.startsAt);
+  const eventMonth = new Intl.DateTimeFormat("fr-MA", { month: "long" }).format(event.startsAt);
+  const eventYear = new Intl.DateTimeFormat("fr-MA", { year: "numeric" }).format(event.startsAt);
+  const eventTime = new Intl.DateTimeFormat("fr-MA", { hour: "2-digit", minute: "2-digit" }).format(event.startsAt);
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 4 }}>{event.title}</h1>
-      <p style={{ opacity: 0.8, marginBottom: 4 }}>
-        {event.venue.name}, {event.venue.city}
-      </p>
-      <p style={{ opacity: 0.8, marginBottom: 24 }}>
-        {new Intl.DateTimeFormat("fr-MA", { dateStyle: "full", timeStyle: "short" }).format(event.startsAt)}
-      </p>
-      <p style={{ marginBottom: 32 }}>{event.description}</p>
+    <main className="live-event-page">
+      <nav className="live-nav" aria-label="Navigation principale">
+        <Link href="/" className="live-brand" aria-label="OnlyLive — accueil">
+          <span className="live-brand-mark" aria-hidden="true">OL</span>
+          <span>OnlyLive</span>
+        </Link>
+        <Link href="/" className="live-back-link">← Tous les événements</Link>
+      </nav>
+
+      <section className="live-event-hero" aria-labelledby="event-title">
+        <div className="live-event-visual" aria-hidden="true">
+          <span className="live-stage-number">05·12</span>
+          <span className="live-stage-ring" />
+          <span className="live-stage-caption">Casablanca<br />{eventYear}</span>
+        </div>
+        <div className="live-event-hero-copy">
+          <p className="live-kicker"><span aria-hidden="true" /> OnlyLive présente</p>
+          <h1 id="event-title">{event.title}</h1>
+          <p className="live-event-description">{event.description}</p>
+          <dl className="live-event-facts">
+            <div><dt>Date</dt><dd><strong>{eventDay} {eventMonth}</strong><span>{eventYear} · {eventTime}</span></dd></div>
+            <div><dt>Lieu</dt><dd><strong>{event.venue.name}</strong><span>{event.venue.city}, Maroc</span></dd></div>
+          </dl>
+        </div>
+      </section>
 
       {event.status === "cancelled" ? (
-        <p role="alert" style={{ padding: 16, borderRadius: 10, background: "#3d1d27", color: "#ffb0c0" }}>
+        <p role="alert" className="live-event-alert">
           Cet événement est annulé. Les détenteurs de billets seront contactés par OnlyLive.
         </p>
       ) : null}
 
-      <h2 style={{ fontSize: 22, marginBottom: 16 }}>Billets</h2>
-      <div style={{ display: "grid", gap: 24 }}>
+      <section className="live-tickets" aria-labelledby="tickets-title">
+        <div className="live-section-heading">
+          <p>Choisissez votre expérience</p>
+          <h2 id="tickets-title">Billets</h2>
+        </div>
+        <div className="live-ticket-list">
         {event.ticketCategories.map((category) => {
           const inventory = category.inventory;
           const available = inventory
@@ -59,17 +84,23 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
           ) : undefined;
 
           return (
-            <div key={category.id} style={{ border: "1px solid #333", borderRadius: 12, padding: 20 }}>
-              <h3 style={{ fontSize: 18, marginBottom: 4 }}>{category.name}</h3>
-              {category.description && <p style={{ opacity: 0.7, marginBottom: 12 }}>{category.description}</p>}
+            <article key={category.id} className="live-ticket-card">
+              <div className="live-ticket-main">
+                <span className="live-ticket-notch" aria-hidden="true" />
+                <span className="live-ticket-label">Accès</span>
+                <h3>{category.name}</h3>
+                {category.description ? <p>{category.description}</p> : <p>Accès officiel · Billet numérique sécurisé</p>}
+                <span className="live-ticket-stock">{available > 0 ? `${available} places disponibles` : "Épuisé"}</span>
+              </div>
 
-              {!openPhase && event.status !== "cancelled" ? <p style={{ opacity: 0.6 }}>Aucune vente ouverte pour le moment</p> : null}
+              <div className="live-ticket-action">
+              {!openPhase && event.status !== "cancelled" ? <p className="live-ticket-unavailable">Aucune vente ouverte pour le moment</p> : null}
 
               {openPhase && (
                 <>
-                  <p style={{ fontSize: 20, fontWeight: 600, marginBottom: 12 }}>
-                    {(openPhase.priceCents / 100).toFixed(2)} {openPhase.currency}
-                    <span style={{ fontSize: 14, opacity: 0.6, marginLeft: 8 }}>({openPhase.name})</span>
+                  <p className="live-ticket-price">
+                    <small>{openPhase.name}</small>
+                    <strong>{new Intl.NumberFormat("fr-MA", { maximumFractionDigits: 0 }).format(openPhase.priceCents / 100)} <span>{openPhase.currency}</span></strong>
                   </p>
                   <ReserveForm
                     ticketCategoryId={category.id}
@@ -79,10 +110,13 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
                   />
                 </>
               )}
-            </div>
+              </div>
+            </article>
           );
         })}
-      </div>
+        </div>
+        <p className="live-ticket-trust">Paiement hébergé et sécurisé · Billets émis uniquement après confirmation du prestataire</p>
+      </section>
     </main>
   );
 }

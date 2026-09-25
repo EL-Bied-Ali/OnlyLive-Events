@@ -29,6 +29,7 @@ test("customer can browse, reserve, pay, and receive a ticket", async ({ page })
   await page.getByRole("button", { name: "Réserver" }).first().click();
   await page.waitForURL(/\/checkout\/hold\//);
 
+  await expect(page.getByRole("list", { name: "Progression de la commande" })).toBeVisible();
   await expect(page.getByText(/Billets réservés encore/)).toBeVisible();
   await expect(page.getByText(/vous revenez automatiquement sur OnlyLive/i)).toBeVisible();
 

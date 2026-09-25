@@ -37,16 +37,22 @@ function LoginForm() {
   }
 
   return (
-    <main style={{ maxWidth: 400, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 28, marginBottom: 24 }}>Se connecter</h1>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+    <main className="customer-auth-page">
+      <Link href="/" className="live-brand" aria-label="OnlyLive — accueil">
+        <span className="live-brand-mark" aria-hidden="true">OL</span><span>OnlyLive</span>
+      </Link>
+      <section className="customer-auth-card">
+      <p className="live-kicker"><span aria-hidden="true" /> Espace client</p>
+      <h1>Retrouvez votre soirée.</h1>
+      <p className="customer-auth-intro">Connectez-vous pour réserver vos billets et retrouver vos commandes.</p>
+      <form onSubmit={handleSubmit} className="customer-auth-form">
         <input
           type="email"
           placeholder="Email"
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           required
-          style={{ padding: 10 }}
+          aria-label="Email"
         />
         <input
           type="password"
@@ -54,16 +60,17 @@ function LoginForm() {
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           required
-          style={{ padding: 10 }}
+          aria-label="Mot de passe"
         />
-        {error && <p style={{ color: "#ff6b6b", margin: 0 }}>{error}</p>}
-        <button type="submit" disabled={submitting} style={{ padding: 12 }}>
-          {submitting ? "..." : "Se connecter"}
+        {error && <p className="customer-auth-error" role="alert">{error}</p>}
+        <button type="submit" disabled={submitting}>
+          {submitting ? "Connexion…" : "Se connecter"}
         </button>
       </form>
-      <p style={{ marginTop: 16 }}>
+      <p className="customer-auth-switch">
         Pas encore de compte ? <Link href="/register">Créer un compte</Link>
       </p>
+      </section>
     </main>
   );
 }

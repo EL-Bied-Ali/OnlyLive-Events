@@ -19,7 +19,7 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
   const [submitting, setSubmitting] = useState(false);
 
   if (available <= 0) {
-    return <p style={{ opacity: 0.6 }}>Épuisé</p>;
+    return <p className="live-ticket-unavailable">Épuisé</p>;
   }
 
   async function handleSubmit(event: React.FormEvent) {
@@ -52,12 +52,13 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
   }
 
   return (
-    <form onSubmit={handleSubmit} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+    <form onSubmit={handleSubmit} className="live-reserve-form">
+      <label htmlFor={`quantity-${ticketCategoryId}`}>Quantité</label>
       <select
+        id={`quantity-${ticketCategoryId}`}
         value={quantity}
         onChange={(event) => setQuantity(Number(event.target.value))}
         disabled={submitting}
-        style={{ padding: 8 }}
       >
         {Array.from({ length: Math.min(maxPerOrder, available) }, (_, i) => i + 1).map((n) => (
           <option key={n} value={n}>
@@ -65,10 +66,10 @@ export function ReserveForm({ ticketCategoryId, salesPhaseId, available, maxPerO
           </option>
         ))}
       </select>
-      <button type="submit" disabled={submitting} style={{ padding: "8px 16px" }}>
-        {submitting ? "..." : "Réserver"}
+      <button type="submit" disabled={submitting}>
+        {submitting ? "Réservation…" : "Réserver"}<span aria-hidden="true">→</span>
       </button>
-      {error && <span style={{ color: "#ff6b6b", fontSize: 14 }}>{error}</span>}
+      {error ? <span className="live-reserve-error" role="alert">{error}</span> : null}
     </form>
   );
 }

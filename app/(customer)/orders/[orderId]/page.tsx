@@ -106,7 +106,11 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
       title: order.status,
       description: "Le statut de cette commande est affiché tel qu’il est enregistré.",
     };
-  const total = (order.totalAmountCents / 100).toFixed(2);
+  const currencyFormatter = new Intl.NumberFormat("fr-MA", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  });
+  const formatAmount = (amountCents: number) => currencyFormatter.format(amountCents / 100);
   const eventDate = new Intl.DateTimeFormat("fr-MA", {
     dateStyle: "full",
     timeStyle: "short",
@@ -125,7 +129,9 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
       <OrderStatusAutoRefresh orderId={order.id} status={order.status} />
 
       <section className={`customer-order-status customer-order-status-${presentation.tone}`} aria-live="polite">
-        <span className="customer-status-dot" aria-hidden="true" />
+        <span className="customer-status-symbol" aria-hidden="true">
+          {presentation.tone === "success" ? "✓" : presentation.tone === "danger" ? "!" : presentation.tone === "neutral" ? "—" : "···"}
+        </span>
         <div>
           <p className="customer-status-eyebrow">{presentation.eyebrow}</p>
           <h1>{presentation.title}</h1>
@@ -146,7 +152,7 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
         </div>
         <div className="customer-order-total">
           <span>Total</span>
-          <strong>{total} {order.currency}</strong>
+          <strong>{formatAmount(order.totalAmountCents)} {order.currency}</strong>
         </div>
       </section>
 
@@ -165,9 +171,9 @@ export default async function OrderPage({ params }: { params: Promise<{ orderId:
               <div className="customer-order-item-heading">
                 <div>
                   <strong>{item.ticketCategory.name}</strong>
-                  <span>{item.quantity} × {(item.unitPriceCents / 100).toFixed(2)} {order.currency}</span>
+                  <span>{item.quantity} × {formatAmount(item.unitPriceCents)} {order.currency}</span>
                 </div>
-                <strong>{((item.quantity * item.unitPriceCents) / 100).toFixed(2)} {order.currency}</strong>
+                <strong>{formatAmount(item.quantity * item.unitPriceCents)} {order.currency}</strong>
               </div>
 
               {item.tickets.length > 0 ? (

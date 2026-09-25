@@ -85,7 +85,8 @@ export function CheckoutClient({
   const checkoutUnavailable = reservationStatus !== "active" || expiredByTime;
   const minutes = Math.floor(secondsLeft / 60);
   const seconds = secondsLeft % 60;
-  const total = ((quantity * unitPriceCents) / 100).toFixed(2);
+  const total = new Intl.NumberFormat("fr-MA", { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+    .format((quantity * unitPriceCents) / 100);
   const paymentBusy = submitting || redirecting || savingPhone;
   const isChariPay = paymentProviderName === "charipay";
   const paymentDestination = isChariPay ? "ChariPay" : "le paiement sécurisé";
@@ -172,6 +173,12 @@ export function CheckoutClient({
         </Link>
         <span className="customer-secure-label">{isChariPay ? "Paiement sécurisé via ChariPay" : "Paiement sécurisé"}</span>
       </header>
+
+      <ol className="customer-flow-progress" aria-label="Progression de la commande">
+        <li className="is-complete"><span aria-hidden="true">✓</span><strong>Billets</strong></li>
+        <li className="is-current" aria-current="step"><span aria-hidden="true">2</span><strong>Paiement</strong></li>
+        <li><span aria-hidden="true">3</span><strong>Confirmation</strong></li>
+      </ol>
 
       <section className="customer-checkout-card" aria-labelledby="checkout-title">
         <div className="customer-checkout-step">Étape 2 sur 3 · Paiement</div>
@@ -289,7 +296,7 @@ export function CheckoutClient({
               ? "Redirection vers le paiement…"
               : submitting
                 ? "Préparation du paiement…"
-                : `Continuer vers ${paymentDestination} · ${total} ${currency}`}
+            : `Continuer vers ${paymentDestination} · ${total} ${currency}`}
           </button>
         ) : null}
 

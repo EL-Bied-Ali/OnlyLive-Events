@@ -45,5 +45,5 @@ test("a scanner account cannot enter the administration dashboard", async ({ pag
   await page.getByRole("button", { name: "Se connecter" }).click();
 
   await page.waitForURL("/");
-  await expect(page.getByRole("heading", { name: "OnlyLive" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Le live commence ici." })).toBeVisible();
 });

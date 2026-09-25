@@ -36,15 +36,21 @@ export default function RegisterPage() {
   }
 
   return (
-    <main style={{ maxWidth: 400, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 28, marginBottom: 24 }}>Créer un compte</h1>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
+    <main className="customer-auth-page">
+      <Link href="/" className="live-brand" aria-label="OnlyLive — accueil">
+        <span className="live-brand-mark" aria-hidden="true">OL</span><span>OnlyLive</span>
+      </Link>
+      <section className="customer-auth-card">
+      <p className="live-kicker"><span aria-hidden="true" /> Première fois ici</p>
+      <h1>Votre prochaine soirée commence ici.</h1>
+      <p className="customer-auth-intro">Créez votre compte pour réserver et recevoir vos billets officiels.</p>
+      <form onSubmit={handleSubmit} className="customer-auth-form">
         <input
           placeholder="Nom"
           value={form.name}
           onChange={(event) => setForm({ ...form, name: event.target.value })}
           required
-          style={{ padding: 10 }}
+          aria-label="Nom"
         />
         <input
           type="email"
@@ -52,7 +58,7 @@ export default function RegisterPage() {
           value={form.email}
           onChange={(event) => setForm({ ...form, email: event.target.value })}
           required
-          style={{ padding: 10 }}
+          aria-label="Email"
         />
         <input
           type="password"
@@ -61,7 +67,7 @@ export default function RegisterPage() {
           onChange={(event) => setForm({ ...form, password: event.target.value })}
           required
           minLength={10}
-          style={{ padding: 10 }}
+          aria-label="Mot de passe"
         />
         <input
           type="tel"
@@ -70,16 +76,17 @@ export default function RegisterPage() {
           onChange={(event) => setForm({ ...form, phone: event.target.value })}
           required
           minLength={8}
-          style={{ padding: 10 }}
+          aria-label="Téléphone"
         />
-        {error && <p style={{ color: "#ff6b6b", margin: 0 }}>{error}</p>}
-        <button type="submit" disabled={submitting} style={{ padding: 12 }}>
-          {submitting ? "..." : "Créer mon compte"}
+        {error && <p className="customer-auth-error" role="alert">{error}</p>}
+        <button type="submit" disabled={submitting}>
+          {submitting ? "Création…" : "Créer mon compte"}
         </button>
       </form>
-      <p style={{ marginTop: 16 }}>
+      <p className="customer-auth-switch">
         Déjà un compte ? <Link href="/login">Se connecter</Link>
       </p>
+      </section>
     </main>
   );
 }
