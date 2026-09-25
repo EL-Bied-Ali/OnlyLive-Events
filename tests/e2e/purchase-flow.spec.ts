@@ -15,10 +15,10 @@ test("customer can browse, reserve, pay, and receive a ticket", async ({ page })
   const password = "E2ETestPassword123!";
 
   await page.goto("/register");
-  await page.getByPlaceholder("Nom").fill("E2E Test Buyer");
-  await page.getByPlaceholder("Email").fill(email);
-  await page.getByPlaceholder(/Mot de passe/).fill(password);
-  await page.getByPlaceholder(/Téléphone/).fill("0612345678");
+  await page.getByLabel("Nom").fill("E2E Test Buyer");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Mot de passe").fill(password);
+  await page.getByLabel("Téléphone").fill("0612345678");
   await page.getByRole("button", { name: "Créer mon compte" }).click();
 
   await page.waitForURL("/");
@@ -30,7 +30,7 @@ test("customer can browse, reserve, pay, and receive a ticket", async ({ page })
   await page.waitForURL(/\/checkout\/hold\//);
 
   await expect(page.getByText(/Billets réservés encore/)).toBeVisible();
-  await expect(page.getByText(/vous revenez automatiquement sur OnlyLive/i)).toBeVisible();
+  await expect(page.getByText(/vous quittez brièvement OnlyLive/i)).toBeVisible();
 
   await page.getByRole("button", { name: /Continuer vers le paiement sécurisé/ }).click();
   await page.waitForURL(/\/pay\/fake\//);
@@ -44,5 +44,32 @@ test("customer can browse, reserve, pay, and receive a ticket", async ({ page })
   await page.getByRole("link", { name: /Voir le billet/ }).click();
   await page.waitForURL(/\/tickets\//);
   await expect(page.getByAltText("QR code du billet")).toBeVisible();
-  await expect(page.getByText("Valide")).toBeVisible();
+  await expect(page.getByText("Billet valide")).toBeVisible();
+});
+
+
+test("account creation preserves the event return path", async ({ page }) => {
+  const uniqueSuffix = Date.now();
+  const email = `e2e-return-${uniqueSuffix}@test.onlylive.ma`;
+  const password = "E2ETestPassword123!";
+
+  await page.goto("/");
+  await page.getByRole("link", { name: /Tiakola/ }).click();
+  await page.waitForURL(/\/events\//);
+  const eventUrl = page.url();
+
+  await page.getByRole("button", { name: "Réserver" }).first().click();
+  await expect(page).toHaveURL(/\/login\?callbackUrl=/);
+
+  await page.getByRole("link", { name: "Créer un compte" }).click();
+  await expect(page).toHaveURL(/\/register\?callbackUrl=/);
+
+  await page.getByLabel("Nom").fill("E2E Return Buyer");
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Mot de passe").fill(password);
+  await page.getByLabel("Téléphone").fill("0612345678");
+  await page.getByRole("button", { name: "Créer mon compte" }).click();
+
+  await expect(page).toHaveURL(eventUrl);
+  await expect(page.getByRole("heading", { name: /Tiakola/ })).toBeVisible();
 });
