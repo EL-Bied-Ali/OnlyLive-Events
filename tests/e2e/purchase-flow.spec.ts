@@ -30,7 +30,7 @@ test("customer can browse, reserve, pay, and receive a ticket", async ({ page })
   await page.waitForURL(/\/checkout\/hold\//);
 
   await expect(page.getByText(/Billets réservés encore/)).toBeVisible();
-  await expect(page.getByText(/vous quittez brièvement OnlyLive/i)).toBeVisible();
+  await expect(page.getByText(/revenez ici pour la confirmation/i)).toBeVisible();
 
   await page.getByRole("button", { name: /Continuer vers le paiement sécurisé/ }).click();
   await page.waitForURL(/\/pay\/fake\//);
