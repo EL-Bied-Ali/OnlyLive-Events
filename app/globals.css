@@ -3657,3 +3657,114 @@ html { scroll-behavior: smooth; }
     text-align: left;
   }
 }
+
+/* Account (/mon-compte) */
+
+.customer-account-page {
+  min-height: 100vh;
+  padding-bottom: 64px;
+  background: var(--live-ink);
+}
+
+.customer-account-heading {
+  max-width: 560px;
+  margin: 0 auto;
+  padding: 34px clamp(16px, 4vw, 40px) 8px;
+}
+
+.customer-account-heading h1 {
+  margin: 0 0 6px;
+  font-size: clamp(1.6rem, 4.5vw, 2.1rem);
+  letter-spacing: -0.03em;
+}
+
+.customer-account-heading p {
+  margin: 0;
+  color: #9ba2b0;
+  line-height: 1.5;
+}
+
+.customer-account-card {
+  max-width: 560px;
+  margin: 18px auto 0;
+  padding: 8px clamp(16px, 4vw, 40px);
+  display: grid;
+}
+
+.customer-account-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 4px;
+  border-bottom: 1px solid #21252e;
+}
+
+.customer-account-field:last-child {
+  border-bottom: 0;
+}
+
+.customer-account-field strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 1rem;
+}
+
+.customer-account-field-editing {
+  align-items: flex-start;
+  flex-direction: column;
+}
+
+.customer-account-field-editing input {
+  margin-top: 6px;
+  width: 100%;
+  max-width: 280px;
+  padding: 10px 12px;
+  border: 1px solid #2c313c;
+  border-radius: 10px;
+  background: #0c0f14;
+  color: #fff;
+  font: inherit;
+}
+
+.customer-account-field-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+}
+
+.customer-account-edit,
+.customer-account-save,
+.customer-account-cancel {
+  border: 1px solid #2c313c;
+  border-radius: 10px;
+  padding: 8px 16px;
+  background: transparent;
+  color: #c7cbd6;
+  font-weight: 700;
+  font-size: 0.86rem;
+  cursor: pointer;
+}
+
+.customer-account-save {
+  border-color: var(--live-coral);
+  background: var(--live-coral);
+  color: #fff;
+}
+
+.customer-account-save:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.customer-account-edit:hover,
+.customer-account-cancel:hover {
+  border-color: #3a4150;
+  color: #fff;
+}
+
+.customer-account-signout {
+  max-width: 560px;
+  margin: 26px auto 0;
+  padding: 0 clamp(16px, 4vw, 40px);
+}

@@ -32,8 +32,7 @@ export async function CustomerNav({ trailing }: { trailing?: ReactNode } = {}) {
           <>
             <Link href="/mes-billets">Mes billets</Link>
             <Link href="/mes-commandes">Mes commandes</Link>
-            {/* Compte lands once that page ships -- no dead link in the
-                meantime. */}
+            <Link href="/mon-compte">Compte</Link>
             <SignOutButton />
           </>
         ) : (
