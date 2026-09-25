@@ -2,6 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { ReserveForm } from "./ReserveForm";
+import { formatCurrency } from "@/lib/formatCurrency";
 
 export const dynamic = "force-dynamic";
 
@@ -86,7 +87,7 @@ export default async function EventPage({ params }: { params: Promise<{ slug: st
                   {category.description ? <p>{category.description}</p> : null}
                   {openPhase ? (
                     <div className="event-ticket-price">
-                      <strong>{(openPhase.priceCents / 100).toFixed(2)} {openPhase.currency}</strong>
+                      <strong>{formatCurrency(openPhase.priceCents, openPhase.currency)}</strong>
                       <span>{openPhase.name}</span>
                     </div>
                   ) : event.status !== "cancelled" ? (
