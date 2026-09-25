@@ -1,4 +1,4 @@
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/db";
 import { createTestUser } from "../helpers/fixtures";
@@ -108,7 +108,10 @@ describe("resetPasswordWithToken", () => {
     const user = await createTestUser("reset-expired");
     const { resetPasswordWithToken } = await import("@/lib/auth/passwordReset");
 
-    const rawToken = "expired-token-raw-value";
+    // Unique per run -- CI repeats this whole suite twice against the same
+    // persistent DB specifically to catch a hardcoded fixture value like a
+    // literal string here colliding with the previous run's leftover row.
+    const rawToken = `expired-token-${randomUUID()}`;
     const tokenHash = createHash("sha256").update(rawToken).digest("hex");
     await prisma.passwordResetToken.create({
       data: { userId: user.id, tokenHash, expiresAt: new Date(Date.now() - 1000) },
