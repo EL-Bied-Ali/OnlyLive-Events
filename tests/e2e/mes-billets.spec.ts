@@ -67,3 +67,49 @@ test("an unauthenticated visit to Mes billets redirects to login", async ({ page
   await page.goto("/mes-billets");
   await expect(page).toHaveURL(/\/login\?callbackUrl=%2Fmes-billets/);
 });
+
+/**
+ * Order.eventId is a direct column -- one order is always exactly one
+ * event -- so a customer buying more than one ticket in a single order
+ * groups under one card with each ticket listed individually, instead of
+ * duplicating the same event/venue/date once per ticket.
+ */
+test("a multi-ticket order groups under one card, each ticket still individually reachable", async ({ page }) => {
+  const suffix = Date.now();
+  await page.goto("/register");
+  await page.getByLabel("Nom").fill("Multi Ticket Buyer");
+  await page.getByLabel("Email").fill(`multi-ticket-${suffix}@test.onlylive.ma`);
+  await page.getByLabel("Mot de passe").fill("MultiTicketPassword123!");
+  await page.getByLabel("Téléphone").fill("0612345678");
+  await page.getByRole("button", { name: "Créer mon compte" }).click();
+  await page.waitForURL("/");
+
+  await page.getByRole("link", { name: /Tiakola/ }).click();
+  await page.waitForURL(/\/events\//);
+  const firstCategory = page.getByRole("article").first();
+  await firstCategory.getByLabel("Quantité").selectOption("2");
+  await firstCategory.getByRole("button", { name: "Réserver" }).click();
+  await page.waitForURL(/\/checkout\/hold\//);
+  await page.getByRole("button", { name: /Continuer vers le paiement sécurisé/ }).click();
+  await page.waitForURL(/\/pay\/fake\//);
+  await page.getByRole("button", { name: "Simuler un paiement réussi" }).click();
+  await page.waitForURL(/\/orders\//);
+
+  await page.goto("/mes-billets");
+  // One event/venue/date heading for the whole order, not one per ticket.
+  await expect(page.getByRole("heading", { name: /Tiakola/ })).toHaveCount(1);
+  await expect(page.getByText("2 billets")).toBeVisible();
+
+  const ticketLinks = page.locator("a.customer-wallet-ticket-row");
+  await expect(ticketLinks).toHaveCount(2);
+  await expect(ticketLinks.first().locator(".customer-wallet-card-status")).toContainText("Valide");
+
+  // Each ticket row still links to its own distinct ticket detail page.
+  const firstHref = await ticketLinks.nth(0).getAttribute("href");
+  const secondHref = await ticketLinks.nth(1).getAttribute("href");
+  expect(firstHref).not.toBe(secondHref);
+
+  await ticketLinks.first().click();
+  await page.waitForURL(/\/orders\/.+\/tickets\/.+/);
+  await expect(page.getByText(/Tiakola/)).toBeVisible();
+});

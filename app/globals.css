@@ -2272,8 +2272,32 @@ textarea {
   outline-offset: 3px;
 }
 
+.customer-wallet-card-visual {
+  flex: 0 0 auto;
+  width: 72px;
+  aspect-ratio: 1;
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.13);
+  background: #101511;
+}
+
+.customer-wallet-card-visual img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.customer-wallet-card-visual.is-empty {
+  background:
+    radial-gradient(circle at 50% 45%, rgba(134, 214, 185, 0.18), transparent 45%),
+    #101511;
+}
+
 .customer-wallet-card-main {
   min-width: 0;
+  flex: 1 1 auto;
 }
 
 .customer-wallet-card-date {
@@ -2302,6 +2326,46 @@ textarea {
 .customer-wallet-card-category {
   margin-top: 3px !important;
   color: #767d8c !important;
+}
+
+/* Multi-ticket orders (customer-wallet-card-group): the card itself is an
+   <article>, not a link -- each ticket keeps its own link/status below,
+   so the whole-card hover/focus lift that applies to single-ticket cards
+   would be misleading here (nothing happens on clicking the card itself). */
+.customer-wallet-card-group:hover,
+.customer-wallet-card-group:focus-visible {
+  transform: none;
+}
+
+.customer-wallet-card-tickets {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.customer-wallet-ticket-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #21252e;
+  border-radius: 10px;
+  background: #0c0f14;
+  color: inherit;
+  text-decoration: none;
+  font-size: 0.88rem;
+  transition: border-color 140ms ease;
+}
+
+.customer-wallet-ticket-row:hover,
+.customer-wallet-ticket-row:focus-visible {
+  border-color: #3a4150;
+}
+
+.customer-wallet-ticket-row:focus-visible {
+  outline: 3px solid rgba(134, 214, 185, 0.46);
+  outline-offset: 3px;
 }
 
 .customer-wallet-card-status {
