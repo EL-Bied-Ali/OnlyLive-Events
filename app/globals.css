@@ -310,6 +310,498 @@ textarea {
   .scanner-result-icon { width: 48px; height: 48px; }
 }
 
+/* Marketing and event discovery: visually aligned with the customer payment funnel. */
+.marketing-page,
+.event-page {
+  min-height: 100vh;
+  width: min(100%, 940px);
+  margin: 0 auto;
+  padding: 28px 22px 64px;
+}
+
+.marketing-header,
+.event-header {
+  min-height: 56px;
+  margin-bottom: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.marketing-header > span,
+.event-back-link {
+  color: #858d9d;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.event-back-link {
+  text-decoration: none;
+}
+
+.event-back-link:hover {
+  color: #f5f6f8;
+}
+
+.marketing-hero {
+  max-width: 720px;
+  margin-bottom: 52px;
+}
+
+.marketing-hero h1,
+.event-hero h1 {
+  margin: 10px 0 12px;
+  font-size: clamp(2.3rem, 7vw, 4.7rem);
+  line-height: 0.98;
+  letter-spacing: -0.055em;
+}
+
+.marketing-hero p,
+.event-description {
+  max-width: 650px;
+  margin: 0;
+  color: #9ba2b0;
+  font-size: 1rem;
+  line-height: 1.65;
+}
+
+.marketing-events,
+.event-tickets {
+  margin-top: 18px;
+}
+
+.marketing-section-heading {
+  margin-bottom: 16px;
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.marketing-section-heading h2 {
+  margin: 5px 0 0;
+  font-size: 1.45rem;
+  letter-spacing: -0.03em;
+}
+
+.marketing-section-heading > span {
+  color: #818999;
+  font-size: 0.82rem;
+}
+
+.marketing-event-list,
+.event-ticket-list {
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+  list-style: none;
+}
+
+.marketing-event-card {
+  min-height: 108px;
+  padding: 18px 20px;
+  display: grid;
+  grid-template-columns: 66px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  border: 1px solid #292e39;
+  border-radius: 16px;
+  background: #11141b;
+  color: #f7f8fb;
+  text-decoration: none;
+  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.marketing-event-card:hover {
+  border-color: #454b58;
+  background: #141820;
+  transform: translateY(-1px);
+}
+
+.marketing-event-date {
+  width: 62px;
+  height: 70px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  border-radius: 12px;
+  background: #1b1f28;
+}
+
+.marketing-event-date strong {
+  font-size: 1.45rem;
+  line-height: 1;
+}
+
+.marketing-event-date span {
+  margin-top: 5px;
+  color: #f06a83;
+  font-size: 0.7rem;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.marketing-event-copy h3 {
+  margin: 0 0 6px;
+  font-size: 1.12rem;
+}
+
+.marketing-event-copy p,
+.marketing-event-copy small {
+  display: block;
+  margin: 0;
+  color: #939baa;
+}
+
+.marketing-event-copy p {
+  font-size: 0.88rem;
+}
+
+.marketing-event-copy small {
+  margin-top: 3px;
+  font-size: 0.76rem;
+}
+
+.marketing-event-action {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: #d8dce3;
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.marketing-sold-out {
+  color: #ff9eb1;
+}
+
+.marketing-empty {
+  padding: 30px 22px;
+  border: 1px dashed #303641;
+  border-radius: 16px;
+  color: #858d9d;
+  text-align: center;
+}
+
+.marketing-footer {
+  margin-top: 64px;
+  padding-top: 20px;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  border-top: 1px solid #252a33;
+  color: #747c8c;
+  font-size: 0.75rem;
+}
+
+.marketing-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.marketing-footer a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.marketing-footer a:hover {
+  color: #fff;
+}
+
+.event-page {
+  width: min(100%, 820px);
+}
+
+.event-header {
+  margin-bottom: 42px;
+}
+
+.event-hero {
+  max-width: 760px;
+}
+
+.event-hero h1 {
+  font-size: clamp(2.15rem, 7vw, 4.25rem);
+}
+
+.event-meta {
+  margin: 16px 0 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  color: #d2d6de;
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.event-meta span + span::before {
+  content: "·";
+  margin-right: 18px;
+  color: #5f6674;
+}
+
+.event-alert {
+  margin: 26px 0 0;
+}
+
+.event-tickets {
+  margin-top: 46px;
+}
+
+.event-ticket-card {
+  padding: 20px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 24px;
+  border: 1px solid #292e39;
+  border-radius: 16px;
+  background: #11141b;
+}
+
+.event-ticket-info h3 {
+  margin: 0;
+  font-size: 1.12rem;
+}
+
+.event-ticket-info > p {
+  margin: 6px 0 0;
+  max-width: 520px;
+  color: #9098a8;
+  font-size: 0.84rem;
+  line-height: 1.5;
+}
+
+.event-ticket-price {
+  margin-top: 14px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.event-ticket-price strong {
+  font-size: 1.3rem;
+  letter-spacing: -0.03em;
+}
+
+.event-ticket-price span {
+  color: #818999;
+  font-size: 0.75rem;
+}
+
+.event-ticket-unavailable,
+.event-ticket-sold-out {
+  color: #939baa !important;
+}
+
+.event-ticket-sold-out {
+  margin: 0;
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
+.event-reserve-form {
+  min-width: 210px;
+  display: grid;
+  grid-template-columns: 82px minmax(120px, 1fr);
+  align-items: end;
+  gap: 8px;
+}
+
+.event-quantity-field {
+  display: grid;
+  gap: 6px;
+}
+
+.event-quantity-field label {
+  color: #858d9d;
+  font-size: 0.72rem;
+  font-weight: 750;
+}
+
+.event-quantity-field select {
+  min-height: 48px;
+  padding: 0 12px;
+  border: 1px solid #3a404d;
+  border-radius: 10px;
+  background: #090b10;
+  color: #fff;
+  font-weight: 800;
+}
+
+.event-reserve-button {
+  min-height: 48px;
+  margin-top: 0;
+}
+
+.event-low-stock {
+  grid-column: 1 / -1;
+  color: #e4c16e;
+  font-size: 0.73rem;
+  text-align: right;
+}
+
+.event-reserve-error {
+  grid-column: 1 / -1;
+  max-width: 260px;
+  text-align: right;
+}
+
+/* Customer authentication. */
+.customer-auth-page {
+  min-height: 100vh;
+  width: min(100%, 470px);
+  margin: 0 auto;
+  padding: 32px 18px 56px;
+}
+
+.customer-auth-brand {
+  margin-bottom: 26px;
+}
+
+.customer-auth-card {
+  padding: 28px;
+  border: 1px solid #292e39;
+  border-radius: 20px;
+  background: #11141b;
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.28);
+}
+
+.customer-auth-card h1 {
+  margin: 8px 0 7px;
+  font-size: 2rem;
+  letter-spacing: -0.04em;
+}
+
+.customer-auth-intro {
+  margin: 0;
+  color: #969eae;
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+
+.customer-auth-form {
+  margin-top: 24px;
+  display: grid;
+  gap: 8px;
+}
+
+.customer-auth-form label {
+  margin-top: 5px;
+  color: #c9cdd6;
+  font-size: 0.8rem;
+  font-weight: 750;
+}
+
+.customer-auth-form input {
+  min-height: 50px;
+  padding: 0 13px;
+  border: 1px solid #3a404d;
+  border-radius: 10px;
+  background: #080a0f;
+  color: #fff;
+  outline: 0;
+}
+
+.customer-auth-form input:focus-visible {
+  border-color: #ea2549;
+  box-shadow: 0 0 0 3px rgba(234, 37, 73, 0.14);
+}
+
+.customer-auth-submit {
+  margin-top: 12px;
+}
+
+.customer-auth-switch {
+  margin: 18px 0 0;
+  color: #8f97a7;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.customer-auth-switch a {
+  color: #f3f4f6;
+  font-weight: 800;
+}
+
+@media (max-width: 680px) {
+  .marketing-page,
+  .event-page {
+    padding: 18px 12px 42px;
+  }
+
+  .marketing-header,
+  .event-header {
+    min-height: 48px;
+    margin-bottom: 34px;
+  }
+
+  .marketing-hero {
+    margin-bottom: 38px;
+  }
+
+  .marketing-event-card {
+    min-height: 0;
+    padding: 15px;
+    grid-template-columns: 54px minmax(0, 1fr);
+    gap: 13px;
+  }
+
+  .marketing-event-date {
+    width: 52px;
+    height: 60px;
+  }
+
+  .marketing-event-action {
+    grid-column: 2;
+    justify-content: space-between;
+    margin-top: 4px;
+  }
+
+  .marketing-footer {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .event-meta {
+    display: grid;
+    gap: 5px;
+  }
+
+  .event-meta span + span::before {
+    content: none;
+  }
+
+  .event-ticket-card {
+    padding: 17px;
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .event-reserve-form {
+    min-width: 0;
+    grid-template-columns: 86px minmax(0, 1fr);
+  }
+
+  .event-low-stock,
+  .event-reserve-error {
+    text-align: left;
+  }
+
+  .customer-auth-page {
+    padding: 20px 12px 42px;
+  }
+
+  .customer-auth-card {
+    padding: 22px 17px;
+    border-radius: 16px;
+  }
+}
+
 /* Customer payment funnel: clear, mobile-first, and explicit about PSP handoff/status. */
 .customer-checkout-page,
 .customer-order-page {
