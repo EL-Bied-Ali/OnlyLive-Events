@@ -7,13 +7,14 @@ import {
 } from "@/lib/formatEventDate";
 
 describe("Morocco event date formatting", () => {
-  it("renders the Tiakola start in Africa/Casablanca instead of the server timezone", () => {
-    // 20:00 in Casablanca on 5 Dec 2026 is 19:00 UTC.
-    const startsAt = new Date("2026-12-05T19:00:00.000Z");
+  it("renders Morocco local time independently of the server timezone", () => {
+    // Use a historical instant whose Casablanca offset is settled in tzdata,
+    // rather than a future date whose rules can change between ICU releases.
+    const startsAt = new Date("2025-07-05T19:00:00.000Z");
 
     expect(formatEventDay(startsAt)).toBe("05");
-    expect(formatEventMonthNumber(startsAt)).toBe("12");
-    expect(formatEventYear(startsAt)).toBe("2026");
+    expect(formatEventMonthNumber(startsAt)).toBe("07");
+    expect(formatEventYear(startsAt)).toBe("2025");
     expect(formatEventTime(startsAt)).toBe("20:00");
   });
 });
