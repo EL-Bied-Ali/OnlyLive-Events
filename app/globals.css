@@ -5027,3 +5027,96 @@ html { scroll-behavior: smooth; }
     animation: none !important;
   }
 }
+
+/* Auth/recovery belongs to the same customer brand system as discovery and wallet. */
+.customer-auth-page {
+  background:
+    radial-gradient(circle at 84% 4%, rgba(75,120,104,.24), transparent 24rem),
+    radial-gradient(circle at 8% 62%, rgba(217,172,102,.055), transparent 20rem),
+    #07090a;
+}
+
+.customer-auth-page .live-kicker {
+  color: var(--live-mint);
+}
+
+.customer-auth-card {
+  position: relative;
+  overflow: hidden;
+  border-color: rgba(134,214,185,.16);
+  background:
+    linear-gradient(124deg, rgba(75,120,104,.075), transparent 38%),
+    rgba(15,18,23,.96);
+  box-shadow: 0 32px 90px rgba(0,0,0,.34);
+}
+
+.customer-auth-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 26px;
+  right: 26px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(134,214,185,.36), transparent);
+}
+
+.customer-auth-card h1 {
+  text-wrap: balance;
+}
+
+.customer-auth-form input {
+  transition: border-color 150ms ease, box-shadow 150ms ease, background 150ms ease;
+}
+
+.customer-auth-form input:hover {
+  border-color: #4a5260;
+}
+
+.customer-auth-form input:focus-visible {
+  background: #0b0e12;
+}
+
+.customer-auth-form button {
+  transition: transform 150ms ease, background 150ms ease, box-shadow 150ms ease;
+  box-shadow: 0 14px 30px rgba(75,120,104,.22);
+}
+
+.customer-auth-form button:hover:not(:disabled) {
+  background: #3f7564;
+  box-shadow: 0 17px 36px rgba(75,120,104,.3);
+  transform: translateY(-1px);
+}
+
+.customer-auth-form button:active:not(:disabled) {
+  transform: translateY(1px) scale(.995);
+}
+
+.customer-auth-switch a {
+  text-underline-offset: 3px;
+  text-decoration-color: rgba(134,214,185,.26);
+}
+
+.customer-auth-switch a:hover,
+.customer-auth-switch a:focus-visible {
+  color: var(--live-mint);
+  text-decoration-color: var(--live-mint);
+}
+
+@media (max-width: 640px) {
+  .customer-auth-card::before {
+    left: 18px;
+    right: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-auth-form input,
+  .customer-auth-form button {
+    transition: none !important;
+  }
+
+  .customer-auth-form button:hover:not(:disabled),
+  .customer-auth-form button:active:not(:disabled) {
+    transform: none !important;
+  }
+}
