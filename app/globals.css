@@ -4991,3 +4991,10 @@ html { scroll-behavior: smooth; }
     color: var(--live-mint);
   }
 }
+
+@media (max-width: 640px) {
+  .live-nav {
+    position: relative;
+    z-index: 50;
+  }
+}
