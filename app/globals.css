@@ -4571,3 +4571,116 @@ html { scroll-behavior: smooth; }
     transform: none !important;
   }
 }
+
+/* Customer brand/semantic cleanup: green is the OnlyLive action color;
+   red stays reserved for failure/cancelled states. */
+.live-home .live-kicker,
+.live-event-page .live-kicker,
+.customer-ticket-page .live-kicker,
+.customer-checkout-step,
+.customer-summary-label {
+  color: var(--live-mint);
+}
+
+.customer-checkout-page,
+.customer-order-page {
+  background:
+    radial-gradient(circle at 78% -8%, rgba(75,120,104,.18), transparent 25rem),
+    radial-gradient(circle at -5% 70%, rgba(217,172,102,.06), transparent 22rem),
+    #07090a;
+}
+
+.customer-primary-button {
+  background: var(--live-coral);
+  box-shadow: 0 14px 32px rgba(75,120,104,.24);
+}
+
+.customer-primary-button:hover:not(:disabled) {
+  background: #3f7564;
+  box-shadow: 0 17px 38px rgba(75,120,104,.32);
+}
+
+.customer-primary-button:focus-visible,
+.customer-phone-form input:focus-visible,
+.customer-ticket-links a:focus-visible,
+.customer-order-footer a:focus-visible,
+.customer-brand:focus-visible,
+.customer-status-primary-action:focus-visible {
+  outline-color: rgba(134,214,185,.46);
+}
+
+.customer-status-eyebrow {
+  color: var(--live-mint);
+}
+
+.customer-order-status-danger .customer-status-eyebrow {
+  color: #ff9db1;
+}
+
+.customer-order-status-attention .customer-status-eyebrow,
+.customer-order-status-pending .customer-status-eyebrow {
+  color: #f0c95f;
+}
+
+.customer-order-status-neutral .customer-status-eyebrow {
+  color: #a5a4ae;
+}
+
+.customer-status-primary-action {
+  background: var(--live-coral);
+  box-shadow: 0 12px 28px rgba(75,120,104,.24);
+}
+
+.customer-status-primary-action:hover {
+  background: #3f7564;
+  filter: none;
+}
+
+.customer-ticket-links a:hover,
+.customer-order-footer > a:hover {
+  border-color: var(--live-coral);
+}
+
+.customer-ticket-page {
+  background:
+    radial-gradient(circle at 82% 2%, rgba(75,120,104,.2), transparent 27rem),
+    radial-gradient(circle at 3% 84%, rgba(217,172,102,.07), transparent 25rem),
+    #07090a;
+}
+
+.customer-ticket-event-copy > span {
+  color: var(--live-mint);
+}
+
+.customer-ticket-pass {
+  border-color: rgba(134,214,185,.16);
+  background:
+    linear-gradient(124deg, rgba(75,120,104,.055), transparent 38%),
+    #111116;
+}
+
+.customer-ticket-qr {
+  border-radius: 18px;
+  box-shadow:
+    0 22px 70px rgba(0,0,0,.38),
+    0 0 0 1px rgba(134,214,185,.12);
+}
+
+.customer-flow-progress .is-current > span {
+  box-shadow: 0 0 0 7px rgba(75,120,104,.09), 0 0 32px rgba(75,120,104,.18);
+}
+
+.customer-ticket-footer a:hover,
+.customer-ticket-back:hover {
+  color: var(--live-mint);
+}
+
+@media (max-width: 640px) {
+  .customer-ticket-pass {
+    border-color: rgba(134,214,185,.18);
+  }
+
+  .customer-ticket-qr {
+    border-radius: 16px;
+  }
+}
