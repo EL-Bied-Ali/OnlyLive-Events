@@ -4998,3 +4998,32 @@ html { scroll-behavior: smooth; }
     z-index: 50;
   }
 }
+
+/* Mobile menu sits below the complete header, including page context.
+   Keep the surface opaque from the first animation frame so underlying
+   titles never flash through while the menu opens. */
+@keyframes customer-nav-enter {
+  from { transform: translateY(-6px) scale(.99); }
+  to { transform: translateY(0) scale(1); }
+}
+
+@media (max-width: 640px) {
+  .customer-nav-menu {
+    position: static;
+  }
+
+  .customer-nav-menu-panel {
+    top: calc(100% + 8px);
+  }
+
+  .customer-nav-menu-panel:not([hidden]) {
+    opacity: 1;
+    animation: customer-nav-enter 150ms cubic-bezier(.2,.75,.25,1) both;
+  }
+}
+
+@media (max-width: 640px) and (prefers-reduced-motion: reduce) {
+  .customer-nav-menu-panel:not([hidden]) {
+    animation: none !important;
+  }
+}

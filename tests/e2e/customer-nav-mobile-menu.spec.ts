@@ -65,6 +65,16 @@ test("event page: the back-link stays visible and reachable while the menu is co
   await expect(page.getByRole("button", { name: "Menu" })).toBeVisible();
   // The collapsed menu must not visually consume most of the viewport --
   // regression guard for the >200px header GPT's review flagged.
-  const navHeight = await page.locator("nav.live-nav").evaluate((el) => el.getBoundingClientRect().height);
+  const nav = page.locator("nav.live-nav");
+  const navHeight = await nav.evaluate((el) => el.getBoundingClientRect().height);
   expect(navHeight).toBeLessThan(180);
+
+  await page.getByRole("button", { name: "Menu" }).click();
+  const [navBox, panelBox] = await Promise.all([
+    nav.boundingBox(),
+    page.locator(".customer-nav-menu-panel").boundingBox(),
+  ]);
+  expect(navBox).not.toBeNull();
+  expect(panelBox).not.toBeNull();
+  expect(panelBox!.y).toBeGreaterThanOrEqual(navBox!.y + navBox!.height);
 });
