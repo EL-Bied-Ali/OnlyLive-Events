@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { requireCustomerForPage } from "@/lib/auth/customer";
 import { getPaymentForFakeCheckoutPage } from "@/lib/orders/checkout";
 import { isFakePaymentsAllowed } from "@/lib/payments";
@@ -20,19 +21,24 @@ export default async function PayFakePage({ params }: { params: Promise<{ paymen
   }
 
   return (
-    <main style={{ maxWidth: 480, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 24, marginBottom: 8 }}>Paiement (bac à sable)</h1>
-      <p style={{ opacity: 0.7, marginBottom: 24 }}>
+    <main className="fake-payment-page">
+      <Link href="/" className="live-brand" aria-label="OnlyLive — accueil">
+        <span className="live-brand-mark" aria-hidden="true">OL</span><span>OnlyLive</span>
+      </Link>
+      <section className="fake-payment-card">
+      <p className="fake-payment-badge">Environnement de démonstration</p>
+      <h1>Paiement test</h1>
+      <p className="fake-payment-intro">
         Aucun prestataire de paiement réel n&apos;est encore branché. Cette page simule une caisse
         hébergée par un PSP.
       </p>
-      <div style={{ border: "1px solid #333", borderRadius: 12, padding: 20, marginBottom: 24 }}>
-        <p style={{ margin: "0 0 4px" }}>{payment.order.event.title}</p>
-        <p style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>
-          {(payment.amountCents / 100).toFixed(2)} {payment.currency}
-        </p>
+      <div className="fake-payment-summary">
+        <p>{payment.order.event.title}</p>
+        <strong>{new Intl.NumberFormat("fr-MA", { maximumFractionDigits: 2 }).format(payment.amountCents / 100)} {payment.currency}</strong>
       </div>
       <PayFakeClient paymentId={payment.id} />
+      <p className="fake-payment-note">Aucune carte ni somme réelle n’est utilisée sur cet écran.</p>
+      </section>
     </main>
   );
 }

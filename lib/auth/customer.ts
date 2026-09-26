@@ -1,6 +1,6 @@
 import { PrismaAdapter } from "@auth/prisma-adapter";
 import type { Adapter } from "next-auth/adapters";
-import type { AuthOptions } from "next-auth";
+import type { AuthOptions, Session } from "next-auth";
 import { getServerSession } from "next-auth/next";
 import { redirect } from "next/navigation";
 import CredentialsProvider from "next-auth/providers/credentials";
@@ -20,9 +20,11 @@ export const authOptions: AuthOptions = {
   // later, but next-auth v4's Credentials provider only supports JWT
   // sessions (it throws CALLBACK_CREDENTIALS_JWT_ERROR under "database"
   // strategy — there's no persisted account to hang a database session
-  // off of). This means customer sessions can't be revoked server-side
-  // the way admin sessions can; see docs/SECURITY.md for the tradeoff and
-  // mitigation (short maxAge, documented as a known limitation).
+  // off of). There is still no generic "delete this one session" the way
+  // admin sessions have; the session() callback below implements the one
+  // revocation path this app actually needs (password reset invalidating
+  // every outstanding session at once) via User.authVersion instead. See
+  // docs/SECURITY.md's Session fixation row for the remaining gap.
   adapter: PrismaAdapter(prisma) as Adapter,
   session: {
     strategy: "jwt",
@@ -80,7 +82,7 @@ export const authOptions: AuthOptions = {
 
         // Successful credentials deliberately do not consume the account-level
         // failed-attempt budget. The per-IP limiter still counts every request.
-        return { id: user.id, email: user.email, name: user.name };
+        return { id: user.id, email: user.email, name: user.name, authVersion: user.authVersion };
       },
     }),
   ],
@@ -88,13 +90,35 @@ export const authOptions: AuthOptions = {
     async jwt({ token, user }) {
       if (user) {
         token.sub = user.id;
+        token.authVersion = user.authVersion;
       }
       return token;
     },
-    async session({ session, token }) {
-      if (session.user && token.sub) {
-        session.user.id = token.sub;
+    // Adds one DB read to every session check (not just sign-in), for a
+    // real security property a JWT-strategy Credentials session otherwise
+    // can't have: forcing every outstanding session to stop working the
+    // moment a password reset completes. Correctness is worth that cost
+    // here; see lib/auth/passwordReset.ts, which increments authVersion in
+    // the same transaction as the password change.
+    async session({ session, token }): Promise<Session> {
+      if (!session.user || !token.sub) {
+        return session;
       }
+
+      const currentUser = await prisma.user.findUnique({
+        where: { id: token.sub },
+        select: { authVersion: true },
+      });
+      const tokenVersion = token.authVersion ?? 0;
+      if (!currentUser || currentUser.authVersion !== tokenVersion) {
+        // Same shape requireCustomer()/requireCustomerForPage() already
+        // treat as unauthenticated (session.user.id missing) -- a stale
+        // JWT from before a reset must look exactly like no session at all,
+        // not a distinguishable third state.
+        return { ...session, user: undefined } as unknown as typeof session;
+      }
+
+      session.user.id = token.sub;
       return session;
     },
   },

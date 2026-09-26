@@ -4,6 +4,108 @@ Recover project state at the start of a session by reading this file,
 `CLAUDE.md`, `docs/*.md`, `tests.json`, and recent git history — not from
 memory alone.
 
+## Completed (customer UX/UI polish — PR #93)
+
+- Reworked the public journey into an editorial concert-poster direction:
+  stronger OnlyLive identity, event-led homepage, immersive event hero, and
+  ticket-pass selection cards without changing catalogue or inventory logic.
+- Unified register/login, checkout, fake-provider sandbox, and order pages so
+  the customer keeps one coherent visual language from discovery to ticket.
+- Rebuilt the ticket screen as a responsive event pass; valid tickets expose
+  a high-contrast QR while used/cancelled tickets replace it with an explicit
+  non-actionable state so an invalid credential never looks scannable.
+- Added a dependency-free motion layer: staged hero reveals, ambient stage
+  light, scroll-driven ticket entrances, and restrained hover feedback. All
+  motion is decorative, disables under `prefers-reduced-motion`, and leaves
+  payment/order status semantics static and immediately readable.
+- Final accessibility/responsive audit covered 1440, 768, 390, and 320 px:
+  no horizontal overflow or framework overlays, one H1 per screen, labelled
+  form controls, enlarged secondary touch targets, visible branded focus, and
+  stronger micro-copy contrast. Reduced-motion emulation disables every
+  decorative animation; browser measurement reported zero layout shift.
+- Brought the four legal-information routes into the same visual system with
+  a readable long-form layout and mobile navigation, while keeping the draft
+  warning and every unresolved placeholder impossible to mistake for final
+  legal copy.
+- Added a three-step checkout progress indicator, locally formatted MAD
+  amounts, responsive mobile layouts, and clearer status-specific hierarchy.
+- Preserved strict payment truthfulness for pending, failed, expired,
+  refunded, reconciliation-required, and confirmed states; no browser return
+  is presented as payment proof and no ticket is promised before fulfillment.
+- Visually verified desktop and mobile layouts plus confirmed, pending,
+  failed, and expired flows. Typecheck, lint, production build, 440 Vitest
+  tests, and the affected Playwright purchase/access scenarios pass.
+
+## Completed (customer account/wallet/password-reset expansion — PR #93 continued)
+
+Later PR #93 checkpoints, independently audited and reviewed by GPT
+(merge gatekeeper) at each step, with the branch reconciled from a
+separate `pr-93` branch's green-brand/QR-masking work (merge commit
+`9f9f5a5`) partway through.
+
+- **`/mes-commandes`** (order history): server-side `requireCustomerForPage`,
+  `where: { userId }`, explicit `select`, direct-detail-ownership already
+  covered by the existing access-control E2E. Truthful "historique de vos
+  commandes" copy (not "achats" — pending/failed/cancelled orders aren't
+  purchases); labels match the order-detail page's actual distinct
+  statuses.
+- **`/mon-compte`**: read-only name/email from the live DB row (not a
+  potentially-stale JWT), phone editable through the existing
+  authenticated phone endpoint. Error responses are mapped by API error
+  *code* to French copy, never the raw `message` field (which could be
+  hardcoded English or a stringified Zod error); `role="status"
+  aria-live="polite"` announces a successful save; visible
+  `:focus-visible` on all controls.
+- **Real password-reset flow** (`lib/auth/passwordReset.ts`, additive
+  `PasswordResetToken` model): 256-bit token, only its SHA-256 hash
+  persisted, single-use via an atomic `updateMany` compare-and-set in the
+  same transaction as the password update (a real parallel-submission
+  test proves exactly one of two concurrent claims succeeds). Four
+  security issues GPT's review caught, all fixed: (1) the reset email is
+  marked `sensitive` so `ConsoleEmailProvider` never prints it — Preview
+  allows that provider and was logging the raw token; (2) the link uses a
+  URL **fragment** (`#token=...`), never a query string, so it can't
+  reach access/runtime logs or browser history; (3) a transient
+  email-provider failure for a *known* account is caught and normalized
+  to the same neutral outcome as an unknown account, closing an
+  enumeration oracle; (4) an additive `User.authVersion` column, compared
+  against each JWT's stored version on every `session()` read, makes a
+  password reset invalidate every session issued before it — closing the
+  "JWT sessions can't be revoked" limitation docs/SECURITY.md and
+  docs/ARCHITECTURE.md previously documented as accepted. Both docs
+  updated to reflect this.
+- **`/aide`**: reuses real implemented behavior (Mes billets/Mes
+  commandes/Mon compte, real order statuses) instead of describing a flow
+  that doesn't exist; a first draft briefly shipped literal
+  `[À COMPLÉTER]` placeholder text (the legal-page `ToFill` component,
+  reused where it didn't belong — a public page with no draft gate) —
+  caught and replaced with neutral copy that doesn't invent
+  refund/cancellation policy.
+- **Mobile navigation**: `CustomerNavMobileMenu` collapses the auth-aware
+  links behind a real `aria-expanded` toggle below 640px, fixing the
+  authenticated header (Mes billets + Mes commandes + Compte + Aide +
+  Déconnexion) reaching 200px+ tall on narrow screens. Above 640px it
+  disappears entirely (`display: contents`) — pixel-identical to before
+  it existed. Found and fixed a real latent bug this surfaced:
+  `.customer-nav-links`'s long-standing `width: 100%` rule never actually
+  reached full width because `.live-nav` (its flex parent) had no
+  `flex-wrap`.
+- **`/mes-billets` wallet**: event artwork (reusing the existing
+  `coverImageUrl`/hardcoded-Tiakola-asset fallback convention) and
+  grouping by `orderItem.order.id` (`Order.eventId` is a direct column,
+  so one order is always one event). Single-ticket orders — the common
+  case — stay a pixel-compatible single-card link; only genuine
+  multi-ticket orders get nested per-ticket rows, each with its own
+  status and its own link.
+- All of the above visually verified against a real seeded local
+  Postgres/Next.js server via Playwright (screenshots + computed layout
+  measurements), not just code/CSS review. Validated per checkpoint:
+  typecheck, lint, full Vitest unit+integration suite (run twice against
+  the same DB, mirroring CI), full Playwright E2E suite — 40/40 at the
+  final checkpoint, including new/extended specs for the mobile menu,
+  Mon compte's error-mapping and success announcement, and multi-ticket
+  wallet grouping.
+
 ## Completed (this session)
 
 - Project scaffold: Next.js 16 / React 19 / TypeScript, ESLint, Vitest,
@@ -1402,6 +1504,20 @@ external decision or privileged production mutation is complete as of
 5. **Public-production perimeter:** when the final domain and Vercel write
    access are available, stage/tune WAF rules and repeat the public-domain
    customer/admin/scanner/webhook smoke.
+6. **Tiakola event time (20:00) vs. a 19:00 Preview render, tzdata-timing
+   risk:** investigated 2026-09-26 (PR #93 continued, GPT + Claude). The
+   seed's stored instant and `lib/formatEventDate.ts`'s `Africa/Casablanca`
+   formatting are both confirmed correct in isolation — this is not a code
+   bug and not stale seed data. The remaining uncertainty is genuinely
+   external: which exact IANA tzdata release the actual Vercel Node 24.x
+   runtime bundles, versus Morocco's real December 2026 Ramadan-linked DST
+   suspension, which the Moroccan government typically only decrees weeks
+   ahead of the change — not something either of us can resolve from a
+   sandbox today. Confirmed via the Vercel project API that this project's
+   configured `nodeVersion` is `24.x` (matches `package.json`'s declared
+   `engines`), ruling out a simple "wrong Node major" explanation. Do not
+   speculatively edit the seed or formatter over this — re-verify closer to
+   the event date once Morocco's actual 2026 decree is public.
 
 ## Historical detailed follow-up record (audit trail)
 

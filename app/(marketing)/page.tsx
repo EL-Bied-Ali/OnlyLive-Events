@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { prisma } from "@/lib/db";
 import { legalDocumentsApproved } from "@/lib/legal/approval";
+import { formatEventDateOnly, formatEventDay, formatEventMonth } from "@/lib/formatEventDate";
+import { CustomerNav } from "@/components/CustomerNav";
 
 export const dynamic = "force-dynamic";
 
@@ -12,52 +14,72 @@ export default async function HomePage() {
   });
 
   return (
-    <main style={{ maxWidth: 720, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 32, fontWeight: 700, marginBottom: 8 }}>OnlyLive</h1>
-      <p style={{ opacity: 0.7, marginBottom: 32 }}>Billetterie officielle des événements live au Maroc</p>
+    <main className="live-home">
+      <CustomerNav trailing={<span className="live-nav-note">Casablanca · Maroc</span>} />
 
-      {events.length === 0 && <p>Aucun événement pour le moment.</p>}
+      <section className="live-home-hero" aria-labelledby="home-title">
+        <p className="live-kicker"><span aria-hidden="true" /> Billetterie officielle</p>
+        <h1 id="home-title">Le live commence<br /><em>ici.</em></h1>
+        <div className="live-home-intro">
+          <p>Des scènes qui vibrent. Des billets officiels. Une expérience pensée pour le public marocain.</p>
+          <div className="live-home-meta">
+            <span>{events.length.toString().padStart(2, "0")} date{events.length === 1 ? "" : "s"} à l’affiche</span>
+            <a href="#program"><span>Voir la programmation</span><span aria-hidden="true">↓</span></a>
+          </div>
+        </div>
+      </section>
 
-      <ul style={{ listStyle: "none", padding: 0, display: "grid", gap: 16 }}>
-        {events.map((event) => (
-          <li key={event.id} style={{ border: "1px solid #333", borderRadius: 12, padding: 20 }}>
-            <Link href={`/events/${event.slug}`} style={{ textDecoration: "none" }}>
-              <h2 style={{ fontSize: 22, marginBottom: 4 }}>{event.title}</h2>
-              <p style={{ opacity: 0.8, margin: 0 }}>
-                {event.venue.name}, {event.venue.city} —{" "}
-                {new Intl.DateTimeFormat("fr-MA", { dateStyle: "long" }).format(event.startsAt)}
-              </p>
-              {event.status === "sold_out" && (
-                <span style={{ display: "inline-block", marginTop: 8, color: "#ff6b6b" }}>Complet</span>
-              )}
-            </Link>
-          </li>
-        ))}
-      </ul>
+      <section id="program" className="live-program" aria-labelledby="program-title">
+        <div className="live-section-heading">
+          <p>À l’affiche</p>
+          <h2 id="program-title">Prochainement sur scène</h2>
+        </div>
+
+        {events.length === 0 ? <p className="live-empty">Aucun événement pour le moment.</p> : null}
+
+        <ul className="live-event-list">
+          {events.map((event, index) => {
+            const day = formatEventDay(event.startsAt);
+            const month = formatEventMonth(event.startsAt).replace(".", "");
+            const eventThumbUrl =
+              event.coverImageUrl ??
+              (event.slug === "tiakola-casablanca-2026"
+                ? "/events/tiakola-casablanca-2026/square.webp"
+                : null);
+            return (
+              <li key={event.id}>
+                <Link href={`/events/${event.slug}`} className="live-event-card">
+                  <span className="live-event-index">{String(index + 1).padStart(2, "0")}</span>
+                  <span className={`live-event-thumb${eventThumbUrl ? "" : " is-empty"}`} aria-hidden="true">
+                    {eventThumbUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element -- event artwork can be hosted on arbitrary approved origins.
+                      <img src={eventThumbUrl} alt="" />
+                    ) : null}
+                  </span>
+                  <span className="live-event-date" aria-label={formatEventDateOnly(event.startsAt)}>
+                    <strong>{day}</strong><span>{month}</span>
+                  </span>
+                  <span className="live-event-copy">
+                    <small>{event.venue.city} · {event.venue.name}</small>
+                    <strong>{event.title}</strong>
+                    <span>{event.status === "sold_out" ? "Complet" : "Découvrir les billets"}</span>
+                  </span>
+                  <span className="live-event-arrow" aria-hidden="true">↗</span>
+                </Link>
+              </li>
+            );
+          })}
+        </ul>
+      </section>
 
       {legalDocumentsApproved() && (
-        <footer style={{ marginTop: 64, paddingTop: 24, borderTop: "1px solid #333" }}>
-          <ul style={{ listStyle: "none", padding: 0, display: "flex", gap: 16, flexWrap: "wrap" }}>
-            <li>
-              <Link href="/legal/mentions-legales" style={{ fontSize: 13, opacity: 0.7 }}>
-                Mentions légales
-              </Link>
-            </li>
-            <li>
-              <Link href="/legal/conditions-generales" style={{ fontSize: 13, opacity: 0.7 }}>
-                CGV
-              </Link>
-            </li>
-            <li>
-              <Link href="/legal/politique-de-confidentialite" style={{ fontSize: 13, opacity: 0.7 }}>
-                Confidentialité
-              </Link>
-            </li>
-            <li>
-              <Link href="/legal/politique-de-remboursement" style={{ fontSize: 13, opacity: 0.7 }}>
-                Remboursement
-              </Link>
-            </li>
+        <footer className="live-footer">
+          <strong>OnlyLive</strong>
+          <ul>
+            <li><Link href="/legal/mentions-legales">Mentions légales</Link></li>
+            <li><Link href="/legal/conditions-generales">CGV</Link></li>
+            <li><Link href="/legal/politique-de-confidentialite">Confidentialité</Link></li>
+            <li><Link href="/legal/politique-de-remboursement">Remboursement</Link></li>
           </ul>
         </footer>
       )}

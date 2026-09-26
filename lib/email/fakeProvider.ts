@@ -12,7 +12,11 @@ export class ConsoleEmailProvider implements EmailProvider {
   readonly name = "console";
 
   async send(input: SendEmailInput): Promise<SendEmailResult> {
-    console.log(`[email:console] to=${input.to} subject="${input.subject}"\n${input.text}\n`);
+    if (input.sensitive) {
+      console.log("[email:console] sensitive email dispatched (recipient/subject/body omitted)");
+    } else {
+      console.log(`[email:console] to=${input.to} subject="${input.subject}"\n${input.text}\n`);
+    }
     return { providerMessageId: `console_${crypto.randomUUID()}` };
   }
 }

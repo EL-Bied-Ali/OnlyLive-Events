@@ -1,12 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const callbackUrl = searchParams.get("callbackUrl") ?? "/";
   const [form, setForm] = useState({ name: "", email: "", password: "", phone: "" });
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -27,8 +29,16 @@ export default function RegisterPage() {
         return;
       }
 
-      await signIn("credentials", { email: form.email, password: form.password, redirect: false });
-      router.push("/");
+      const result = await signIn("credentials", {
+        email: form.email,
+        password: form.password,
+        redirect: false,
+      });
+      if (result?.error) {
+        setError("Compte créé. Connectez-vous pour continuer.");
+        return;
+      }
+      router.push(callbackUrl);
       router.refresh();
     } finally {
       setSubmitting(false);
@@ -36,50 +46,81 @@ export default function RegisterPage() {
   }
 
   return (
-    <main style={{ maxWidth: 400, margin: "0 auto", padding: "48px 16px" }}>
-      <h1 style={{ fontSize: 28, marginBottom: 24 }}>Créer un compte</h1>
-      <form onSubmit={handleSubmit} style={{ display: "grid", gap: 12 }}>
-        <input
-          placeholder="Nom"
-          value={form.name}
-          onChange={(event) => setForm({ ...form, name: event.target.value })}
-          required
-          style={{ padding: 10 }}
-        />
-        <input
-          type="email"
-          placeholder="Email"
-          value={form.email}
-          onChange={(event) => setForm({ ...form, email: event.target.value })}
-          required
-          style={{ padding: 10 }}
-        />
-        <input
-          type="password"
-          placeholder="Mot de passe (10 caractères min.)"
-          value={form.password}
-          onChange={(event) => setForm({ ...form, password: event.target.value })}
-          required
-          minLength={10}
-          style={{ padding: 10 }}
-        />
-        <input
-          type="tel"
-          placeholder="Téléphone (ex. 06 12 34 56 78)"
-          value={form.phone}
-          onChange={(event) => setForm({ ...form, phone: event.target.value })}
-          required
-          minLength={8}
-          style={{ padding: 10 }}
-        />
-        {error && <p style={{ color: "#ff6b6b", margin: 0 }}>{error}</p>}
-        <button type="submit" disabled={submitting} style={{ padding: 12 }}>
-          {submitting ? "..." : "Créer mon compte"}
-        </button>
-      </form>
-      <p style={{ marginTop: 16 }}>
-        Déjà un compte ? <Link href="/login">Se connecter</Link>
-      </p>
+    <main className="customer-auth-page">
+      <Link href="/" className="live-brand customer-auth-brand" aria-label="OnlyLive — accueil">
+        <span className="live-brand-mark" aria-hidden="true">OL</span>
+        <span>OnlyLive</span>
+      </Link>
+      <section className="customer-auth-card">
+        <p className="live-kicker"><span aria-hidden="true" /> Première fois ici</p>
+        <h1>Votre prochaine soirée commence ici.</h1>
+        <p className="customer-auth-intro">Créez votre compte pour réserver et retrouver vos billets OnlyLive.</p>
+        <form onSubmit={handleSubmit} className="customer-auth-form">
+          <label htmlFor="register-name">Nom</label>
+          <input
+            id="register-name"
+            autoComplete="name"
+            placeholder="Votre nom"
+            value={form.name}
+            onChange={(event) => setForm({ ...form, name: event.target.value })}
+            required
+          />
+
+          <label htmlFor="register-email">Email</label>
+          <input
+            id="register-email"
+            type="email"
+            autoComplete="email"
+            placeholder="vous@exemple.com"
+            value={form.email}
+            onChange={(event) => setForm({ ...form, email: event.target.value })}
+            required
+          />
+
+          <label htmlFor="register-password">Mot de passe</label>
+          <input
+            id="register-password"
+            type="password"
+            autoComplete="new-password"
+            placeholder="10 caractères minimum"
+            value={form.password}
+            onChange={(event) => setForm({ ...form, password: event.target.value })}
+            required
+            minLength={10}
+          />
+
+          <label htmlFor="register-phone">Téléphone</label>
+          <input
+            id="register-phone"
+            type="tel"
+            inputMode="tel"
+            autoComplete="tel"
+            placeholder="Ex. 06 12 34 56 78"
+            value={form.phone}
+            onChange={(event) => setForm({ ...form, phone: event.target.value })}
+            required
+            minLength={8}
+          />
+
+          {error ? <p className="customer-auth-error" role="alert">{error}</p> : null}
+
+          <button type="submit" disabled={submitting}>
+            {submitting ? "Création…" : "Créer mon compte"}
+          </button>
+        </form>
+        <p className="customer-auth-switch">
+          Déjà un compte ?{" "}
+          <Link href={`/login?callbackUrl=${encodeURIComponent(callbackUrl)}`}>Se connecter</Link>
+        </p>
+      </section>
     </main>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense>
+      <RegisterForm />
+    </Suspense>
   );
 }

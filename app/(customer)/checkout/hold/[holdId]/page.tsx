@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { requireCustomerForPage } from "@/lib/auth/customer";
+import { getPaymentProvider } from "@/lib/payments";
 import { CheckoutClient } from "./CheckoutClient";
 
 export const dynamic = "force-dynamic";
@@ -21,15 +22,21 @@ export default async function CheckoutHoldPage({ params }: { params: Promise<{ h
     notFound();
   }
 
+  const paymentProviderName = getPaymentProvider().name;
+
   return (
     <CheckoutClient
       reservationId={reservation.id}
+      reservationStatus={reservation.status}
+      orderId={reservation.orderId}
       expiresAt={reservation.expiresAt.toISOString()}
       quantity={reservation.quantity}
       unitPriceCents={reservation.unitPriceCents}
       currency={reservation.salesPhase.currency}
       categoryName={reservation.ticketCategory.name}
       eventTitle={reservation.ticketCategory.event.title}
+      eventSlug={reservation.ticketCategory.event.slug}
+      paymentProviderName={paymentProviderName}
     />
   );
 }

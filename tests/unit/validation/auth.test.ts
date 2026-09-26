@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { registerSchema, updatePhoneSchema } from "@/lib/validation/auth";
+import { registerSchema, updatePhoneSchema, forgotPasswordSchema, resetPasswordSchema } from "@/lib/validation/auth";
 
 function validPayload(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -97,5 +97,40 @@ describe("updatePhoneSchema", () => {
 
   it("rejects a missing phone field", () => {
     expect(updatePhoneSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("forgotPasswordSchema", () => {
+  it("normalizes email casing/whitespace the same way loginSchema/registerSchema do", () => {
+    const result = forgotPasswordSchema.safeParse({ email: "  Buyer@Example.COM  " });
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.email).toBe("buyer@example.com");
+  });
+
+  it("rejects a non-email value", () => {
+    expect(forgotPasswordSchema.safeParse({ email: "not-an-email" }).success).toBe(false);
+  });
+
+  it("rejects a missing email field", () => {
+    expect(forgotPasswordSchema.safeParse({}).success).toBe(false);
+  });
+});
+
+describe("resetPasswordSchema", () => {
+  it("accepts a token and a password meeting the same 10-char minimum as registration", () => {
+    const result = resetPasswordSchema.safeParse({ token: "a".repeat(64), password: "a-strong-password" });
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects a password shorter than the registration minimum", () => {
+    expect(resetPasswordSchema.safeParse({ token: "a".repeat(64), password: "short" }).success).toBe(false);
+  });
+
+  it("rejects an empty token", () => {
+    expect(resetPasswordSchema.safeParse({ token: "", password: "a-strong-password" }).success).toBe(false);
+  });
+
+  it("rejects a missing token field", () => {
+    expect(resetPasswordSchema.safeParse({ password: "a-strong-password" }).success).toBe(false);
   });
 });

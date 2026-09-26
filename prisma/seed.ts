@@ -26,7 +26,7 @@ async function main() {
 
   const event = await prisma.event.upsert({
     where: { slug: "tiakola-casablanca-2026" },
-    update: {},
+    update: { coverImageUrl: "/events/tiakola-casablanca-2026/poster.webp" },
     create: {
       slug: "tiakola-casablanca-2026",
       title: "Tiakola — Live à Casablanca",
@@ -38,7 +38,7 @@ async function main() {
       salesOpenAt: new Date("2026-01-01T00:00:00+01:00"),
       salesCloseAt: new Date("2026-12-05T19:00:00+01:00"),
       status: "on_sale",
-      coverImageUrl: null,
+      coverImageUrl: "/events/tiakola-casablanca-2026/poster.webp",
     },
   });
 

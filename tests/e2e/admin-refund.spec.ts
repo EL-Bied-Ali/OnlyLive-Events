@@ -26,10 +26,10 @@ test.afterAll(async () => {
 async function purchaseTicket(page: import("@playwright/test").Page) {
   const suffix = crypto.randomUUID();
   await page.goto("/register");
-  await page.getByPlaceholder("Nom").fill("Refund E2E Buyer");
-  await page.getByPlaceholder("Email").fill(`refund-buyer-${suffix}@test.onlylive.ma`);
-  await page.getByPlaceholder(/Mot de passe/).fill("RefundBuyerPassword123!");
-  await page.getByPlaceholder(/Téléphone/).fill("0612345678");
+  await page.getByLabel("Nom").fill("Refund E2E Buyer");
+  await page.getByLabel("Email").fill(`refund-buyer-${suffix}@test.onlylive.ma`);
+  await page.getByLabel("Mot de passe").fill("RefundBuyerPassword123!");
+  await page.getByLabel("Téléphone").fill("0612345678");
   await page.getByRole("button", { name: "Créer mon compte" }).click();
   await page.waitForURL("/");
 
@@ -37,7 +37,7 @@ async function purchaseTicket(page: import("@playwright/test").Page) {
   await page.waitForURL(/\/events\//);
   await page.getByRole("button", { name: "Réserver" }).first().click();
   await page.waitForURL(/\/checkout\/hold\//);
-  await page.getByRole("button", { name: "Payer" }).click();
+  await page.getByRole("button", { name: /Continuer vers le paiement sécurisé/ }).click();
   await page.waitForURL(/\/pay\/fake\//);
   await page.getByRole("button", { name: "Simuler un paiement réussi" }).click();
   await page.waitForURL(/\/orders\/([^/]+)$/);

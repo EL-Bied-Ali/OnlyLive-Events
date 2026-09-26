@@ -15,6 +15,14 @@ export interface SendEmailInput {
    * delivery.
    */
   idempotencyKey: string;
+  /**
+   * True for mail carrying a bearer-like secret (e.g. a password-reset
+   * link). A real provider still receives and delivers the full body —
+   * this only tells ConsoleEmailProvider not to print to/subject/text,
+   * since Preview deployments allow that provider and its output lands in
+   * runtime logs.
+   */
+  sensitive?: boolean;
 }
 
 export interface SendEmailResult {
