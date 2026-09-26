@@ -4750,3 +4750,51 @@ html { scroll-behavior: smooth; }
     transform: none !important;
   }
 }
+
+/* Mobile header: logo + menu share the first row; page context sits below.
+   The opened menu floats instead of pushing the purchase/event content down. */
+@media (max-width: 640px) {
+  .live-nav {
+    display: grid;
+    grid-template-columns: auto minmax(0,1fr);
+    align-items: center;
+    row-gap: 8px;
+    flex-wrap: initial;
+  }
+
+  .customer-nav-links {
+    display: contents;
+    width: auto;
+  }
+
+  .customer-nav-menu {
+    grid-column: 2;
+    grid-row: 1;
+    justify-self: end;
+    position: relative;
+    width: auto;
+  }
+
+  .customer-nav-links > :not(.customer-nav-menu):not(.live-nav-note) {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: start;
+  }
+
+  .customer-nav-menu-panel {
+    position: absolute;
+    top: calc(100% + 9px);
+    right: 0;
+    z-index: 30;
+    width: min(280px, calc(100vw - 28px));
+    margin-top: 0;
+    padding: 8px;
+    border-color: rgba(134,214,185,.18);
+    background: rgba(8,11,12,.98);
+    backdrop-filter: blur(18px);
+  }
+
+  .live-nav:has(.customer-nav-menu-panel:not([hidden])) {
+    align-items: center;
+  }
+}
