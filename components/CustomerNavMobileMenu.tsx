@@ -50,7 +50,6 @@ export function CustomerNavMobileMenu({ children }: { children: ReactNode }) {
         className="customer-nav-menu-toggle"
         aria-expanded={open}
         aria-controls="customer-nav-menu-panel"
-        aria-label={open ? "Fermer le menu" : "Ouvrir le menu"}
         onClick={() => setOpen((value) => !value)}
       >
         Menu

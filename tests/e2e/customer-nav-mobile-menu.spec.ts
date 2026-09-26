@@ -23,6 +23,14 @@ test("logged-out nav: links are collapsed by default and reachable after opening
   await expect(page.getByRole("link", { name: "Aide" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Connexion" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Inscription" })).toBeVisible();
+
+  await page.keyboard.press("Escape");
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(toggle).toBeFocused();
+
+  await toggle.click();
+  await page.getByRole("heading", { name: /le live commence/i }).click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
 });
 
 test("logged-in nav: all authenticated links are reachable after opening the menu", async ({ page }) => {
