@@ -131,6 +131,7 @@ function WalletGroupCard({ group }: { group: TicketGroup }) {
             {ticket.event.venue.name}, {ticket.event.venue.city}
           </p>
           <p className="customer-wallet-card-category">{ticket.ticketCategory.name}</p>
+          <span className="customer-wallet-card-open">Afficher le billet <span aria-hidden="true">↗</span></span>
         </div>
         <StatusBadge status={status} />
       </Link>

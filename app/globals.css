@@ -4054,3 +4054,520 @@ html { scroll-behavior: smooth; }
   color: #ff9db1;
   font-weight: 700;
 }
+
+/* Final premium customer-area visual pass. */
+.customer-wallet-page,
+.customer-orders-page,
+.customer-account-page,
+.aide-page {
+  position: relative;
+  isolation: isolate;
+  overflow-x: clip;
+  background:
+    radial-gradient(circle at 82% 0%, rgba(75,120,104,.18), transparent 24rem),
+    radial-gradient(circle at 12% 30%, rgba(217,172,102,.055), transparent 20rem),
+    #080a0b;
+}
+
+.customer-wallet-page::before,
+.customer-orders-page::before,
+.customer-account-page::before,
+.aide-page::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px);
+  background-size: 100% 88px;
+  mask-image: linear-gradient(to bottom, rgba(0,0,0,.7), transparent 72%);
+}
+
+.customer-wallet-heading,
+.customer-orders-heading,
+.customer-account-heading,
+.aide-heading {
+  padding-top: 52px;
+}
+
+.customer-wallet-heading h1,
+.customer-orders-heading h1,
+.customer-account-heading h1,
+.aide-heading h1 {
+  position: relative;
+  font-size: clamp(2rem, 5vw, 2.8rem);
+  letter-spacing: -.055em;
+}
+
+.customer-wallet-heading h1::before,
+.customer-orders-heading h1::before,
+.customer-account-heading h1::before,
+.aide-heading h1::before {
+  content: "";
+  width: 34px;
+  height: 2px;
+  display: block;
+  margin-bottom: 14px;
+  background: var(--live-mint);
+  box-shadow: 20px 0 0 rgba(134,214,185,.24);
+}
+
+.customer-wallet-heading p,
+.customer-orders-heading p,
+.customer-account-heading p,
+.aide-heading p {
+  max-width: 620px;
+  color: #a7aeba;
+  font-size: .98rem;
+}
+
+.customer-wallet-page ::selection,
+.customer-orders-page ::selection,
+.customer-account-page ::selection,
+.aide-page ::selection,
+.live-home ::selection,
+.live-event-page ::selection {
+  background: #4b7868;
+  color: #fff;
+}
+
+/* Wallet: make each pass feel like a real ticket, not a generic list row. */
+.customer-wallet-page section,
+.customer-wallet-heading,
+.customer-wallet-empty {
+  max-width: 900px;
+}
+
+.customer-wallet-list {
+  gap: 18px;
+}
+
+.customer-wallet-card {
+  min-height: 164px;
+  padding: 18px 20px 18px 18px;
+  gap: 20px;
+  border-color: rgba(134,214,185,.17);
+  border-radius: 20px;
+  background:
+    linear-gradient(112deg, rgba(75,120,104,.105), transparent 42%),
+    rgba(15,18,23,.94);
+  box-shadow: 0 24px 70px rgba(0,0,0,.24);
+  transition: transform 180ms cubic-bezier(.2,.75,.25,1), border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.customer-wallet-card:hover,
+.customer-wallet-card:focus-visible {
+  transform: translateY(-3px);
+  border-color: rgba(134,214,185,.34);
+  box-shadow: 0 30px 80px rgba(0,0,0,.34), 0 0 0 1px rgba(134,214,185,.045);
+}
+
+.customer-wallet-card:active {
+  transform: translateY(-1px) scale(.995);
+}
+
+.customer-wallet-card-visual {
+  width: 112px;
+  border-radius: 16px;
+  box-shadow: 0 14px 28px rgba(0,0,0,.35);
+}
+
+.customer-wallet-card-visual img {
+  transition: transform 420ms cubic-bezier(.16,.8,.2,1), filter 220ms ease;
+}
+
+.customer-wallet-card:hover .customer-wallet-card-visual img {
+  transform: scale(1.045);
+  filter: saturate(1.06) contrast(1.02);
+}
+
+.customer-wallet-card-main h2 {
+  margin-top: 8px;
+  font-size: clamp(1.25rem, 2vw, 1.55rem);
+  letter-spacing: -.035em;
+}
+
+.customer-wallet-card-category {
+  margin-top: 7px !important;
+  color: #c4c9d2 !important;
+  font-size: .82rem !important;
+  font-weight: 750;
+}
+
+.customer-wallet-card-open {
+  margin-top: 18px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--live-mint);
+  font-size: .78rem;
+  font-weight: 850;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+
+.customer-wallet-card-open > span {
+  transition: transform 160ms ease;
+}
+
+.customer-wallet-card:hover .customer-wallet-card-open > span {
+  transform: translate(2px,-2px);
+}
+
+/* Orders: receipt-like cards with the event identity visible at a glance. */
+.customer-orders-heading,
+.customer-orders-list {
+  max-width: 900px;
+}
+
+.customer-orders-list {
+  gap: 16px;
+}
+
+.customer-order-row {
+  grid-template-columns: 72px minmax(0,1fr) auto auto 34px;
+  min-height: 112px;
+  padding: 16px 18px;
+  gap: 18px;
+  border-color: rgba(134,214,185,.14);
+  border-radius: 18px;
+  background:
+    linear-gradient(105deg, rgba(75,120,104,.08), transparent 44%),
+    rgba(15,18,23,.94);
+  box-shadow: 0 20px 56px rgba(0,0,0,.2);
+  transition: transform 180ms cubic-bezier(.2,.75,.25,1), border-color 180ms ease, box-shadow 180ms ease;
+}
+
+.customer-order-row:hover,
+.customer-order-row:focus-visible {
+  transform: translateY(-3px);
+  border-color: rgba(134,214,185,.32);
+  box-shadow: 0 26px 70px rgba(0,0,0,.3);
+}
+
+.customer-order-row:active {
+  transform: translateY(-1px) scale(.995);
+}
+
+.customer-order-row-visual {
+  width: 72px;
+  aspect-ratio: 1;
+  overflow: hidden;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 14px;
+  background: #101511;
+}
+
+.customer-order-row-visual img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  transition: transform 360ms cubic-bezier(.16,.8,.2,1);
+}
+
+.customer-order-row:hover .customer-order-row-visual img {
+  transform: scale(1.05);
+}
+
+.customer-order-row-visual.is-empty {
+  background: radial-gradient(circle at 50% 45%, rgba(134,214,185,.18), transparent 45%), #101511;
+}
+
+.customer-order-row-main strong {
+  font-size: 1.05rem;
+  letter-spacing: -.02em;
+}
+
+.customer-order-row-number {
+  color: #9ca4b2;
+}
+
+.customer-order-row-arrow {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 1px solid #303744;
+  border-radius: 50%;
+  color: #9ea6b4;
+  transition: color 160ms ease, border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.customer-order-row:hover .customer-order-row-arrow,
+.customer-order-row:focus-visible .customer-order-row-arrow {
+  color: #fff;
+  border-color: var(--live-coral);
+  background: var(--live-coral);
+  transform: translate(2px,-2px);
+}
+
+/* Account: give personal data a deliberate, trustworthy surface. */
+.customer-account-heading,
+.customer-account-card,
+.customer-account-signout {
+  max-width: 680px;
+}
+
+.customer-account-card {
+  margin-top: 24px;
+  padding: 6px 24px;
+  border: 1px solid rgba(134,214,185,.15);
+  border-radius: 20px;
+  background:
+    linear-gradient(120deg, rgba(75,120,104,.075), transparent 40%),
+    rgba(15,18,23,.94);
+  box-shadow: 0 24px 70px rgba(0,0,0,.22);
+}
+
+.customer-account-field {
+  min-height: 82px;
+  padding: 20px 4px;
+}
+
+.customer-account-field .customer-summary-label {
+  color: var(--live-mint);
+  font-size: .68rem;
+  letter-spacing: .11em;
+}
+
+.customer-account-field strong {
+  margin-top: 5px;
+  font-size: 1.06rem;
+  letter-spacing: -.015em;
+}
+
+.customer-account-edit,
+.customer-account-save,
+.customer-account-cancel,
+.customer-account-signout .customer-nav-signout {
+  min-height: 42px;
+}
+
+.customer-account-edit:hover {
+  border-color: rgba(134,214,185,.35);
+  background: rgba(75,120,104,.08);
+}
+
+/* Help: more editorial on desktop, still single-column and calm on mobile. */
+.aide-heading,
+.aide-topics,
+.aide-contact {
+  max-width: 980px;
+}
+
+.aide-topics {
+  grid-template-columns: repeat(2, minmax(0,1fr));
+  gap: 16px;
+}
+
+.aide-topic {
+  min-height: 100%;
+  padding: 24px;
+  border-color: rgba(134,214,185,.13);
+  border-radius: 18px;
+  background:
+    linear-gradient(132deg, rgba(75,120,104,.07), transparent 40%),
+    rgba(15,18,23,.94);
+  box-shadow: 0 18px 52px rgba(0,0,0,.18);
+  transition: border-color 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.aide-topic:hover {
+  transform: translateY(-2px);
+  border-color: rgba(134,214,185,.25);
+  background:
+    linear-gradient(132deg, rgba(75,120,104,.1), transparent 42%),
+    rgba(16,19,24,.98);
+}
+
+.aide-topic h2 {
+  margin-bottom: 10px;
+  font-size: 1.06rem;
+  line-height: 1.32;
+}
+
+.aide-topic h2::before {
+  content: "●";
+  margin-right: 9px;
+  color: var(--live-mint);
+  font-size: .55rem;
+  vertical-align: .18em;
+}
+
+.aide-topic-answer p {
+  color: #adb4c0;
+  line-height: 1.62;
+}
+
+.aide-topic-answer a,
+.aide-contact a {
+  color: var(--live-mint);
+  text-decoration-color: rgba(134,214,185,.42);
+  text-underline-offset: 3px;
+}
+
+.aide-contact {
+  margin-top: 28px;
+  padding-top: 24px;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 24px;
+}
+
+/* High-value mobile refinements: no clipped hero, compact navigation, stronger pass cards. */
+@media (max-width: 640px) {
+  .live-nav {
+    min-height: 74px;
+    padding-block: 12px;
+  }
+
+  .customer-nav-links {
+    gap: 10px;
+  }
+
+  .customer-nav-menu-toggle {
+    width: auto;
+    margin-left: auto;
+    padding: 8px 12px;
+    justify-content: center;
+    border: 1px solid #2b323c;
+    border-radius: 999px;
+    background: rgba(14,18,20,.82);
+  }
+
+  .customer-nav-menu-panel {
+    margin-top: 10px;
+    padding: 8px;
+    gap: 2px;
+    border: 1px solid #252c35;
+    border-radius: 14px;
+    background: rgba(10,13,15,.96);
+    box-shadow: 0 24px 60px rgba(0,0,0,.42);
+  }
+
+  .customer-nav-menu-panel a,
+  .customer-nav-menu-panel .customer-nav-signout {
+    min-height: 44px;
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 10px;
+    text-align: left;
+  }
+
+  .customer-nav-menu-panel a:hover,
+  .customer-nav-menu-panel a:focus-visible {
+    background: rgba(75,120,104,.12);
+  }
+
+  .live-home-hero h1 {
+    max-width: 100%;
+    font-size: clamp(2.9rem, 12.2vw, 4rem);
+    letter-spacing: -.075em;
+    line-height: .86;
+  }
+
+  .live-home-hero::after {
+    right: -12vw;
+    font-size: clamp(8rem, 42vw, 13rem);
+  }
+
+  .customer-wallet-heading,
+  .customer-orders-heading,
+  .customer-account-heading,
+  .aide-heading {
+    padding-top: 34px;
+  }
+
+  .customer-wallet-card {
+    min-height: 0;
+    padding: 16px;
+    gap: 14px;
+    border-radius: 18px;
+  }
+
+  .customer-wallet-card-visual {
+    width: 82px;
+    border-radius: 14px;
+  }
+
+  .customer-wallet-card-main h2 {
+    white-space: normal;
+    line-height: 1.08;
+  }
+
+  .customer-wallet-card-open {
+    margin-top: 14px;
+  }
+
+  .customer-order-row {
+    grid-template-columns: 64px minmax(0,1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .customer-order-row-visual {
+    width: 64px;
+    grid-row: 1 / span 2;
+  }
+
+  .customer-order-row-main {
+    grid-column: 2 / -1;
+  }
+
+  .customer-order-row-amount {
+    grid-column: 2;
+    justify-items: start;
+    text-align: left;
+  }
+
+  .customer-order-row-status {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .customer-order-row-arrow {
+    grid-column: 3;
+    grid-row: 2 / span 2;
+  }
+
+  .customer-account-card {
+    margin-left: 14px;
+    margin-right: 14px;
+    padding-inline: 18px;
+  }
+
+  .aide-topics {
+    grid-template-columns: 1fr;
+  }
+
+  .aide-topic {
+    padding: 20px;
+  }
+
+  .aide-contact {
+    display: block;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-wallet-card,
+  .customer-wallet-card-visual img,
+  .customer-wallet-card-open > span,
+  .customer-order-row,
+  .customer-order-row-visual img,
+  .customer-order-row-arrow,
+  .aide-topic {
+    transition: none !important;
+  }
+
+  .customer-wallet-card:hover,
+  .customer-wallet-card:focus-visible,
+  .customer-order-row:hover,
+  .customer-order-row:focus-visible,
+  .aide-topic:hover {
+    transform: none !important;
+  }
+}

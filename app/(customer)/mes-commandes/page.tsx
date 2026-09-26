@@ -20,6 +20,12 @@ const STATUS_PRESENTATION: Record<string, { label: string; tone: string }> = {
 
 type OrderRow = Awaited<ReturnType<typeof loadOrders>>[number];
 
+function eventThumbUrl(event: { coverImageUrl: string | null; slug: string }): string | null {
+  if (event.coverImageUrl) return event.coverImageUrl;
+  if (event.slug === "tiakola-casablanca-2026") return "/events/tiakola-casablanca-2026/square.webp";
+  return null;
+}
+
 async function loadOrders(userId: string) {
   const orders = await prisma.order.findMany({
     where: { userId },
@@ -30,7 +36,7 @@ async function loadOrders(userId: string) {
       currency: true,
       totalAmountCents: true,
       createdAt: true,
-      event: { select: { title: true } },
+      event: { select: { title: true, slug: true, coverImageUrl: true } },
       payments: { select: { refunds: { select: { status: true, amountCents: true } } } },
     },
     orderBy: { createdAt: "desc" },
@@ -48,15 +54,23 @@ async function loadOrders(userId: string) {
 
 function OrderRowCard({ order }: { order: OrderRow }) {
   const presentation = STATUS_PRESENTATION[order.status] ?? { label: order.status, tone: "neutral" };
-  const purchaseDate = formatEventDateOnly(order.createdAt, "long");
+  const orderDate = formatEventDateOnly(order.createdAt, "long");
   const total = formatCurrency(order.totalAmountCents, order.currency);
+  const thumbUrl = eventThumbUrl(order.event);
 
   return (
     <Link href={`/orders/${order.id}`} className={`customer-order-row customer-order-row-${presentation.tone}`}>
+      <span className={`customer-order-row-visual${thumbUrl ? "" : " is-empty"}`} aria-hidden="true">
+        {thumbUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element -- event artwork can be hosted on arbitrary approved origins.
+          <img src={thumbUrl} alt="" />
+        ) : null}
+      </span>
+
       <div className="customer-order-row-main">
         <span className="customer-order-row-number">Commande {order.orderNumber}</span>
         <strong>{order.event.title}</strong>
-        <span className="customer-order-row-date">{purchaseDate}</span>
+        <span className="customer-order-row-date">{orderDate}</span>
       </div>
 
       <div className="customer-order-row-amount">
@@ -73,6 +87,7 @@ function OrderRowCard({ order }: { order: OrderRow }) {
         <span className="customer-order-row-status-dot" aria-hidden="true" />
         {presentation.label}
       </div>
+      <span className="customer-order-row-arrow" aria-hidden="true">↗</span>
     </Link>
   );
 }
