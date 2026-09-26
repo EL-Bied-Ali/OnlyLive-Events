@@ -4684,3 +4684,69 @@ html { scroll-behavior: smooth; }
     border-radius: 16px;
   }
 }
+
+/* Finish tactile/empty states without adding decorative weight to transaction screens. */
+.customer-wallet-empty {
+  position: relative;
+  overflow: hidden;
+  margin-top: 32px;
+  padding: 54px clamp(22px, 5vw, 48px);
+  border: 1px dashed rgba(134,214,185,.24);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 50% 0%, rgba(75,120,104,.13), transparent 14rem),
+    rgba(15,18,23,.72);
+  box-shadow: 0 24px 70px rgba(0,0,0,.18);
+}
+
+.customer-wallet-empty::before {
+  content: "✦";
+  width: 38px;
+  height: 38px;
+  margin: 0 auto 16px;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(134,214,185,.28);
+  border-radius: 50%;
+  color: var(--live-mint);
+  background: rgba(75,120,104,.1);
+  font-size: .9rem;
+}
+
+.customer-wallet-empty p {
+  margin: 0;
+  color: #c1c6cf;
+  font-size: 1.02rem;
+}
+
+.customer-primary-button:active:not(:disabled),
+.customer-status-primary-action:active,
+.live-hero-ticket-cta:active,
+.live-reserve-form button:active:not(:disabled) {
+  transform: translateY(1px) scale(.99);
+}
+
+@media (max-width: 640px) {
+  .customer-nav-menu-panel:not([hidden]) {
+    animation: live-reveal-up 180ms cubic-bezier(.2,.75,.25,1) both;
+  }
+
+  .customer-wallet-empty {
+    margin-left: 14px;
+    margin-right: 14px;
+    padding-block: 42px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .customer-nav-menu-panel:not([hidden]) {
+    animation: none !important;
+  }
+
+  .customer-primary-button:active:not(:disabled),
+  .customer-status-primary-action:active,
+  .live-hero-ticket-cta:active,
+  .live-reserve-form button:active:not(:disabled) {
+    transform: none !important;
+  }
+}
