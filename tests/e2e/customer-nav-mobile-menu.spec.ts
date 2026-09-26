@@ -48,7 +48,9 @@ test("logged-in nav: all authenticated links are reachable after opening the men
 
   await page.getByRole("button", { name: "Menu" }).click();
 
-  await expect(page.getByRole("link", { name: "Mes billets" })).toBeVisible();
+  const currentWalletLink = page.getByRole("link", { name: "Mes billets" });
+  await expect(currentWalletLink).toBeVisible();
+  await expect(currentWalletLink).toHaveAttribute("aria-current", "page");
   await expect(page.getByRole("link", { name: "Mes commandes" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Compte" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Aide" })).toBeVisible();

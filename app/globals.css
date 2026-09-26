@@ -4798,3 +4798,183 @@ html { scroll-behavior: smooth; }
     align-items: center;
   }
 }
+
+/* GPT visual direction pass: orientation, tactility, and premium navigation. */
+.customer-nav-menu-panel > a {
+  position: relative;
+}
+
+.customer-nav-menu-panel > a.is-active {
+  color: #fff;
+}
+
+@media (min-width: 641px) {
+  .customer-nav-menu-panel > a.is-active::after {
+    content: "";
+    position: absolute;
+    left: 50%;
+    bottom: -14px;
+    width: 16px;
+    height: 2px;
+    border-radius: 999px;
+    background: var(--live-mint);
+    box-shadow: 0 0 16px rgba(134,214,185,.34);
+    transform: translateX(-50%);
+  }
+}
+
+.live-brand-mark {
+  position: relative;
+  overflow: hidden;
+  box-shadow:
+    0 0 0 1px rgba(134,214,185,.16),
+    0 8px 24px rgba(75,120,104,.22);
+}
+
+.live-brand-mark::after {
+  content: "";
+  position: absolute;
+  inset: -55% 45% -55% -45%;
+  transform: rotate(22deg) translateX(-180%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.32), transparent);
+  transition: transform 520ms cubic-bezier(.16,.8,.2,1);
+}
+
+.live-brand:hover .live-brand-mark::after,
+.live-brand:focus-visible .live-brand-mark::after {
+  transform: rotate(22deg) translateX(360%);
+}
+
+.customer-wallet-card,
+.customer-order-row,
+.customer-account-card,
+.aide-topic {
+  backdrop-filter: blur(10px);
+}
+
+.customer-wallet-card-valid {
+  box-shadow:
+    inset 3px 0 0 rgba(134,214,185,.48),
+    0 24px 70px rgba(0,0,0,.24);
+}
+
+.customer-wallet-card-used,
+.customer-wallet-card-cancelled {
+  background:
+    linear-gradient(112deg, rgba(255,255,255,.025), transparent 42%),
+    rgba(14,16,20,.92);
+}
+
+.customer-wallet-card-used .customer-wallet-card-visual img,
+.customer-wallet-card-cancelled .customer-wallet-card-visual img {
+  filter: saturate(.55) brightness(.78);
+}
+
+.customer-wallet-card-status {
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.025);
+}
+
+.customer-order-row-main strong,
+.customer-wallet-card-main h2,
+.customer-account-field strong {
+  text-wrap: balance;
+}
+
+.customer-order-row-number {
+  letter-spacing: .055em;
+}
+
+.customer-account-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.customer-account-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 24px;
+  right: 24px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(134,214,185,.34), transparent);
+}
+
+.aide-topic h2 {
+  text-wrap: balance;
+}
+
+.aide-topic-answer a,
+.aide-contact a {
+  transition: color 140ms ease, text-decoration-color 140ms ease;
+}
+
+.aide-topic-answer a:hover,
+.aide-contact a:hover {
+  color: #b6efd9;
+  text-decoration-color: #b6efd9;
+}
+
+.live-event-card,
+.live-ticket-card,
+.live-hero-ticket-cta,
+.live-reserve-form button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.live-event-card:focus-visible,
+.live-ticket-card:focus-within {
+  outline: 3px solid rgba(134,214,185,.3);
+  outline-offset: 3px;
+}
+
+@media (max-width: 640px) {
+  .customer-nav-menu-panel > a.is-active {
+    background: rgba(75,120,104,.16);
+    color: #fff;
+  }
+
+  .customer-nav-menu-panel > a.is-active::before {
+    content: "";
+    width: 6px;
+    height: 6px;
+    flex: 0 0 auto;
+    margin-right: 8px;
+    border-radius: 50%;
+    background: var(--live-mint);
+    box-shadow: 0 0 0 4px rgba(134,214,185,.08);
+  }
+
+  .customer-nav-menu-panel > a {
+    display: flex;
+    align-items: center;
+  }
+
+  .customer-wallet-card-valid {
+    box-shadow:
+      inset 3px 0 0 rgba(134,214,185,.44),
+      0 20px 50px rgba(0,0,0,.2);
+  }
+
+  .customer-wallet-card-status {
+    min-height: 34px;
+    padding-inline: 11px;
+  }
+
+  .customer-account-card::before {
+    left: 18px;
+    right: 18px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-brand-mark::after,
+  .aide-topic-answer a,
+  .aide-contact a {
+    transition: none !important;
+  }
+
+  .live-brand:hover .live-brand-mark::after,
+  .live-brand:focus-visible .live-brand-mark::after {
+    transform: rotate(22deg) translateX(-180%);
+  }
+}

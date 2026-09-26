@@ -3,6 +3,7 @@ import Link from "next/link";
 import { getCustomerSession } from "@/lib/auth/customer";
 import { SignOutButton } from "@/components/SignOutButton";
 import { CustomerNavMobileMenu } from "@/components/CustomerNavMobileMenu";
+import { CustomerNavLink } from "@/components/CustomerNavLink";
 
 /**
  * Shared across every customer-facing page (marketing, orders, tickets).
@@ -32,21 +33,21 @@ export async function CustomerNav({ trailing }: { trailing?: ReactNode } = {}) {
         <CustomerNavMobileMenu>
           {customer ? (
             <>
-              <Link href="/mes-billets">Mes billets</Link>
-              <Link href="/mes-commandes">Mes commandes</Link>
-              <Link href="/mon-compte">Compte</Link>
-              <Link href="/aide">Aide</Link>
+              <CustomerNavLink href="/mes-billets">Mes billets</CustomerNavLink>
+              <CustomerNavLink href="/mes-commandes">Mes commandes</CustomerNavLink>
+              <CustomerNavLink href="/mon-compte">Compte</CustomerNavLink>
+              <CustomerNavLink href="/aide">Aide</CustomerNavLink>
               <SignOutButton />
             </>
           ) : (
             <>
-              <Link href="/aide">Aide</Link>
-              <Link href="/login" className="customer-nav-login">
+              <CustomerNavLink href="/aide">Aide</CustomerNavLink>
+              <CustomerNavLink href="/login" className="customer-nav-login">
                 Connexion
-              </Link>
-              <Link href="/register" className="customer-nav-register">
+              </CustomerNavLink>
+              <CustomerNavLink href="/register" className="customer-nav-register">
                 Inscription
-              </Link>
+              </CustomerNavLink>
             </>
           )}
         </CustomerNavMobileMenu>
