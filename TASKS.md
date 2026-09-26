@@ -1504,6 +1504,20 @@ external decision or privileged production mutation is complete as of
 5. **Public-production perimeter:** when the final domain and Vercel write
    access are available, stage/tune WAF rules and repeat the public-domain
    customer/admin/scanner/webhook smoke.
+6. **Tiakola event time (20:00) vs. a 19:00 Preview render, tzdata-timing
+   risk:** investigated 2026-09-26 (PR #93 continued, GPT + Claude). The
+   seed's stored instant and `lib/formatEventDate.ts`'s `Africa/Casablanca`
+   formatting are both confirmed correct in isolation — this is not a code
+   bug and not stale seed data. The remaining uncertainty is genuinely
+   external: which exact IANA tzdata release the actual Vercel Node 24.x
+   runtime bundles, versus Morocco's real December 2026 Ramadan-linked DST
+   suspension, which the Moroccan government typically only decrees weeks
+   ahead of the change — not something either of us can resolve from a
+   sandbox today. Confirmed via the Vercel project API that this project's
+   configured `nodeVersion` is `24.x` (matches `package.json`'s declared
+   `engines`), ruling out a simple "wrong Node major" explanation. Do not
+   speculatively edit the seed or formatter over this — re-verify closer to
+   the event date once Morocco's actual 2026 decree is public.
 
 ## Historical detailed follow-up record (audit trail)
 
