@@ -5120,3 +5120,9 @@ html { scroll-behavior: smooth; }
     transform: none !important;
   }
 }
+
+@media (max-width: 640px) {
+  .live-event-page > .live-nav {
+    z-index: 50;
+  }
+}

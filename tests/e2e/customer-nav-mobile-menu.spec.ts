@@ -77,4 +77,10 @@ test("event page: the back-link stays visible and reachable while the menu is co
   expect(navBox).not.toBeNull();
   expect(panelBox).not.toBeNull();
   expect(panelBox!.y).toBeGreaterThanOrEqual(navBox!.y + navBox!.height);
+
+  const panelOwnsTopPixel = await page.evaluate(({ x, y }) => {
+    const top = document.elementFromPoint(x, y);
+    return Boolean(top?.closest(".customer-nav-menu-panel"));
+  }, { x: panelBox!.x + 20, y: panelBox!.y + 20 });
+  expect(panelOwnsTopPixel).toBe(true);
 });
